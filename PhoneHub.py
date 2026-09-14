@@ -2,6 +2,7 @@
 import shutil
 import subprocess
 import threading
+import time
 
 from device import get_device
 
@@ -12,7 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QObject, Signal
 
 
-APP_VERSION = "v0.6"
+APP_VERSION = "v0.7"
 
 SCRCPY_PROFILE = [
     "--no-audio",
@@ -44,17 +45,31 @@ def run_background(args):
         return False
 
 
-def is_scrcpy_running():
+def run_quiet(args, timeout=5):
     try:
-        out = subprocess.check_output(
-            ["tasklist"],
+        return subprocess.check_output(
+            args,
             text=True,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
             creationflags=no_window_flag()
-        )
-        return "scrcpy.exe" in out.lower()
+        ).strip()
     except Exception:
-        return False
+        return ""
+
+
+def is_scrcpy_running():
+    out = run_quiet(["tasklist"], timeout=5)
+    return "scrcpy.exe" in out.lower()
+
+
+def close_scrcpy():
+    if not is_scrcpy_running():
+        return True
+
+    run_quiet(["taskkill", "/IM", "scrcpy.exe", "/F"], timeout=5)
+    time.sleep(0.5)
+    return not is_scrcpy_running()
 
 
 def adb_shell(target, command):
@@ -99,7 +114,7 @@ class PhoneHub(QWidget):
         self.bridge.device_ready.connect(self.apply_device)
 
         self.setWindowTitle(f"PhoneHub {APP_VERSION}")
-        self.resize(460, 720)
+        self.resize(480, 780)
 
         self.build_ui()
         self.refresh_async()
@@ -124,7 +139,7 @@ class PhoneHub(QWidget):
 
         main.addLayout(header)
 
-        sub = QLabel("Device manager for your remote phone")
+        sub = QLabel("Remote phone dashboard")
         sub.setObjectName("subtitle")
         main.addWidget(sub)
 
@@ -152,9 +167,22 @@ class PhoneHub(QWidget):
         self.open_btn.clicked.connect(self.open_phone)
         main.addWidget(self.open_btn)
 
-        self.refresh_btn = QPushButton("🔄 Refresh")
-        self.refresh_btn.clicked.connect(self.refresh_async)
-        main.addWidget(self.refresh_btn)
+        control_row = QGridLayout()
+        control_row.setSpacing(10)
+
+        close_btn = QPushButton("❌ Close Phone")
+        restart_btn = QPushButton("🔁 Restart Phone Screen")
+        refresh_btn = QPushButton("🔄 Refresh")
+
+        close_btn.clicked.connect(self.close_phone)
+        restart_btn.clicked.connect(self.restart_phone)
+        refresh_btn.clicked.connect(self.refresh_async)
+
+        control_row.addWidget(close_btn, 0, 0)
+        control_row.addWidget(restart_btn, 0, 1)
+        control_row.addWidget(refresh_btn, 1, 0, 1, 2)
+
+        main.addLayout(control_row)
 
         actions = QGridLayout()
         actions.setSpacing(10)
@@ -338,7 +366,8 @@ class PhoneHub(QWidget):
             return
 
         if is_scrcpy_running():
-            QMessageBox.information(self, "PhoneHub", "Phone screen is already open.")
+            self.footer.setText("Phone screen already open.")
+            QMessageBox.information(self, "PhoneHub", "Phone screen is already open.\n\nUse Restart Phone Screen to reopen it.")
             return
 
         ok = run_background([scrcpy, "-s", target] + SCRCPY_PROFILE)
@@ -347,39 +376,77 @@ class PhoneHub(QWidget):
         else:
             QMessageBox.critical(self, "PhoneHub", "Could not open phone.")
 
+    def close_phone(self):
+        self.footer.setText("Closing phone screen...")
+        ok = close_scrcpy()
+
+        if ok:
+            self.footer.setText("Phone screen closed.")
+        else:
+            QMessageBox.warning(self, "PhoneHub", "Could not close phone screen.")
+
+    def restart_phone(self):
+        target = self.require_target()
+        if not target:
+            return
+
+        scrcpy = shutil.which("scrcpy")
+        if not scrcpy:
+            QMessageBox.critical(self, "PhoneHub", "scrcpy not found.")
+            return
+
+        self.footer.setText("Restarting phone screen...")
+        QApplication.processEvents()
+
+        close_scrcpy()
+        ok = run_background([scrcpy, "-s", target] + SCRCPY_PROFILE)
+
+        if ok:
+            self.footer.setText("Phone screen restarted.")
+        else:
+            QMessageBox.critical(self, "PhoneHub", "Could not restart phone screen.")
+
     def open_camera(self):
         target = self.require_target()
-        if target and adb_shell(target, ["monkey", "-p", "com.android.camera", "1"]):
-            self.footer.setText("Opening camera...")
-        else:
-            QMessageBox.warning(self, "PhoneHub", "Could not open camera.")
+        if not target:
+            return
+
+        adb_shell(target, ["monkey", "-p", "com.android.camera", "1"])
+        self.footer.setText("Opening camera and phone screen...")
+        self.restart_phone()
 
     def open_photos(self):
         target = self.require_target()
-        if target and adb_shell(target, ["am", "start", "-a", "android.intent.action.VIEW", "-t", "image/*"]):
-            self.footer.setText("Opening photos...")
-        else:
-            QMessageBox.warning(self, "PhoneHub", "Could not open photos.")
+        if not target:
+            return
+
+        adb_shell(target, ["am", "start", "-a", "android.intent.action.VIEW", "-t", "image/*"])
+        self.footer.setText("Opening photos and phone screen...")
+        self.restart_phone()
 
     def open_files(self):
         target = self.require_target()
-        if target and adb_shell(target, ["monkey", "-p", "com.google.android.documentsui", "1"]):
-            self.footer.setText("Opening files...")
-        else:
-            QMessageBox.warning(self, "PhoneHub", "Could not open files.")
+        if not target:
+            return
+
+        adb_shell(target, ["monkey", "-p", "com.google.android.documentsui", "1"])
+        self.footer.setText("Opening files and phone screen...")
+        self.restart_phone()
 
     def open_settings(self):
         target = self.require_target()
-        if target and adb_shell(target, ["am", "start", "-a", "android.settings.SETTINGS"]):
-            self.footer.setText("Opening settings...")
-        else:
-            QMessageBox.warning(self, "PhoneHub", "Could not open settings.")
+        if not target:
+            return
+
+        adb_shell(target, ["am", "start", "-a", "android.settings.SETTINGS"])
+        self.footer.setText("Opening settings and phone screen...")
+        self.restart_phone()
 
     def show_location(self):
         QMessageBox.information(
             self,
             "PhoneHub Location",
-            "Location needs a small Android helper app. We will add this later."
+            "Location will be added after Camera, Photos, and Files.\n\nFor reliable GPS, we will need a small Android helper app."
         )
 
 
