@@ -411,9 +411,26 @@ class PhoneHub(QWidget):
         if not target:
             return
 
-        adb_shell(target, ["monkey", "-p", "com.android.camera", "1"])
-        self.footer.setText("Opening camera and phone screen...")
-        self.restart_phone()
+        scrcpy = shutil.which("scrcpy")
+        if not scrcpy:
+            QMessageBox.critical(self, "PhoneHub", "scrcpy not found.")
+            return
+
+        # Camera-only mode:
+        # PC shows the phone camera feed.
+        # The physical phone screen does not need to open the Camera app.
+        run_background([
+            scrcpy,
+            "-s", target,
+            "--video-source=camera",
+            "--camera-facing=back",
+            "--camera-size=640x480",
+            "--camera-fps=15",
+            "--no-audio",
+            "--window-title=PhoneHub Camera"
+        ])
+
+        self.footer.setText("Opening camera feed on PC...")
 
     def open_photos(self):
         target = self.require_target()
