@@ -1,4 +1,6 @@
 ﻿import sys
+import os
+import json
 import shutil
 import subprocess
 import threading
@@ -13,7 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QObject, Signal
 
 
-APP_VERSION = "v0.7"
+APP_VERSION = "v0.8"
 
 SCRCPY_PROFILE = [
     "--no-audio",
@@ -79,8 +81,61 @@ def adb_shell(target, command):
     return run_background([adb, "-s", target, "shell"] + command)
 
 
+def get_phonehub_config():
+    config_path = os.path.expanduser(r"~\.phone_remote\config.json")
+    if not os.path.exists(config_path):
+        return {}
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def fix_adb_connection():
+    cfg = get_phonehub_config()
+
+    phone_ip = cfg.get("phone_ip", "")
+    adb_port = cfg.get("adb_port", 5555)
+    usb_serial = cfg.get("usb_serial", "")
+
+    if not phone_ip:
+        return "Config missing phone IP."
+
+    remote = f"{phone_ip}:{adb_port}"
+
+    run_quiet(["adb", "start-server"], timeout=8)
+
+    devices = run_quiet(["adb", "devices"], timeout=5)
+    if f"{remote}\tdevice" in devices:
+        return "Remote phone already connected."
+
+    run_quiet(["adb", "connect", remote], timeout=8)
+    time.sleep(1)
+
+    devices = run_quiet(["adb", "devices"], timeout=5)
+    if f"{remote}\tdevice" in devices:
+        return "Remote phone connected."
+
+    if usb_serial and f"{usb_serial}\tdevice" in devices:
+        run_quiet(["adb", "-s", usb_serial, "tcpip", str(adb_port)], timeout=8)
+        time.sleep(2)
+        run_quiet(["adb", "connect", remote], timeout=8)
+        time.sleep(1)
+
+        devices = run_quiet(["adb", "devices"], timeout=5)
+        if f"{remote}\tdevice" in devices:
+            return "USB fixed remote connection."
+
+        return "USB found, but remote connect failed."
+
+    return "Phone not found. Connect USB, unlock phone, then press FIX CONNECTION again."
+
+
 class Bridge(QObject):
     device_ready = Signal(dict)
+    fix_ready = Signal(str)
 
 
 class Card(QFrame):
@@ -112,6 +167,7 @@ class PhoneHub(QWidget):
         self.loading = False
         self.bridge = Bridge()
         self.bridge.device_ready.connect(self.apply_device)
+        self.bridge.fix_ready.connect(self.apply_fix_result)
 
         self.setWindowTitle(f"PhoneHub {APP_VERSION}")
         self.resize(480, 780)
@@ -298,6 +354,18 @@ class PhoneHub(QWidget):
                 background: #3B82F6;
             }
 
+            QPushButton#fixButton {
+                background: #F59E0B;
+                color: #111827;
+                border: none;
+                font-size: 17px;
+                padding: 16px;
+            }
+
+            QPushButton#fixButton:hover {
+                background: #FBBF24;
+            }
+
             QLabel#footer {
                 color: #9CA3AF;
                 font-size: 12px;
@@ -354,6 +422,28 @@ class PhoneHub(QWidget):
             QMessageBox.warning(self, "PhoneHub", "Phone not connected. Press Refresh after connecting.")
             return ""
         return target
+
+    def fix_connection_async(self):
+        if self.loading:
+            return
+
+        self.loading = True
+        self.footer.setText("Fixing connection...")
+        self.status.setText("Fixing...")
+        self.set_status_style("statusChecking")
+
+        t = threading.Thread(target=self.fix_connection_worker, daemon=True)
+        t.start()
+
+    def fix_connection_worker(self):
+        message = fix_adb_connection()
+        d = get_device()
+        self.bridge.device_ready.emit(d)
+        self.bridge.fix_ready.emit(message)
+
+    def apply_fix_result(self, message):
+        self.loading = False
+        self.footer.setText(message)
 
     def open_phone(self):
         target = self.require_target()
