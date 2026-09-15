@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QFrame, QMessageBox, QStackedWidget, QTextEdit, QLineEdit
 )
 
-APP_VERSION = "v2.3-polished"
+APP_VERSION = "v2.4-safe-wake"
 
 DEFAULT_PHONE_IP = "100.70.94.21"
 DEFAULT_ADB_PORT = 5555
@@ -483,7 +483,7 @@ class PhoneHub(QWidget):
             "ADB = Android permission for screen/control.\n\n"
             "PhoneHub checks USB Debugging, Tailscale, saved IP, and remote ADB.\n"
             "When everything is ready, PhoneHub tells you USB can be removed.\n\n"
-            "Mobile requirement: Tailscale only. No PhoneHub mobile app required."
+            "Mobile requirement: Tailscale only. No PhoneHub mobile app required.\n\nLock screen rule: PhoneHub can wake and open the screen, but you must unlock once on the phone if Android is locked."
         )
         layout.addWidget(box)
 
@@ -545,14 +545,14 @@ class PhoneHub(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        info, _, _ = self.card("Screen", "Readable is clearer. Fast and Ultra are lower resolution.")
+        info, _, _ = self.card("Screen", "Wake + Open Screen is the safe daily method.\n\nPhoneHub can wake the phone and open the screen on PC.\nFor security, unlock once on the phone if it is locked.\nAfter unlocking once, you can control the phone from PC.\n\nReadable is clearer. Fast and Ultra are lower resolution.")
         layout.addWidget(info)
 
         row1 = QHBoxLayout()
 
-        readable = QPushButton("Open Readable Screen")
+        readable = QPushButton("Wake + Open Screen")
         readable.setObjectName("primary")
-        readable.clicked.connect(lambda: self.open_screen(READABLE_SCREEN, keep_alive=True))
+        readable.clicked.connect(self.wake_and_open_screen)
 
         fast = QPushButton("Open Fast Screen")
         fast.clicked.connect(lambda: self.open_screen(FAST_SCREEN, keep_alive=False))
@@ -898,6 +898,28 @@ class PhoneHub(QWidget):
         else:
             self.setup_log_add("Not ready. Click Save IP + Test first.")
 
+
+    def wake_and_open_screen(self):
+        if not connect_remote_adb():
+            QMessageBox.warning(
+                self,
+                "PhoneHub",
+                "Phone not connected. Open Setup New Phone and run Smart Check."
+            )
+            return
+
+        adb_shell(["input", "keyevent", "224"], timeout=3)
+
+        QMessageBox.information(
+            self,
+            "Safe Unlock Rule",
+            "PhoneHub will wake the phone and open the screen.\n\n"
+            "If the phone is locked, unlock once on the phone using fingerprint, face unlock, pattern, PIN, or password.\n\n"
+            "After that, you can control the phone from PC.\n\n"
+            "PhoneHub does not store your PIN and does not bypass Android lock screen."
+        )
+
+        self.open_screen(READABLE_SCREEN, keep_alive=True)
     def open_screen(self, profile, keep_alive=False):
         if keep_alive and scrcpy_running():
             self.set_footer("Screen already open. Keeping it alive.")
@@ -1013,4 +1035,5 @@ if __name__ == "__main__":
     win = PhoneHub()
     win.show()
     sys.exit(app.exec())
+
 
