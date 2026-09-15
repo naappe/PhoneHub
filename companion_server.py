@@ -4,17 +4,23 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 BASE_DIR = Path("C:/PhoneHub")
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = BASE_DIR / "iphone_uploads"
 PAIR_FILE = DATA_DIR / "iphone_pairs.json"
+TOKEN_FILE = DATA_DIR / "companion_token.txt"
 
 DATA_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-PAIR_CODE = str(uuid.uuid4())[:6].upper()
+if TOKEN_FILE.exists():
+    TOKEN = TOKEN_FILE.read_text(encoding="utf-8").strip()
+else:
+    TOKEN = uuid.uuid4().hex[:16]
+    TOKEN_FILE.write_text(TOKEN, encoding="utf-8")
+
 
 def load_pairs():
     if PAIR_FILE.exists():
@@ -24,15 +30,21 @@ def load_pairs():
             return {}
     return {}
 
+
 def save_pairs(data):
     PAIR_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-def html_page():
+
+def html_page(auto_ok=False):
+    paired_msg = ""
+    if auto_ok:
+        paired_msg = "<div class='ok'>Auto paired successfully. You can now use PhoneHub.</div>"
+
     return f"""<!doctype html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PhoneHub iPhone Companion</title>
+<title>PhoneHub Companion</title>
 <style>
 body {{
     margin: 0;
@@ -75,30 +87,23 @@ button {{
     color: #cbd5e1;
     font-size: 14px;
 }}
-.code {{
-    font-size: 28px;
-    font-weight: bold;
-    color: #fbbf24;
-    letter-spacing: 4px;
+.ok {{
+    background: #064e3b;
+    border: 1px solid #10b981;
+    color: #d1fae5;
+    padding: 12px;
+    border-radius: 12px;
+    margin-top: 12px;
 }}
 </style>
 </head>
 <body>
 <div class="wrap">
     <div class="card">
-        <h1>PhoneHub iPhone Companion</h1>
-        <p class="small">Your iPhone can connect to your own PhoneHub backend.</p>
-        <p>Pair code:</p>
-        <div class="code">{PAIR_CODE}</div>
-    </div>
-
-    <div class="card">
-        <h2>Pair iPhone</h2>
-        <form method="POST" action="/pair">
-            <input name="device_name" placeholder="iPhone name" required>
-            <input name="pair_code" placeholder="Pair code" required>
-            <button>Pair</button>
-        </form>
+        <h1>PhoneHub Companion</h1>
+        <p class="small">Connected to your PhoneHub PC.</p>
+        {paired_msg}
+        <p class="small">Add to Home Screen: tap Share → Add to Home Screen.</p>
     </div>
 
     <div class="card">
@@ -121,6 +126,7 @@ button {{
 </body>
 </html>"""
 
+
 class Handler(BaseHTTPRequestHandler):
     def send_text(self, text, content_type="text/html"):
         data = text.encode("utf-8")
@@ -131,12 +137,29 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path == "/" or self.path.startswith("/?"):
-            self.send_text(html_page())
-        elif self.path == "/status":
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+
+        if parsed.path == "/":
+            auto_ok = False
+
+            if qs.get("token", [""])[0] == TOKEN:
+                device_name = qs.get("name", ["Phone"])[0] or "Phone"
+                pairs = load_pairs()
+                pairs[device_name] = {
+                    "paired_at": datetime.now().isoformat(),
+                    "last_seen": datetime.now().isoformat(),
+                    "auto_paired": True
+                }
+                save_pairs(pairs)
+                auto_ok = True
+
+            self.send_text(html_page(auto_ok=auto_ok))
+
+        elif parsed.path == "/status":
             self.send_text(json.dumps({
                 "ok": True,
-                "service": "PhoneHub iPhone Companion",
+                "service": "PhoneHub Companion",
                 "time": datetime.now().isoformat()
             }), "application/json")
         else:
@@ -147,25 +170,7 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
 
-        if self.path == "/pair":
-            data = parse_qs(body.decode("utf-8", errors="ignore"))
-            device_name = data.get("device_name", ["iPhone"])[0]
-            pair_code = data.get("pair_code", [""])[0].upper().strip()
-
-            if pair_code != PAIR_CODE:
-                self.send_text("<h1>Wrong pair code</h1><a href='/'>Back</a>")
-                return
-
-            pairs = load_pairs()
-            pairs[device_name] = {
-                "paired_at": datetime.now().isoformat(),
-                "last_seen": datetime.now().isoformat()
-            }
-            save_pairs(pairs)
-
-            self.send_text("<h1>iPhone paired successfully</h1><a href='/'>Back</a>")
-
-        elif self.path == "/note":
+        if self.path == "/note":
             data = parse_qs(body.decode("utf-8", errors="ignore"))
             note = data.get("note", [""])[0]
             note_file = DATA_DIR / "iphone_notes.txt"
@@ -174,7 +179,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_text("<h1>Note saved on PC</h1><a href='/'>Back</a>")
 
         elif self.path == "/upload":
-            # Simple raw save for first version
             filename = f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bin"
             out = UPLOAD_DIR / filename
             out.write_bytes(body)
@@ -184,9 +188,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+
 if __name__ == "__main__":
-    print("PhoneHub iPhone Companion running")
+    print("PhoneHub Companion running")
     print("Open on PC: http://127.0.0.1:8088")
-    print("Open on iPhone through Tailscale/Wi-Fi: http://YOUR-PC-IP:8088")
-    print("Pair code:", PAIR_CODE)
+    print("Token:", TOKEN)
     ThreadingHTTPServer(("0.0.0.0", 8088), Handler).serve_forever()
