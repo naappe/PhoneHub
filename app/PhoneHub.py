@@ -889,7 +889,6 @@ class PhoneHub(QWidget):
             f"--window-title=PhoneHub {facing.title()} Camera"
         ]
         self.open_scrcpy(args, f"{facing} camera")
-
     def close_view(self):
         close_scrcpy()
         self.footer.setText("Closed.")
@@ -921,6 +920,9 @@ if __name__ == "__main__":
     win = PhoneHub()
     win.show()
     sys.exit(app.exec())
+
+
+
 
 
 
