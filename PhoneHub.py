@@ -31,7 +31,6 @@ SCREEN_PROFILE = [
     "--video-bit-rate=350K",
     "--max-fps=12",
     "--video-buffer=0",
-    "--stay-awake",
     "--window-title=PhoneHub Screen"
 ]
 
@@ -810,3 +809,4 @@ if __name__ == "__main__":
     win = PhoneHub()
     win.show()
     sys.exit(app.exec())
+
