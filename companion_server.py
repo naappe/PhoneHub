@@ -157,6 +157,10 @@ class Handler(BaseHTTPRequestHandler):
                     "auto_paired": True
                 }
                 save_pairs(pairs)
+
+                success_file = DATA_DIR / "companion_success.txt"
+                success_file.write_text(datetime.now().isoformat(), encoding="utf-8")
+
                 auto_ok = True
 
             self.send_text(html_page(auto_ok=auto_ok))
@@ -199,4 +203,5 @@ if __name__ == "__main__":
     print("Open on PC: http://127.0.0.1:8088")
     print("Token:", TOKEN)
     ThreadingHTTPServer(("0.0.0.0", 8088), Handler).serve_forever()
+
 
