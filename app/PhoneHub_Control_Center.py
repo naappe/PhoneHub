@@ -17,7 +17,7 @@ RUNTIME = BASE / "runtime"
 PHONEHUB_EXE = BASE / "dist" / "PhoneHub.exe"
 START_PHONEHUB = SCRIPTS / "START_PHONEHUB.bat"
 START_QR = SCRIPTS / "START_QR_COMPANION.bat"
-ANDROID_STATUS = BASE / "ANDROID_STATUS_CHECK.bat"
+ANDROID_STATUS = BASE / "ANDROID_STATUS_CHECK.bat"`nTAILSCALE_ACCOUNT = SCRIPTS / "TAILSCALE_ACCOUNT.bat"
 
 UPLOADS = RUNTIME / "uploads"
 NOTES = RUNTIME / "data" / "iphone_notes.txt"
@@ -70,6 +70,9 @@ class ControlCenter(QWidget):
         btn_status = QPushButton("Android Status / Setup")
         btn_status.clicked.connect(lambda: run_file(ANDROID_STATUS))
 
+        btn_tail = QPushButton("Tailscale Account / Login")
+        btn_tail.clicked.connect(lambda: run_file(TAILSCALE_ACCOUNT))
+
         btn_qr = QPushButton("Extra: QR Companion")
         btn_qr.clicked.connect(lambda: run_file(START_QR))
 
@@ -89,7 +92,7 @@ class ControlCenter(QWidget):
         layout.addWidget(title)
         layout.addWidget(sub)
 
-        for btn in [btn_main, btn_status, btn_qr, btn_uploads, btn_notes, btn_folder, btn_close]:
+        for btn in [btn_main, btn_status, btn_tail, btn_qr, btn_uploads, btn_notes, btn_folder, btn_close]:
             btn.setMinimumHeight(52)
             btn.setStyleSheet("""
                 QPushButton {
@@ -121,3 +124,4 @@ if __name__ == "__main__":
     win = ControlCenter()
     win.show()
     sys.exit(app.exec())
+
