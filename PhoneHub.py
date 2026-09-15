@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QObject, Signal
 
 
-APP_VERSION = "v1.2-clean"
+APP_VERSION = "v1.3-wait-unlock"
 
 SCREEN_PROFILE = [
     "--no-audio",
@@ -173,6 +173,39 @@ def save_screenshot(target):
 
     file_path.write_bytes(data)
     return f"Screenshot saved: {file_path}"
+
+
+def phone_is_locked(target):
+    if not target:
+        return True
+
+    out = run_quiet(["adb", "-s", target, "shell", "dumpsys", "window"], timeout=6).lower()
+
+    locked_words = [
+        "mdreaminglockscreen=true",
+        "mshowinglockscreen=true",
+        "isstatusbarkeyguard=true",
+        "keyguardshowing=true",
+        "mkeyguardshowing=true"
+    ]
+
+    return any(word in out for word in locked_words)
+
+
+def wake_phone(target):
+    if target:
+        run_quiet(["adb", "-s", target, "shell", "input", "keyevent", "224"], timeout=3)
+
+
+def start_screen_after_unlock(target):
+    scrcpy = shutil.which("scrcpy")
+
+    if not scrcpy or not target:
+        return False
+
+    wake_phone(target)
+    close_scrcpy()
+    return run_background([scrcpy, "-s", target] + SCREEN_PROFILE)
 
 
 class Bridge(QObject):
@@ -492,7 +525,38 @@ class PhoneHub(QWidget):
             self.footer.setText(f"Could not open {mode}.")
 
     def open_phone(self):
+        target = self.target()
+
+        if not target:
+            return
+
+        wake_phone(target)
+
+        if phone_is_locked(target):
+            self.last_mode = "screen"
+            self.footer.setText("Waiting for unlock... Unlock phone once.")
+            threading.Thread(target=self.wait_for_unlock_worker, args=(target,), daemon=True).start()
+            return
+
         self.open_scrcpy(SCREEN_PROFILE, "screen")
+
+    def wait_for_unlock_worker(self, target):
+        for _ in range(60):
+            wake_phone(target)
+
+            if not phone_is_locked(target):
+                ok = start_screen_after_unlock(target)
+
+                if ok:
+                    self.bridge.message_ready.emit("Unlocked. Opening screen...")
+                else:
+                    self.bridge.message_ready.emit("Unlocked, but screen failed to open.")
+
+                return
+
+            time.sleep(2)
+
+        self.bridge.message_ready.emit("Still locked. Unlock phone and press OPEN PHONE again.")
 
     def open_camera(self, facing):
         args = CAMERA_BASE + [
