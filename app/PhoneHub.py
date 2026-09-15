@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QFrame, QMessageBox, QStackedWidget, QTextEdit, QLineEdit
 )
 
-APP_VERSION = "v2.2-smart-setup"
+APP_VERSION = "v2.3-polished"
 
 DEFAULT_PHONE_IP = "100.70.94.21"
 DEFAULT_ADB_PORT = 5555
@@ -233,14 +233,16 @@ def read_last_location_text():
         return lines[-1]
 
     return (
-        f"Last saved location\n"
+        f"Old Saved Location Only\n"
         f"Time: {last[0]}\n"
         f"Device: {last[1]}\n"
         f"Latitude: {last[2]}\n"
         f"Longitude: {last[3]}\n"
         f"Accuracy: ± {last[4]} m\n"
-        f"Source: {last[5]}\n\n"
-        f"Live GPS is disabled. Only Tailscale is installed on mobile."
+        f"Old Source: {last[5]}\n\n"
+        f"This is old history from previous testing.\n"
+        f"Live GPS is disabled in Tailscale-only mode.\n"
+        f"PhoneHub now uses Tailscale only on the mobile."
     )
 
 
@@ -447,7 +449,7 @@ class PhoneHub(QWidget):
         box, _, self.device_info = self.card("Dashboard", "Checking phone...")
         layout.addWidget(box)
 
-        loc_box, _, self.location_info = self.card("Last Saved Location", read_last_location_text())
+        loc_box, _, self.location_info = self.card("Location Status", read_last_location_text())
         layout.addWidget(loc_box)
 
         row = QHBoxLayout()
@@ -477,8 +479,11 @@ class PhoneHub(QWidget):
         box, _, self.setup_status = self.card(
             "Setup New Phone",
             "Smart setup. No commands needed.\n\n"
-            "PhoneHub checks USB Debugging, Tailscale, saved IP, remote ADB, and tells you when USB can be removed.\n\n"
-            "Mobile requirement: Tailscale only."
+            "Tailscale = private connection between PC and phone.\n"
+            "ADB = Android permission for screen/control.\n\n"
+            "PhoneHub checks USB Debugging, Tailscale, saved IP, and remote ADB.\n"
+            "When everything is ready, PhoneHub tells you USB can be removed.\n\n"
+            "Mobile requirement: Tailscale only. No PhoneHub mobile app required."
         )
         layout.addWidget(box)
 
@@ -523,14 +528,14 @@ class PhoneHub(QWidget):
         self.setup_log = QTextEdit()
         self.setup_log.setReadOnly(True)
         self.setup_log.setText(
-            "Click Smart Check.\n\n"
-            "PhoneHub will tell what is missing:\n"
-            "- USB connected or not\n"
-            "- USB debugging approved or not\n"
-            "- Tailscale installed or not\n"
-            "- IP saved or missing\n"
-            "- Remote ADB ready or not\n"
-            "- USB safe to remove or not"
+            "Click Smart Check to start.\n\n"
+            "PhoneHub will show:\n"
+            "1. USB Debugging status\n"
+            "2. Tailscale installed status\n"
+            "3. Tailscale IP status\n"
+            "4. Remote ADB status\n"
+            "5. USB remove status\n\n"
+            "Do not remove USB until PhoneHub says SAFE TO REMOVE."
         )
         layout.addWidget(self.setup_log)
 
@@ -701,14 +706,18 @@ class PhoneHub(QWidget):
             f"Saved Phone IP: {ip}\n"
             f"ADB Target: {ip}:{port}\n"
             f"PC IP: {PC_IP}\n\n"
-            f"Mobile app: Tailscale only.\n"
-            f"Live GPS: disabled without Companion APK.\n"
-            f"Screen/control: enabled through Tailscale + ADB.\n\n"
+            f"Mobile requirement: Tailscale only.\n"
+            f"No PhoneHub mobile app required.\n"
+            f"No Android Companion APK required.\n"
+            f"Live GPS tracking is disabled.\n"
+            f"Screen/control works through Tailscale + ADB.\n\n"
             f"Daily use:\n"
             f"1. Keep Tailscale ON on PC\n"
             f"2. Keep Tailscale ON on phone\n"
             f"3. Open PhoneHub\n"
-            f"4. Use Screen / Camera / Screenshot"
+            f"4. Use Dashboard / Screen / Camera / Screenshot\n\n"
+            f"First-time new phone setup:\n"
+            f"Open Setup New Phone and follow Smart Check."
         )
 
         info, _, _ = self.card("Settings", text)
@@ -757,13 +766,14 @@ class PhoneHub(QWidget):
         ip, port = get_saved_ip()
 
         self.device_info.setText(
-            f"Status: {'Online' if connected else 'Offline'}\n"
-            f"Model: {data.get('model', '-')}\n"
-            f"Android: {data.get('android', '-')}\n"
+            f"Phone Status: {'Online' if connected else 'Offline'}\n"
+            f"Device: {data.get('model', '-')}\n"
+            f"Android Version: {data.get('android', '-')}\n"
             f"Battery: {data.get('battery', '-')}%\n"
-            f"Connection: Tailscale remote\n"
+            f"Connection: Tailscale Remote\n"
+            f"ADB Status: {'Connected' if connected else 'Not Connected'}\n"
             f"ADB Target: {ip}:{port}\n"
-            f"Mode: Tailscale-only"
+            f"Mobile Mode: Tailscale only"
         )
 
         self.location_info.setText(read_last_location_text())
@@ -783,7 +793,7 @@ class PhoneHub(QWidget):
         lines = []
 
         if unauthorized:
-            lines.append("USB Debugging: NOT APPROVED")
+            lines.append("USB Debugging: Not approved")
             lines.append("Action: Look at phone screen and tap Always allow from this computer, then OK.")
         elif usb:
             serial = usb[0]
@@ -804,11 +814,11 @@ class PhoneHub(QWidget):
             lines.append("Tailscale: Installed")
             lines.append("Action: Make sure Tailscale says Connected on phone.")
         else:
-            lines.append("Tailscale: Not confirmed")
+            lines.append("Tailscale: Not confirmed on phone")
             lines.append("Action: Install Tailscale on phone and login same tailnet/account as PC.")
 
         if ip.startswith("100."):
-            lines.append(f"Tailscale IP: Saved/entered {ip}")
+            lines.append(f"Tailscale IP: Saved {ip}")
         else:
             lines.append("Tailscale IP: Missing")
             lines.append("Action: Open Tailscale on phone and copy the 100.x.x.x IP.")
@@ -816,10 +826,10 @@ class PhoneHub(QWidget):
         remote_target = f"{ip}:5555" if ip else adb_target()
 
         if remote_target in remote:
-            lines.append(f"Remote ADB: Connected {remote_target}")
-            lines.append("USB Cable: SAFE TO REMOVE")
+            lines.append(f"Remote Control: Connected {remote_target}")
+            lines.append("USB Cable: Safe to remove")
         else:
-            lines.append("Remote ADB: Not ready")
+            lines.append("Remote Control: Not ready")
             lines.append("USB Cable: Keep connected until Test Remote succeeds.")
 
         self.setup_log.setText("\n".join(lines))
@@ -1003,3 +1013,4 @@ if __name__ == "__main__":
     win = PhoneHub()
     win.show()
     sys.exit(app.exec())
+
