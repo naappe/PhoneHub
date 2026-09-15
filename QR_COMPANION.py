@@ -11,8 +11,10 @@ from PySide6.QtCore import Qt
 
 
 BASE_DIR = Path("C:/PhoneHub")
-QR_FILE = BASE_DIR / "data" / "iphone_qr.png"
+DATA_DIR = BASE_DIR / "data"
+QR_FILE = DATA_DIR / "iphone_qr.png"
 SERVER_FILE = BASE_DIR / "companion_server.py"
+TOKEN_FILE = DATA_DIR / "companion_token.txt"
 PYTHON_EXE = r"C:\Users\User\AppData\Local\Python\pythoncore-3.14-64\python.exe"
 PORT = 8088
 
@@ -60,14 +62,18 @@ class QRWindow(QWidget):
         self.setWindowTitle("PhoneHub QR Companion")
         self.resize(420, 620)
 
+        DATA_DIR.mkdir(exist_ok=True)
+
         tailscale_ip = get_tailscale_ip()
         local_ip = get_local_ip()
 
-                token_file = BASE_DIR / "data" / "companion_token.txt"
-        token = token_file.read_text(encoding="utf-8").strip() if token_file.exists() else "missing"
-        self.link = f"http://{tailscale_ip or local_ip}:{PORT}/?token={token}&name=Phone"
+        if TOKEN_FILE.exists():
+            token = TOKEN_FILE.read_text(encoding="utf-8").strip()
+        else:
+            token = "missing"
 
-        BASE_DIR.joinpath("data").mkdir(exist_ok=True)
+        ip = tailscale_ip or local_ip
+        self.link = f"http://{ip}:{PORT}/?token={token}&name=Phone"
 
         img = qrcode.make(self.link)
         img.save(QR_FILE)
@@ -78,7 +84,7 @@ class QRWindow(QWidget):
 
         info = QLabel(
             "Scan this QR from any phone camera.\n"
-            "It opens your PhoneHub Companion page.\n\n"
+            "It opens and auto-pairs your PhoneHub Companion.\n\n"
             f"{self.link}"
         )
         info.setAlignment(Qt.AlignCenter)
@@ -116,9 +122,8 @@ if __name__ == "__main__":
     win.show()
 
     if ok:
-        QMessageBox.information(win, "PhoneHub", "iPhone/Android companion server started.")
+        QMessageBox.information(win, "PhoneHub", "Companion server started. Scan the QR.")
     else:
-        QMessageBox.warning(win, "PhoneHub", "Server could not start. Try START_IPHONE_COMPANION.bat.")
+        QMessageBox.warning(win, "PhoneHub", "Server could not start.")
 
     sys.exit(app.exec())
-
