@@ -1,4 +1,4 @@
-﻿package mv.phonehub.companion;
+package mv.phonehub.companion;
 
 import android.Manifest;
 import android.app.Activity;
