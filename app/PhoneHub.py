@@ -647,6 +647,21 @@ class PhoneHub(QWidget):
         phone_id = serial
         label = f"{model}"
 
+        tailscale_email, ok_email = QInputDialog.getText(
+            self,
+            "Tailscale Account",
+            "Enter the Tailscale email used on this phone.\n\n"
+            "Example:\n"
+            "naappe@gmail.com\n"
+            "or another Gmail invited to the same Tailscale network.\n\n"
+            "Leave blank for USB-only:"
+        )
+
+        if not ok_email:
+            tailscale_email = ""
+
+        tailscale_email = tailscale_email.strip()
+
         def save_usb_phone(ip=""):
             phone = {
                 "id": phone_id,
@@ -655,7 +670,8 @@ class PhoneHub(QWidget):
                 "phone_ip": ip,
                 "adb_port": 5555,
                 "usb_serial": serial,
-                "android": android
+                "android": android,
+                "tailscale_email": tailscale_email
             }
 
             phones = [p for p in data.get("phones", []) if p.get("id") != phone_id]
@@ -744,7 +760,7 @@ class PhoneHub(QWidget):
 
             if clicked == install_btn:
                 save_usb_phone("")
-                script = r"C:\PhoneHub\ANDROID_STATUS_CHECK.bat"
+                script = r"C:\PhoneHub\scripts\ANDROID_STATUS_CHECK.bat"
                 if os.path.exists(script):
                     subprocess.Popen(["cmd", "/c", "start", "", script], cwd=r"C:\PhoneHub")
                     self.footer.setText("Opened Tailscale installer. Follow instructions.")
@@ -905,6 +921,9 @@ if __name__ == "__main__":
     win = PhoneHub()
     win.show()
     sys.exit(app.exec())
+
+
+
 
 
 
