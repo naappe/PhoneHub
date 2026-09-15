@@ -206,8 +206,14 @@ def fix_adb_connection():
     adb_port = phone.get("adb_port", 5555)
     usb_serial = phone.get("usb_serial", "")
 
+    run_quiet(["adb", "start-server"], timeout=8)
+    devices = run_quiet(["adb", "devices"], timeout=5)
+
+    if usb_serial and f"{usb_serial}\tdevice" in devices:
+        return "Connected by USB. Remote mode not required."
+
     if not phone_ip:
-        return "No phone selected. Add phone first."
+        return "USB phone saved, but not connected. Connect USB and unlock phone."
 
     remote = f"{phone_ip}:{adb_port}"
 
@@ -615,50 +621,140 @@ class PhoneHub(QWidget):
         if not found:
             QMessageBox.warning(
                 self,
-                "Add Phone",
-                "No USB phone found.\n\nConnect phone by USB, unlock it, and allow USB debugging."
+                "Add Android Phone",
+                "No USB Android phone found.\n\n"
+                "To add phone:\n"
+                "1. Connect USB cable\n"
+                "2. Unlock phone\n"
+                "3. Enable USB debugging\n"
+                "4. Tap Always allow / OK\n"
+                "5. Try Add Phone again"
             )
             return
 
-        ip, ok = QInputDialog.getText(
-            self,
-            "Add Phone",
-            f"Detected phone:\n{found['model']}\nSerial: {found['serial']}\n\nPaste this phone's Tailscale IP:"
+        serial = found["serial"]
+        model = found["model"]
+        android = found["android"]
+
+        package_check = run_quiet(
+            ["adb", "-s", serial, "shell", "pm", "list", "packages", "com.tailscale.ipn"],
+            timeout=5
         )
 
-        if not ok or not ip.strip():
-            return
-
-        ip = ip.strip()
+        tailscale_installed = "com.tailscale.ipn" in package_check
 
         data = load_phones()
+        phone_id = serial
+        label = f"{model}"
 
-        phone_id = found["serial"]
+        def save_usb_phone(ip=""):
+            phone = {
+                "id": phone_id,
+                "label": label,
+                "device_name": model,
+                "phone_ip": ip,
+                "adb_port": 5555,
+                "usb_serial": serial,
+                "android": android
+            }
 
-        label = f"{found['model']}"
+            phones = [p for p in data.get("phones", []) if p.get("id") != phone_id]
+            phones.append(phone)
 
-        phone = {
-            "id": phone_id,
-            "label": label,
-            "device_name": found["model"],
-            "phone_ip": ip,
-            "adb_port": 5555,
-            "usb_serial": found["serial"],
-            "android": found["android"]
-        }
+            data["phones"] = phones
+            data["active_id"] = phone_id
 
-        phones = [p for p in data.get("phones", []) if p.get("id") != phone_id]
-        phones.append(phone)
+            save_phones(data)
+            save_active_config(phone)
 
-        data["phones"] = phones
-        data["active_id"] = phone_id
+            self.reload_phone_dropdown()
+            self.footer.setText(f"Added phone: {label}")
+            self.refresh_async()
 
-        save_phones(data)
-        save_active_config(phone)
+        if tailscale_installed:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Add Android Phone")
+            msg.setIcon(QMessageBox.Question)
+            msg.setText(
+                f"Detected Android phone:\n\n"
+                f"Device: {model}\n"
+                f"Android: {android}\n"
+                f"USB Serial: {serial}\n\n"
+                f"USB Mode: READY\n"
+                f"Tailscale: INSTALLED\n\n"
+                f"Choose setup mode:"
+            )
 
-        self.reload_phone_dropdown()
-        self.footer.setText(f"Added phone: {label}")
-        self.fix_async()
+            remote_btn = msg.addButton("Use USB + Remote", QMessageBox.AcceptRole)
+            usb_btn = msg.addButton("Use USB Mode Only", QMessageBox.YesRole)
+            cancel_btn = msg.addButton("Cancel", QMessageBox.RejectRole)
+
+            msg.exec()
+            clicked = msg.clickedButton()
+
+            if clicked == cancel_btn:
+                return
+
+            if clicked == remote_btn:
+                ip, ok = QInputDialog.getText(
+                    self,
+                    "Remote Mode",
+                    "Paste this phone's Tailscale IP:"
+                )
+                if ok and ip.strip():
+                    save_usb_phone(ip.strip())
+                    self.fix_async()
+                else:
+                    save_usb_phone("")
+                return
+
+            if clicked == usb_btn:
+                save_usb_phone("")
+                return
+
+        else:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Add Android Phone")
+            msg.setIcon(QMessageBox.Question)
+            msg.setText(
+                f"Detected Android phone:\n\n"
+                f"Device: {model}\n"
+                f"Android: {android}\n"
+                f"USB Serial: {serial}\n\n"
+                f"USB Mode: READY\n"
+                f"PhoneHub can open/control this phone by USB.\n\n"
+                f"Tailscale: NOT INSTALLED\n"
+                f"Remote Mode is not ready.\n\n"
+                f"What do you want to do?"
+            )
+
+            install_btn = msg.addButton("Install Tailscale", QMessageBox.AcceptRole)
+            usb_btn = msg.addButton("Use USB Mode Only", QMessageBox.YesRole)
+            cancel_btn = msg.addButton("Cancel", QMessageBox.RejectRole)
+
+            msg.exec()
+            clicked = msg.clickedButton()
+
+            if clicked == cancel_btn:
+                return
+
+            if clicked == usb_btn:
+                save_usb_phone("")
+                return
+
+            if clicked == install_btn:
+                save_usb_phone("")
+                script = r"C:\PhoneHub\ANDROID_STATUS_CHECK.bat"
+                if os.path.exists(script):
+                    subprocess.Popen(["cmd", "/c", "start", "", script], cwd=r"C:\PhoneHub")
+                    self.footer.setText("Opened Tailscale installer. Follow instructions.")
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Tailscale Installer",
+                        "ANDROID_STATUS_CHECK.bat not found.\n\nUse USB mode now, or run setup manually."
+                    )
+                return
 
     def connect_selected_phone(self):
         phone_id = self.phone_select.currentData()
@@ -809,4 +905,7 @@ if __name__ == "__main__":
     win = PhoneHub()
     win.show()
     sys.exit(app.exec())
+
+
+
 
