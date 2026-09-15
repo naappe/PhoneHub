@@ -8,23 +8,17 @@ Write-Host ""
 
 cd C:\PhoneHub
 
-$apk = "C:\PhoneHub\apps\tailscale.apk"
+$apk = (Get-ChildItem "C:\PhoneHub\apps\*.apk" | Select-Object -First 1).FullName
 
-if (!(Test-Path $apk)) {
-    Write-Host "Tailscale APK not found:" -ForegroundColor Red
+if (!$apk -or !(Test-Path $apk)) {
+    Write-Host "ERROR: APK not found:" -ForegroundColor Red
     Write-Host $apk
-    Write-Host ""
-    Write-Host "Download official Tailscale Android APK and save as:"
-    Write-Host "C:\PhoneHub\apps\tailscale.apk"
-    Write-Host ""
+    pause
     exit
 }
 
-Write-Host "Starting ADB..."
 adb start-server | Out-Host
 
-Write-Host ""
-Write-Host "Checking USB phone..."
 $devices = adb devices
 
 $usbLine = $devices -split "`n" | Where-Object {
@@ -34,8 +28,8 @@ $usbLine = $devices -split "`n" | Where-Object {
 if (!$usbLine) {
     Write-Host ""
     Write-Host "No USB phone found." -ForegroundColor Red
-    Write-Host "Connect phone by USB, unlock it, tap Allow USB debugging, then run again."
-    Write-Host ""
+    Write-Host "Connect phone USB, unlock phone, allow USB debugging, then run again."
+    pause
     exit
 }
 
@@ -46,24 +40,45 @@ $android = adb -s $serial shell getprop ro.build.version.release
 $model = $model.Trim()
 $android = $android.Trim()
 
+Write-Host ""
 Write-Host "Phone found: $model"
 Write-Host "Serial: $serial"
 Write-Host "Android: $android"
 Write-Host ""
 
-Write-Host "Installing Tailscale APK..."
-adb -s $serial install -r $apk | Out-Host
+Write-Host "Installing Tailscale APK automatically..."
+$installResult = adb -s $serial install -r $apk 2>&1
+$installResult | Out-Host
+
+Start-Sleep -Seconds 2
+
+$packageCheck = adb -s $serial shell pm list packages com.tailscale.ipn
+
+if ($packageCheck -notmatch "com.tailscale.ipn") {
+    Write-Host ""
+    Write-Host "Tailscale install did not appear on phone." -ForegroundColor Red
+    Write-Host "APK may be wrong. Need official Android APK, not Windows EXE."
+    Write-Host ""
+    pause
+    exit
+}
 
 Write-Host ""
-Write-Host "Opening Tailscale on phone..."
-adb -s $serial shell monkey -p com.tailscale.ipn 1 | Out-Host
+Write-Host "Tailscale installed." -ForegroundColor Green
+
+Write-Host "Opening Tailscale..."
+adb -s $serial shell cmd package resolve-activity --brief com.tailscale.ipn | Out-Host
+adb -s $serial shell monkey -p com.tailscale.ipn -c android.intent.category.LAUNCHER 1 | Out-Host
+
+Start-Sleep -Seconds 2
 
 Write-Host ""
-Write-Host "DO THIS ON PHONE NOW:" -ForegroundColor Yellow
+Write-Host "NOW DO THIS ON PHONE:" -ForegroundColor Yellow
 Write-Host "1. Login to Tailscale"
 Write-Host "2. Tap Allow / OK for VPN"
 Write-Host "3. Wait until it says Connected"
 Write-Host ""
+
 Read-Host "After Tailscale is connected, press ENTER here"
 
 Write-Host ""
@@ -72,14 +87,15 @@ adb -s $serial tcpip 5555 | Out-Host
 Start-Sleep -Seconds 2
 
 Write-Host ""
-Write-Host "Finding Tailscale phone IP..."
+Write-Host "Tailscale devices:"
 tailscale status | Out-Host
 
 Write-Host ""
-$ip = Read-Host "Paste this phone Tailscale IP, example 100.118.102.57"
+$ip = Read-Host "Paste this phone Tailscale IP"
 
 if (!$ip) {
-    Write-Host "No IP entered. Setup cancelled." -ForegroundColor Red
+    Write-Host "No IP entered. Cancelled." -ForegroundColor Red
+    pause
     exit
 }
 
@@ -154,8 +170,9 @@ $final | ConvertTo-Json -Depth 10 | Set-Content $phonesFile -Encoding UTF8
 
 Write-Host ""
 Write-Host "Setup complete." -ForegroundColor Green
-Write-Host "You can remove USB now if remote ADB connected."
+Write-Host "You can remove USB after PhoneHub shows connected."
 Write-Host ""
 
-Write-Host "Opening PhoneHub..."
 python C:\PhoneHub\PhoneHub.py
+
+
