@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QObject, Signal
 
 
-APP_VERSION = "v1.1-lite"
+APP_VERSION = "v1.2-clean"
 
 SCREEN_PROFILE = [
     "--no-audio",
@@ -26,6 +26,7 @@ SCREEN_PROFILE = [
     "--video-bit-rate=350K",
     "--max-fps=12",
     "--video-buffer=0",
+    "--stay-awake",
     "--window-title=PhoneHub Screen"
 ]
 
@@ -91,6 +92,7 @@ def is_scrcpy_running():
 def close_scrcpy():
     if not is_scrcpy_running():
         return True
+
     run_quiet(["taskkill", "/IM", "scrcpy.exe", "/F"], timeout=5)
     time.sleep(0.5)
     return not is_scrcpy_running()
@@ -98,8 +100,10 @@ def close_scrcpy():
 
 def get_config():
     path = os.path.expanduser(r"~\.phone_remote\config.json")
+
     if not os.path.exists(path):
         return {}
+
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -115,7 +119,7 @@ def fix_adb_connection():
     usb_serial = cfg.get("usb_serial", "")
 
     if not phone_ip:
-        return "Config missing. Run setup again."
+        return "Config missing. Setup phone again."
 
     remote = f"{phone_ip}:{adb_port}"
 
@@ -124,7 +128,7 @@ def fix_adb_connection():
     devices = run_quiet(["adb", "devices"], timeout=5)
 
     if f"{remote}\tdevice" in devices:
-        return "Connected: remote phone ready."
+        return "Connected. Remote phone ready."
 
     run_quiet(["adb", "connect", remote], timeout=8)
     time.sleep(1)
@@ -132,7 +136,7 @@ def fix_adb_connection():
     devices = run_quiet(["adb", "devices"], timeout=5)
 
     if f"{remote}\tdevice" in devices:
-        return "Connected: remote phone ready."
+        return "Connected. Remote phone ready."
 
     if usb_serial and f"{usb_serial}\tdevice" in devices:
         run_quiet(["adb", "-s", usb_serial, "tcpip", str(adb_port)], timeout=8)
@@ -143,17 +147,18 @@ def fix_adb_connection():
         devices = run_quiet(["adb", "devices"], timeout=5)
 
         if f"{remote}\tdevice" in devices:
-            return "Fixed: USB enabled remote mode."
+            return "Fixed. USB enabled remote mode."
 
-        return "USB found, but remote failed. Keep USB connected."
+        return "USB found. Keep phone unlocked and try again."
 
-    return "Not found. Connect USB, unlock phone, press FIX again."
+    return "Phone not found. Connect USB, unlock phone, press FIX."
 
 
 def save_screenshot(target):
     adb = shutil.which("adb")
+
     if not adb or not target:
-        return "Screenshot failed: phone not connected."
+        return "Screenshot failed. Phone not connected."
 
     folder = Path(r"C:\PhoneHub\screenshots")
     folder.mkdir(parents=True, exist_ok=True)
@@ -164,7 +169,7 @@ def save_screenshot(target):
     data = run_bytes([adb, "-s", target, "exec-out", "screencap", "-p"], timeout=15)
 
     if not data or len(data) < 1000:
-        return "Screenshot failed. Try OPEN PHONE first."
+        return "Screenshot failed. Unlock phone once."
 
     file_path.write_bytes(data)
     return f"Screenshot saved: {file_path}"
@@ -188,7 +193,7 @@ class PhoneHub(QWidget):
         self.bridge.message_ready.connect(self.show_message)
 
         self.setWindowTitle(f"PhoneHub {APP_VERSION}")
-        self.resize(430, 650)
+        self.resize(420, 620)
 
         self.build_ui()
         self.refresh_async()
@@ -218,6 +223,10 @@ class PhoneHub(QWidget):
         self.info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         main.addWidget(self.info)
 
+        self.note = QLabel("Unlock phone once. PhoneHub will keep it awake while viewing.")
+        self.note.setObjectName("note")
+        main.addWidget(self.note)
+
         self.fix_btn = QPushButton("🛠 FIX CONNECTION")
         self.fix_btn.setObjectName("fix")
         self.fix_btn.clicked.connect(self.fix_async)
@@ -245,21 +254,27 @@ class PhoneHub(QWidget):
 
         self.shot_btn = QPushButton("📸 Screenshot")
         self.close_btn = QPushButton("❌ Close")
-        self.restart_btn = QPushButton("🔁 Restart")
 
         self.shot_btn.clicked.connect(self.screenshot_async)
         self.close_btn.clicked.connect(self.close_view)
-        self.restart_btn.clicked.connect(self.restart_view)
 
         row2.addWidget(self.shot_btn)
         row2.addWidget(self.close_btn)
-        row2.addWidget(self.restart_btn)
 
         main.addLayout(row2)
 
-        self.refresh_btn = QPushButton("🔄 Refresh Status")
+        row3 = QHBoxLayout()
+
+        self.restart_btn = QPushButton("🔁 Restart")
+        self.refresh_btn = QPushButton("🔄 Refresh")
+
+        self.restart_btn.clicked.connect(self.restart_view)
         self.refresh_btn.clicked.connect(self.refresh_async)
-        main.addWidget(self.refresh_btn)
+
+        row3.addWidget(self.restart_btn)
+        row3.addWidget(self.refresh_btn)
+
+        main.addLayout(row3)
 
         self.footer = QLabel("Ready")
         self.footer.setObjectName("footer")
@@ -322,6 +337,15 @@ class PhoneHub(QWidget):
                 padding: 14px;
                 font-size: 15px;
                 line-height: 1.4;
+            }
+
+            QLabel#note {
+                color: #CBD5E1;
+                background: #172033;
+                border: 1px solid #263244;
+                border-radius: 12px;
+                padding: 10px;
+                font-size: 12px;
             }
 
             QPushButton {
@@ -436,22 +460,29 @@ class PhoneHub(QWidget):
 
     def target(self):
         target = self.device.get("target", "")
+
         if not target:
             QMessageBox.warning(self, "PhoneHub", "Phone not connected. Press FIX CONNECTION.")
             return ""
+
         return target
 
     def open_scrcpy(self, args, mode):
         target = self.target()
+
         if not target:
             return
 
         scrcpy = shutil.which("scrcpy")
+
         if not scrcpy:
             QMessageBox.critical(self, "PhoneHub", "scrcpy not found.")
             return
 
+        run_quiet(["adb", "-s", target, "shell", "input", "keyevent", "224"], timeout=3)
+
         close_scrcpy()
+
         ok = run_background([scrcpy, "-s", target] + args)
 
         if ok:
@@ -484,6 +515,7 @@ class PhoneHub(QWidget):
 
     def screenshot_async(self):
         target = self.target()
+
         if not target:
             return
 
