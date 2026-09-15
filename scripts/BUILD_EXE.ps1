@@ -13,7 +13,7 @@ python -m pip install pyinstaller
 
 Write-Host ""
 Write-Host "Building PhoneHub.exe..."
-python -m PyInstaller --onefile --windowed --name PhoneHub PhoneHub.py
+python -m PyInstaller --onefile --windowed --name PhoneHub --paths "C:\PhoneHub\app" "C:\PhoneHub\app\PhoneHub.py"
 
 Write-Host ""
 Write-Host "Done."
