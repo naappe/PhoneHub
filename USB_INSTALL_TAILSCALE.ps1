@@ -46,25 +46,27 @@ Write-Host "Serial: $serial"
 Write-Host "Android: $android"
 Write-Host ""
 
-Write-Host "Installing Tailscale APK automatically..."
-$installResult = adb -s $serial install -r $apk 2>&1
-$installResult | Out-Host
+$installedCheck = (& adb -s $serial shell pm list packages com.tailscale.ipn 2>&1) -join "`n"
 
-Start-Sleep -Seconds 2
+if ($installedCheck -match "com.tailscale.ipn") {
+    Write-Host "Tailscale already installed. Skipping APK install." -ForegroundColor Green
+} else {
+    Write-Host "Installing Tailscale APK automatically..." -ForegroundColor Yellow
 
-$packageCheck = adb -s $serial shell pm list packages com.tailscale.ipn
+    $installText = (& adb -s $serial install -r -g "$apk" 2>&1) -join "`n"
+    Write-Host $installText
 
-if ($packageCheck -notmatch "com.tailscale.ipn") {
-    Write-Host ""
-    Write-Host "Tailscale install did not appear on phone." -ForegroundColor Red
-    Write-Host "APK may be wrong. Need official Android APK, not Windows EXE."
-    Write-Host ""
-    pause
-    exit
-}
+    Start-Sleep -Seconds 2
+    $installedCheck = (& adb -s $serial shell pm list packages com.tailscale.ipn 2>&1) -join "`n"
 
-Write-Host ""
-Write-Host "Tailscale installed." -ForegroundColor Green
+    if ($installedCheck -notmatch "com.tailscale.ipn") {
+        Write-Host "Tailscale install failed. APK was not found on phone after install." -ForegroundColor Red
+        pause
+        exit
+    }
+
+    Write-Host "Tailscale installed." -ForegroundColor Green
+} -ForegroundColor Green
 
 Write-Host "Opening Tailscale..."
 adb -s $serial shell cmd package resolve-activity --brief com.tailscale.ipn | Out-Host
@@ -174,5 +176,6 @@ Write-Host "You can remove USB after PhoneHub shows connected."
 Write-Host ""
 
 python C:\PhoneHub\PhoneHub.py
+
 
 
