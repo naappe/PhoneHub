@@ -12,12 +12,17 @@ from device import get_device
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
-    QVBoxLayout, QHBoxLayout, QMessageBox
+    QVBoxLayout, QHBoxLayout, QMessageBox,
+    QComboBox, QInputDialog
 )
 from PySide6.QtCore import Qt, QObject, Signal
 
 
-APP_VERSION = "v1.3-wait-unlock"
+APP_VERSION = "v1.3-multi-phone"
+
+CONFIG_DIR = Path.home() / ".phone_remote"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+PHONES_FILE = CONFIG_DIR / "phones.json"
 
 SCREEN_PROFILE = [
     "--no-audio",
@@ -84,6 +89,103 @@ def run_bytes(args, timeout=12):
         return b""
 
 
+def read_json(path, default):
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return default
+
+
+def write_json(path, data):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def get_config():
+    return read_json(CONFIG_FILE, {})
+
+
+def save_active_config(phone):
+    cfg = {
+        "phone_ip": phone.get("phone_ip", ""),
+        "adb_port": int(phone.get("adb_port", 5555)),
+        "device_name": phone.get("device_name", "Phone"),
+        "usb_serial": phone.get("usb_serial", "")
+    }
+    write_json(CONFIG_FILE, cfg)
+
+
+def load_phones():
+    data = read_json(PHONES_FILE, None)
+
+    if isinstance(data, dict) and isinstance(data.get("phones"), list):
+        return data
+
+    old = get_config()
+
+    if old.get("phone_ip"):
+        first = {
+            "id": old.get("usb_serial") or old.get("phone_ip"),
+            "label": old.get("device_name", "My Phone"),
+            "device_name": old.get("device_name", "My Phone"),
+            "phone_ip": old.get("phone_ip", ""),
+            "adb_port": int(old.get("adb_port", 5555)),
+            "usb_serial": old.get("usb_serial", "")
+        }
+
+        data = {
+            "active_id": first["id"],
+            "phones": [first]
+        }
+
+        write_json(PHONES_FILE, data)
+        return data
+
+    data = {
+        "active_id": "",
+        "phones": []
+    }
+    write_json(PHONES_FILE, data)
+    return data
+
+
+def save_phones(data):
+    write_json(PHONES_FILE, data)
+
+
+def get_active_phone():
+    data = load_phones()
+    active_id = data.get("active_id", "")
+
+    for phone in data.get("phones", []):
+        if phone.get("id") == active_id:
+            return phone
+
+    phones = data.get("phones", [])
+    if phones:
+        data["active_id"] = phones[0].get("id", "")
+        save_phones(data)
+        save_active_config(phones[0])
+        return phones[0]
+
+    return {}
+
+
+def set_active_phone(phone_id):
+    data = load_phones()
+
+    for phone in data.get("phones", []):
+        if phone.get("id") == phone_id:
+            data["active_id"] = phone_id
+            save_phones(data)
+            save_active_config(phone)
+            return phone
+
+    return {}
+
+
 def is_scrcpy_running():
     out = run_quiet(["tasklist"], timeout=5)
     return "scrcpy.exe" in out.lower()
@@ -98,28 +200,15 @@ def close_scrcpy():
     return not is_scrcpy_running()
 
 
-def get_config():
-    path = os.path.expanduser(r"~\.phone_remote\config.json")
-
-    if not os.path.exists(path):
-        return {}
-
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
 def fix_adb_connection():
-    cfg = get_config()
+    phone = get_active_phone()
 
-    phone_ip = cfg.get("phone_ip", "")
-    adb_port = cfg.get("adb_port", 5555)
-    usb_serial = cfg.get("usb_serial", "")
+    phone_ip = phone.get("phone_ip", "")
+    adb_port = phone.get("adb_port", 5555)
+    usb_serial = phone.get("usb_serial", "")
 
     if not phone_ip:
-        return "Config missing. Setup phone again."
+        return "No phone selected. Add phone first."
 
     remote = f"{phone_ip}:{adb_port}"
 
@@ -154,6 +243,32 @@ def fix_adb_connection():
     return "Phone not found. Connect USB, unlock phone, press FIX."
 
 
+def detect_usb_phone():
+    run_quiet(["adb", "start-server"], timeout=8)
+    devices = run_quiet(["adb", "devices"], timeout=5)
+
+    serials = []
+
+    for line in devices.splitlines():
+        if "\tdevice" in line:
+            serial = line.split()[0]
+            if ":" not in serial and not serial.startswith("emulator"):
+                serials.append(serial)
+
+    if not serials:
+        return None
+
+    serial = serials[0]
+    model = run_quiet(["adb", "-s", serial, "shell", "getprop", "ro.product.model"], timeout=5)
+    android = run_quiet(["adb", "-s", serial, "shell", "getprop", "ro.build.version.release"], timeout=5)
+
+    return {
+        "serial": serial,
+        "model": model or "Android Phone",
+        "android": android or "-"
+    }
+
+
 def save_screenshot(target):
     adb = shutil.which("adb")
 
@@ -175,42 +290,10 @@ def save_screenshot(target):
     return f"Screenshot saved: {file_path}"
 
 
-def phone_is_locked(target):
-    if not target:
-        return True
-
-    out = run_quiet(["adb", "-s", target, "shell", "dumpsys", "window"], timeout=6).lower()
-
-    locked_words = [
-        "mdreaminglockscreen=true",
-        "mshowinglockscreen=true",
-        "isstatusbarkeyguard=true",
-        "keyguardshowing=true",
-        "mkeyguardshowing=true"
-    ]
-
-    return any(word in out for word in locked_words)
-
-
-def wake_phone(target):
-    if target:
-        run_quiet(["adb", "-s", target, "shell", "input", "keyevent", "224"], timeout=3)
-
-
-def start_screen_after_unlock(target):
-    scrcpy = shutil.which("scrcpy")
-
-    if not scrcpy or not target:
-        return False
-
-    wake_phone(target)
-    close_scrcpy()
-    return run_background([scrcpy, "-s", target] + SCREEN_PROFILE)
-
-
 class Bridge(QObject):
     device_ready = Signal(dict)
     message_ready = Signal(str)
+    phones_ready = Signal()
 
 
 class PhoneHub(QWidget):
@@ -224,11 +307,13 @@ class PhoneHub(QWidget):
         self.bridge = Bridge()
         self.bridge.device_ready.connect(self.apply_device)
         self.bridge.message_ready.connect(self.show_message)
+        self.bridge.phones_ready.connect(self.reload_phone_dropdown)
 
         self.setWindowTitle(f"PhoneHub {APP_VERSION}")
-        self.resize(420, 620)
+        self.resize(430, 700)
 
         self.build_ui()
+        self.reload_phone_dropdown()
         self.refresh_async()
 
     def build_ui(self):
@@ -250,6 +335,26 @@ class PhoneHub(QWidget):
         top.addWidget(self.status)
 
         main.addLayout(top)
+
+        self.phone_select = QComboBox()
+        self.phone_select.setObjectName("select")
+        main.addWidget(self.phone_select)
+
+        phone_row = QHBoxLayout()
+
+        self.add_btn = QPushButton("➕ Add Phone")
+        self.connect_btn = QPushButton("🔌 Connect")
+        self.delete_btn = QPushButton("🗑 Delete")
+
+        self.add_btn.clicked.connect(self.add_phone)
+        self.connect_btn.clicked.connect(self.connect_selected_phone)
+        self.delete_btn.clicked.connect(self.delete_selected_phone)
+
+        phone_row.addWidget(self.add_btn)
+        phone_row.addWidget(self.connect_btn)
+        phone_row.addWidget(self.delete_btn)
+
+        main.addLayout(phone_row)
 
         self.info = QLabel("Loading phone info...")
         self.info.setObjectName("info")
@@ -327,6 +432,16 @@ class PhoneHub(QWidget):
                 font-weight: 800;
             }
 
+            QComboBox#select {
+                background: #111827;
+                color: #F8FAFC;
+                border: 1px solid #263244;
+                border-radius: 12px;
+                padding: 10px;
+                font-size: 14px;
+                font-weight: 700;
+            }
+
             QLabel#statusChecking {
                 background: #334155;
                 color: #FBBF24;
@@ -386,8 +501,8 @@ class PhoneHub(QWidget):
                 color: #F8FAFC;
                 border: 1px solid #263244;
                 border-radius: 13px;
-                padding: 13px;
-                font-size: 15px;
+                padding: 12px;
+                font-size: 14px;
                 font-weight: 700;
             }
 
@@ -415,6 +530,27 @@ class PhoneHub(QWidget):
                 font-size: 12px;
             }
         """)
+
+    def reload_phone_dropdown(self):
+        self.phone_select.blockSignals(True)
+        self.phone_select.clear()
+
+        data = load_phones()
+        active_id = data.get("active_id", "")
+
+        for phone in data.get("phones", []):
+            label = phone.get("label") or phone.get("device_name") or "Phone"
+            ip = phone.get("phone_ip", "")
+            item_text = f"{label}  ({ip})"
+            self.phone_select.addItem(item_text, phone.get("id", ""))
+
+            if phone.get("id") == active_id:
+                self.phone_select.setCurrentIndex(self.phone_select.count() - 1)
+
+        if self.phone_select.count() == 0:
+            self.phone_select.addItem("No phone saved. Press Add Phone.", "")
+
+        self.phone_select.blockSignals(False)
 
     def set_status_style(self, style):
         self.status.setObjectName(style)
@@ -474,6 +610,115 @@ class PhoneHub(QWidget):
         self.loading = False
         self.footer.setText(msg)
 
+    def add_phone(self):
+        found = detect_usb_phone()
+
+        if not found:
+            QMessageBox.warning(
+                self,
+                "Add Phone",
+                "No USB phone found.\n\nConnect phone by USB, unlock it, and allow USB debugging."
+            )
+            return
+
+        ip, ok = QInputDialog.getText(
+            self,
+            "Add Phone",
+            f"Detected phone:\n{found['model']}\nSerial: {found['serial']}\n\nPaste this phone's Tailscale IP:"
+        )
+
+        if not ok or not ip.strip():
+            return
+
+        ip = ip.strip()
+
+        data = load_phones()
+
+        phone_id = found["serial"]
+
+        label = f"{found['model']}"
+
+        phone = {
+            "id": phone_id,
+            "label": label,
+            "device_name": found["model"],
+            "phone_ip": ip,
+            "adb_port": 5555,
+            "usb_serial": found["serial"],
+            "android": found["android"]
+        }
+
+        phones = [p for p in data.get("phones", []) if p.get("id") != phone_id]
+        phones.append(phone)
+
+        data["phones"] = phones
+        data["active_id"] = phone_id
+
+        save_phones(data)
+        save_active_config(phone)
+
+        self.reload_phone_dropdown()
+        self.footer.setText(f"Added phone: {label}")
+        self.fix_async()
+
+    def connect_selected_phone(self):
+        phone_id = self.phone_select.currentData()
+
+        if not phone_id:
+            QMessageBox.warning(self, "Connect Phone", "No phone selected.")
+            return
+
+        phone = set_active_phone(phone_id)
+
+        if not phone:
+            QMessageBox.warning(self, "Connect Phone", "Selected phone not found.")
+            return
+
+        close_scrcpy()
+        self.footer.setText(f"Selected: {phone.get('label', 'Phone')}")
+        self.fix_async()
+
+    def delete_selected_phone(self):
+        phone_id = self.phone_select.currentData()
+
+        if not phone_id:
+            return
+
+        data = load_phones()
+        phones = data.get("phones", [])
+
+        phone = None
+        for p in phones:
+            if p.get("id") == phone_id:
+                phone = p
+                break
+
+        if not phone:
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Delete Phone",
+            f"Delete saved phone?\n\n{phone.get('label', 'Phone')}"
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        phones = [p for p in phones if p.get("id") != phone_id]
+        data["phones"] = phones
+
+        if phones:
+            data["active_id"] = phones[0].get("id", "")
+            save_active_config(phones[0])
+        else:
+            data["active_id"] = ""
+            write_json(CONFIG_FILE, {})
+
+        save_phones(data)
+        self.reload_phone_dropdown()
+        self.refresh_async()
+
     def fix_async(self):
         if self.loading:
             return
@@ -525,38 +770,7 @@ class PhoneHub(QWidget):
             self.footer.setText(f"Could not open {mode}.")
 
     def open_phone(self):
-        target = self.target()
-
-        if not target:
-            return
-
-        wake_phone(target)
-
-        if phone_is_locked(target):
-            self.last_mode = "screen"
-            self.footer.setText("Waiting for unlock... Unlock phone once.")
-            threading.Thread(target=self.wait_for_unlock_worker, args=(target,), daemon=True).start()
-            return
-
         self.open_scrcpy(SCREEN_PROFILE, "screen")
-
-    def wait_for_unlock_worker(self, target):
-        for _ in range(60):
-            wake_phone(target)
-
-            if not phone_is_locked(target):
-                ok = start_screen_after_unlock(target)
-
-                if ok:
-                    self.bridge.message_ready.emit("Unlocked. Opening screen...")
-                else:
-                    self.bridge.message_ready.emit("Unlocked, but screen failed to open.")
-
-                return
-
-            time.sleep(2)
-
-        self.bridge.message_ready.emit("Still locked. Unlock phone and press OPEN PHONE again.")
 
     def open_camera(self, facing):
         args = CAMERA_BASE + [
