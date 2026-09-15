@@ -15,15 +15,23 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QObject, Signal
 
 
-APP_VERSION = "v0.8"
+APP_VERSION = "v0.9"
 
-SCRCPY_PROFILE = [
+SCREEN_PROFILE = [
     "--no-audio",
     "--video-codec=h264",
-    "--max-size=480",
-    "--video-bit-rate=350K",
-    "--max-fps=12",
+    "--max-size=540",
+    "--video-bit-rate=700K",
+    "--max-fps=20",
     "--video-buffer=0",
+    "--window-title=PhoneHub Screen"
+]
+
+CAMERA_BASE = [
+    "--video-source=camera",
+    "--camera-size=1280x720",
+    "--camera-fps=20",
+    "--no-audio"
 ]
 
 
@@ -47,7 +55,7 @@ def run_background(args):
         return False
 
 
-def run_quiet(args, timeout=5):
+def run_quiet(args, timeout=6):
     try:
         return subprocess.check_output(
             args,
@@ -68,9 +76,8 @@ def is_scrcpy_running():
 def close_scrcpy():
     if not is_scrcpy_running():
         return True
-
     run_quiet(["taskkill", "/IM", "scrcpy.exe", "/F"], timeout=5)
-    time.sleep(0.5)
+    time.sleep(0.6)
     return not is_scrcpy_running()
 
 
@@ -145,18 +152,25 @@ class Card(QFrame):
 
         box = QVBoxLayout(self)
         box.setContentsMargins(14, 12, 14, 12)
+        box.setSpacing(4)
 
-        t = QLabel(title)
-        t.setObjectName("cardTitle")
+        self.title = QLabel(title)
+        self.title.setObjectName("cardTitle")
 
-        self.v = QLabel(value)
-        self.v.setObjectName("cardValue")
+        self.value = QLabel(value)
+        self.value.setObjectName("cardValue")
 
-        box.addWidget(t)
-        box.addWidget(self.v)
+        box.addWidget(self.title)
+        box.addWidget(self.value)
 
     def set_value(self, value):
-        self.v.setText(str(value))
+        self.value.setText(str(value))
+
+
+class SectionTitle(QLabel):
+    def __init__(self, text):
+        super().__init__(text)
+        self.setObjectName("sectionTitle")
 
 
 class PhoneHub(QWidget):
@@ -165,12 +179,14 @@ class PhoneHub(QWidget):
 
         self.device = {}
         self.loading = False
+        self.last_view = "screen"
+
         self.bridge = Bridge()
         self.bridge.device_ready.connect(self.apply_device)
         self.bridge.fix_ready.connect(self.apply_fix_result)
 
         self.setWindowTitle(f"PhoneHub {APP_VERSION}")
-        self.resize(480, 780)
+        self.resize(560, 860)
 
         self.build_ui()
         self.refresh_async()
@@ -178,7 +194,7 @@ class PhoneHub(QWidget):
     def build_ui(self):
         main = QVBoxLayout(self)
         main.setSpacing(14)
-        main.setContentsMargins(20, 20, 20, 20)
+        main.setContentsMargins(18, 18, 18, 18)
 
         header = QHBoxLayout()
 
@@ -187,7 +203,7 @@ class PhoneHub(QWidget):
 
         self.status = QLabel("Checking...")
         self.status.setObjectName("statusChecking")
-        self.status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.status.setAlignment(Qt.AlignCenter)
 
         header.addWidget(title)
         header.addStretch()
@@ -195,9 +211,11 @@ class PhoneHub(QWidget):
 
         main.addLayout(header)
 
-        sub = QLabel("Remote phone dashboard")
-        sub.setObjectName("subtitle")
-        main.addWidget(sub)
+        subtitle = QLabel("Remote phone dashboard")
+        subtitle.setObjectName("subtitle")
+        main.addWidget(subtitle)
+
+        main.addWidget(SectionTitle("Device Information"))
 
         grid = QGridLayout()
         grid.setSpacing(12)
@@ -218,50 +236,77 @@ class PhoneHub(QWidget):
 
         main.addLayout(grid)
 
+        top_actions = QGridLayout()
+        top_actions.setSpacing(10)
+
+        self.fix_btn = QPushButton("🛠 FIX CONNECTION")
+        self.fix_btn.setObjectName("fixButton")
+        self.fix_btn.clicked.connect(self.fix_connection_async)
+
+        self.refresh_btn = QPushButton("🔄 Refresh")
+        self.refresh_btn.clicked.connect(self.refresh_async)
+
+        top_actions.addWidget(self.fix_btn, 0, 0)
+        top_actions.addWidget(self.refresh_btn, 0, 1)
+
+        main.addLayout(top_actions)
+
+        main.addWidget(SectionTitle("Screen & Camera"))
+
         self.open_btn = QPushButton("📱 OPEN PHONE")
         self.open_btn.setObjectName("primaryButton")
-        self.open_btn.clicked.connect(self.open_phone)
+        self.open_btn.clicked.connect(self.open_phone_view)
         main.addWidget(self.open_btn)
+
+        camera_row = QGridLayout()
+        camera_row.setSpacing(10)
+
+        self.back_cam_btn = QPushButton("📷 Back Camera")
+        self.front_cam_btn = QPushButton("🤳 Front Camera")
+
+        self.back_cam_btn.clicked.connect(lambda: self.open_camera_view("back"))
+        self.front_cam_btn.clicked.connect(lambda: self.open_camera_view("front"))
+
+        camera_row.addWidget(self.back_cam_btn, 0, 0)
+        camera_row.addWidget(self.front_cam_btn, 0, 1)
+
+        main.addLayout(camera_row)
 
         control_row = QGridLayout()
         control_row.setSpacing(10)
 
-        close_btn = QPushButton("❌ Close Phone")
-        restart_btn = QPushButton("🔁 Restart Phone Screen")
-        refresh_btn = QPushButton("🔄 Refresh")
+        self.close_btn = QPushButton("❌ Close View")
+        self.restart_btn = QPushButton("🔁 Restart View")
 
-        close_btn.clicked.connect(self.close_phone)
-        restart_btn.clicked.connect(self.restart_phone)
-        refresh_btn.clicked.connect(self.refresh_async)
+        self.close_btn.clicked.connect(self.close_view)
+        self.restart_btn.clicked.connect(self.restart_view)
 
-        control_row.addWidget(close_btn, 0, 0)
-        control_row.addWidget(restart_btn, 0, 1)
-        control_row.addWidget(refresh_btn, 1, 0, 1, 2)
+        control_row.addWidget(self.close_btn, 0, 0)
+        control_row.addWidget(self.restart_btn, 0, 1)
 
         main.addLayout(control_row)
 
-        actions = QGridLayout()
-        actions.setSpacing(10)
+        main.addWidget(SectionTitle("Quick Shortcuts"))
 
-        camera = QPushButton("📷 Camera")
+        quick = QGridLayout()
+        quick.setSpacing(10)
+
         photos = QPushButton("🖼 Photos")
         files = QPushButton("📁 Files")
-        location = QPushButton("📍 Location")
         settings = QPushButton("⚙ Settings")
+        location = QPushButton("📍 Location")
 
-        camera.clicked.connect(self.open_camera)
         photos.clicked.connect(self.open_photos)
         files.clicked.connect(self.open_files)
-        location.clicked.connect(self.show_location)
         settings.clicked.connect(self.open_settings)
+        location.clicked.connect(self.show_location)
 
-        actions.addWidget(camera, 0, 0)
-        actions.addWidget(photos, 0, 1)
-        actions.addWidget(files, 1, 0)
-        actions.addWidget(location, 1, 1)
-        actions.addWidget(settings, 2, 0, 1, 2)
+        quick.addWidget(photos, 0, 0)
+        quick.addWidget(files, 0, 1)
+        quick.addWidget(settings, 1, 0)
+        quick.addWidget(location, 1, 1)
 
-        main.addLayout(actions)
+        main.addLayout(quick)
         main.addStretch()
 
         self.footer = QLabel("Ready")
@@ -270,69 +315,81 @@ class PhoneHub(QWidget):
 
         self.setStyleSheet("""
             QWidget {
-                background: #111827;
-                color: #F9FAFB;
+                background: #0B1220;
+                color: #F8FAFC;
                 font-family: Segoe UI;
                 font-size: 14px;
             }
 
             QLabel#title {
-                font-size: 30px;
+                font-size: 34px;
                 font-weight: 800;
+                color: #FFFFFF;
             }
 
             QLabel#subtitle {
-                color: #9CA3AF;
+                color: #94A3B8;
                 font-size: 13px;
-                padding-bottom: 8px;
+                margin-bottom: 4px;
+            }
+
+            QLabel#sectionTitle {
+                color: #CBD5E1;
+                font-size: 14px;
+                font-weight: 700;
+                padding-top: 2px;
+                padding-bottom: 2px;
             }
 
             QLabel#statusChecking {
-                background: #374151;
+                background: #334155;
                 color: #FBBF24;
-                padding: 8px 12px;
-                border-radius: 12px;
-                font-weight: 700;
+                padding: 10px 14px;
+                border-radius: 14px;
+                font-weight: 800;
+                min-width: 130px;
             }
 
             QLabel#statusConnected {
                 background: #064E3B;
-                color: #34D399;
-                padding: 8px 12px;
-                border-radius: 12px;
-                font-weight: 700;
+                color: #6EE7B7;
+                padding: 10px 14px;
+                border-radius: 14px;
+                font-weight: 800;
+                min-width: 130px;
             }
 
             QLabel#statusOffline {
                 background: #7F1D1D;
                 color: #FCA5A5;
-                padding: 8px 12px;
-                border-radius: 12px;
-                font-weight: 700;
+                padding: 10px 14px;
+                border-radius: 14px;
+                font-weight: 800;
+                min-width: 130px;
             }
 
             QFrame#card {
-                background: #1F2937;
-                border: 1px solid #374151;
+                background: #162033;
+                border: 1px solid #283548;
                 border-radius: 16px;
             }
 
             QLabel#cardTitle {
-                color: #9CA3AF;
+                color: #94A3B8;
                 font-size: 12px;
                 font-weight: 600;
             }
 
             QLabel#cardValue {
                 color: #FFFFFF;
-                font-size: 17px;
+                font-size: 18px;
                 font-weight: 800;
             }
 
             QPushButton {
-                background: #1F2937;
-                color: #F9FAFB;
-                border: 1px solid #374151;
+                background: #162033;
+                color: #F8FAFC;
+                border: 1px solid #283548;
                 border-radius: 14px;
                 padding: 14px;
                 font-size: 15px;
@@ -340,7 +397,7 @@ class PhoneHub(QWidget):
             }
 
             QPushButton:hover {
-                background: #374151;
+                background: #22304A;
             }
 
             QPushButton#primaryButton {
@@ -358,7 +415,7 @@ class PhoneHub(QWidget):
                 background: #F59E0B;
                 color: #111827;
                 border: none;
-                font-size: 17px;
+                font-size: 16px;
                 padding: 16px;
             }
 
@@ -367,9 +424,9 @@ class PhoneHub(QWidget):
             }
 
             QLabel#footer {
-                color: #9CA3AF;
+                color: #94A3B8;
                 font-size: 12px;
-                padding-top: 8px;
+                padding-top: 4px;
             }
         """)
 
@@ -387,8 +444,7 @@ class PhoneHub(QWidget):
         self.status.setText("Checking...")
         self.set_status_style("statusChecking")
 
-        t = threading.Thread(target=self.refresh_worker, daemon=True)
-        t.start()
+        threading.Thread(target=self.refresh_worker, daemon=True).start()
 
     def refresh_worker(self):
         d = get_device()
@@ -414,12 +470,12 @@ class PhoneHub(QWidget):
         else:
             self.status.setText("🔴 Offline")
             self.set_status_style("statusOffline")
-            self.footer.setText("Phone offline. Connect USB or enable remote ADB.")
+            self.footer.setText("Phone offline. Use FIX CONNECTION.")
 
     def require_target(self):
         target = self.device.get("target", "")
         if not target:
-            QMessageBox.warning(self, "PhoneHub", "Phone not connected. Press Refresh after connecting.")
+            QMessageBox.warning(self, "PhoneHub", "Phone not connected. Press FIX CONNECTION or Refresh.")
             return ""
         return target
 
@@ -432,8 +488,7 @@ class PhoneHub(QWidget):
         self.status.setText("Fixing...")
         self.set_status_style("statusChecking")
 
-        t = threading.Thread(target=self.fix_connection_worker, daemon=True)
-        t.start()
+        threading.Thread(target=self.fix_connection_worker, daemon=True).start()
 
     def fix_connection_worker(self):
         message = fix_adb_connection()
@@ -445,7 +500,7 @@ class PhoneHub(QWidget):
         self.loading = False
         self.footer.setText(message)
 
-    def open_phone(self):
+    def open_scrcpy_view(self, extra_args, view_name):
         target = self.require_target()
         if not target:
             return
@@ -454,73 +509,41 @@ class PhoneHub(QWidget):
         if not scrcpy:
             QMessageBox.critical(self, "PhoneHub", "scrcpy not found.")
             return
-
-        if is_scrcpy_running():
-            self.footer.setText("Phone screen already open.")
-            QMessageBox.information(self, "PhoneHub", "Phone screen is already open.\n\nUse Restart Phone Screen to reopen it.")
-            return
-
-        ok = run_background([scrcpy, "-s", target] + SCRCPY_PROFILE)
-        if ok:
-            self.footer.setText("Opening phone screen...")
-        else:
-            QMessageBox.critical(self, "PhoneHub", "Could not open phone.")
-
-    def close_phone(self):
-        self.footer.setText("Closing phone screen...")
-        ok = close_scrcpy()
-
-        if ok:
-            self.footer.setText("Phone screen closed.")
-        else:
-            QMessageBox.warning(self, "PhoneHub", "Could not close phone screen.")
-
-    def restart_phone(self):
-        target = self.require_target()
-        if not target:
-            return
-
-        scrcpy = shutil.which("scrcpy")
-        if not scrcpy:
-            QMessageBox.critical(self, "PhoneHub", "scrcpy not found.")
-            return
-
-        self.footer.setText("Restarting phone screen...")
-        QApplication.processEvents()
 
         close_scrcpy()
-        ok = run_background([scrcpy, "-s", target] + SCRCPY_PROFILE)
+        ok = run_background([scrcpy, "-s", target] + extra_args)
 
         if ok:
-            self.footer.setText("Phone screen restarted.")
+            self.last_view = view_name
+            self.footer.setText(f"Opening {view_name}...")
         else:
-            QMessageBox.critical(self, "PhoneHub", "Could not restart phone screen.")
+            QMessageBox.critical(self, "PhoneHub", f"Could not open {view_name}.")
 
-    def open_camera(self):
-        target = self.require_target()
-        if not target:
-            return
+    def open_phone_view(self):
+        self.open_scrcpy_view(SCREEN_PROFILE, "phone screen")
 
-        scrcpy = shutil.which("scrcpy")
-        if not scrcpy:
-            QMessageBox.critical(self, "PhoneHub", "scrcpy not found.")
-            return
+    def open_camera_view(self, facing):
+        args = CAMERA_BASE + [
+            f"--camera-facing={facing}",
+            f"--window-title=PhoneHub {facing.title()} Camera"
+        ]
+        self.open_scrcpy_view(args, f"{facing} camera")
 
-        # Camera-only mode:
-        # PC shows the phone camera feed.
-        # The physical phone screen does not need to open the Camera app.
-        run_background([
-            scrcpy,
-            "-s", target,
-            "--video-source=camera",
-            "--camera-facing=back",
-            "--camera-size=640x480",
-            "--camera-fps=15",
-            "--no-audio",
-            "--window-title=PhoneHub Camera"
-        ])
+    def close_view(self):
+        self.footer.setText("Closing view...")
+        ok = close_scrcpy()
+        if ok:
+            self.footer.setText("View closed.")
+        else:
+            QMessageBox.warning(self, "PhoneHub", "Could not close view.")
 
-        self.footer.setText("Opening camera feed on PC...")
+    def restart_view(self):
+        if self.last_view == "front camera":
+            self.open_camera_view("front")
+        elif self.last_view == "back camera":
+            self.open_camera_view("back")
+        else:
+            self.open_phone_view()
 
     def open_photos(self):
         target = self.require_target()
@@ -528,8 +551,8 @@ class PhoneHub(QWidget):
             return
 
         adb_shell(target, ["am", "start", "-a", "android.intent.action.VIEW", "-t", "image/*"])
-        self.footer.setText("Opening photos and phone screen...")
-        self.restart_phone()
+        time.sleep(0.7)
+        self.open_phone_view()
 
     def open_files(self):
         target = self.require_target()
@@ -537,8 +560,8 @@ class PhoneHub(QWidget):
             return
 
         adb_shell(target, ["monkey", "-p", "com.google.android.documentsui", "1"])
-        self.footer.setText("Opening files and phone screen...")
-        self.restart_phone()
+        time.sleep(0.7)
+        self.open_phone_view()
 
     def open_settings(self):
         target = self.require_target()
@@ -546,14 +569,14 @@ class PhoneHub(QWidget):
             return
 
         adb_shell(target, ["am", "start", "-a", "android.settings.SETTINGS"])
-        self.footer.setText("Opening settings and phone screen...")
-        self.restart_phone()
+        time.sleep(0.7)
+        self.open_phone_view()
 
     def show_location(self):
         QMessageBox.information(
             self,
             "PhoneHub Location",
-            "Location will be added after Camera, Photos, and Files.\n\nFor reliable GPS, we will need a small Android helper app."
+            "Location can be added next.\n\nWe will build it as a separate feature."
         )
 
 
