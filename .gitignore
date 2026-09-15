@@ -5,3 +5,7 @@ dist/
 *.log
 
 apps/*.apk
+
+data/
+iphone_uploads/
+

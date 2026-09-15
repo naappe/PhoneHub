@@ -103,7 +103,12 @@ button {{
         <h1>PhoneHub Companion</h1>
         <p class="small">Connected to your PhoneHub PC.</p>
         {paired_msg}
-        <p class="small">Add to Home Screen: tap Share → Add to Home Screen.</p>
+                <div class="ok">
+            ✅ Phone connected to PhoneHub.<br><br>
+            <b>Android:</b> Tap Chrome menu ⋮ → Add to Home screen → Add.<br><br>
+            <b>iPhone:</b> Tap Share → Add to Home Screen → Add.<br><br>
+            After that, open PhoneHub from your phone home screen.
+        </div>
     </div>
 
     <div class="card">
@@ -194,3 +199,4 @@ if __name__ == "__main__":
     print("Open on PC: http://127.0.0.1:8088")
     print("Token:", TOKEN)
     ThreadingHTTPServer(("0.0.0.0", 8088), Handler).serve_forever()
+
