@@ -9,3 +9,6 @@ apps/*.apk
 data/
 iphone_uploads/
 
+
+screenshots/
+runtime/screenshots/

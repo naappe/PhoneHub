@@ -197,6 +197,37 @@ if ($usbLine) {
         if ($devicesAfter -match "$phoneIp`:5555\s+device") {
             Write-Host "Remote Mode: READY" -ForegroundColor Green
             Write-Host "PhoneHub can now work by USB and remote Tailscale." -ForegroundColor Green
+
+            $configDir = "$env:USERPROFILE\.phone_remote"
+            New-Item -ItemType Directory -Force $configDir | Out-Null
+
+            $phoneData = @{
+                phone_ip = $phoneIp
+                adb_port = 5555
+                device_name = "$model"
+                usb_serial = "$serial"
+            }
+
+            $phoneData | ConvertTo-Json -Depth 5 | Set-Content "$configDir\config.json" -Encoding UTF8
+
+            $phonesData = @{
+                active_id = "$serial"
+                phones = @(
+                    @{
+                        id = "$serial"
+                        label = "$model"
+                        device_name = "$model"
+                        phone_ip = "$phoneIp"
+                        adb_port = 5555
+                        usb_serial = "$serial"
+                        android = "$android"
+                    }
+                )
+            }
+
+            $phonesData | ConvertTo-Json -Depth 5 | Set-Content "$configDir\phones.json" -Encoding UTF8
+
+            Write-Host "Saved phone profile into PhoneHub." -ForegroundColor Green
         } else {
             Write-Host "Remote ADB did not connect." -ForegroundColor Red
             Write-Host "Please check:" -ForegroundColor Yellow
@@ -235,3 +266,4 @@ Write-Host "            CHECK FINISHED"
 Write-Host "====================================" -ForegroundColor Cyan
 Write-Host ""
 pause
+

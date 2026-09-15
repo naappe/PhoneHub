@@ -2,8 +2,8 @@
 
 
 a = Analysis(
-    ['PhoneHub.py'],
-    pathex=[],
+    ['C:/PhoneHub/app/PhoneHub.py'],
+    pathex=['C:/PhoneHub/app'],
     binaries=[],
     datas=[],
     hiddenimports=[],
