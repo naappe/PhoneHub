@@ -193,7 +193,6 @@ class MainActivity : ComponentActivity() {
         }
         ContextCompat.startForegroundService(this, intent)
         status.text = "Starting PhoneHub..."
-        refreshSetupState()
     }
 
     private fun generatePairingCode() {
@@ -205,6 +204,7 @@ class MainActivity : ComponentActivity() {
 
     private fun revokePairing() {
         pairingStore.revokePairing()
+        ScreenRequestStore.clear(this)
         pairingInfo.text = "Paired PC revoked"
         refreshSetupState()
     }
@@ -227,9 +227,30 @@ class MainActivity : ComponentActivity() {
         } else if (!pairingInfo.text.startsWith("Pairing code:")) {
             pairingInfo.text = "No trusted PC paired"
         }
+
+        when {
+            ScreenShareService.isSharing -> {
+                startButton.text = "Screen Sharing Active"
+                startButton.isEnabled = false
+                stopButton.isEnabled = true
+            }
+            ScreenRequestStore.isPending(this) -> {
+                status.text = "Screen access requested by paired PC"
+                room.text = "Tap below to open Android's screen-share approval"
+                startButton.text = "Approve PC Screen Request"
+                startButton.isEnabled = true
+                stopButton.isEnabled = false
+            }
+            else -> {
+                startButton.text = "Start Screen Share"
+                startButton.isEnabled = true
+                stopButton.isEnabled = false
+            }
+        }
     }
 
     private fun startShare() {
+        ScreenRequestStore.clear(this)
         pendingRoomCode = createRoomCode()
         status.text = "Approve Android screen sharing..."
         val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -240,11 +261,12 @@ class MainActivity : ComponentActivity() {
         startService(Intent(this, ScreenShareService::class.java).apply {
             action = ScreenShareService.ACTION_STOP
         })
-        refreshSetupState()
+        ScreenRequestStore.clear(this)
         room.text = "Viewer room will appear here"
         startButton.isEnabled = true
         stopButton.isEnabled = false
         pendingRoomCode = null
+        refreshSetupState()
     }
 
     private fun requestNotificationPermissionIfNeeded() {
