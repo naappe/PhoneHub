@@ -5,6 +5,7 @@ on:
     paths:
       - 'PhoneHub.bat'
       - 'app/PhoneHub.py'
+      - 'app/PhoneHubTailscale.py'
       - 'app/PhoneHubLink.py'
       - 'app/phone_config.py'
       - 'tests/test_phone_config.py'
@@ -34,8 +35,8 @@ jobs:
       - name: Run launcher behavior tests
         run: python -m unittest tests.test_launcher_update -v
 
-      - name: Run PhoneHub Link UI tests
+      - name: Run Tailscale dashboard UI tests
         run: python -m unittest tests.test_phonehub_link_ui -v
 
       - name: Compile changed Python files
-        run: python -m py_compile app/PhoneHub.py app/PhoneHubLink.py app/phone_config.py
+        run: python -m py_compile app/PhoneHub.py app/PhoneHubTailscale.py app/PhoneHubLink.py app/phone_config.py
