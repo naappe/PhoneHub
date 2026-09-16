@@ -93,7 +93,11 @@ class WebRtcSender(
     private fun createOffer() {
         val pc = peerConnection ?: return
         pc.createOffer(object : SimpleSdpObserver() {
-            override fun onCreateSuccess(description: SessionDescription) {
+            override fun onCreateSuccess(description: SessionDescription?) {
+                if (description == null) {
+                    onStatus("Could not create WebRTC offer")
+                    return
+                }
                 pc.setLocalDescription(object : SimpleSdpObserver() {
                     override fun onSetSuccess() {
                         emitSignal(SignalMessage(type = "offer", sdp = description.description))
