@@ -28,7 +28,7 @@ class DeviceInfoController(private val context: Context) : DeviceInfoProvider {
             model = Build.MODEL.orEmpty(),
             androidVersion = Build.VERSION.RELEASE.orEmpty(),
             serviceState = PhoneHubService.currentState.name.lowercase(),
-            screenSharingActive = false
+            screenSharingActive = ScreenShareService.isSharing
         )
     }
 }
