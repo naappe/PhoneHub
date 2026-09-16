@@ -19,6 +19,8 @@ enum class ServiceState(val notificationText: String) {
 }
 
 class PhoneHubService : Service() {
+    private var phoneHubServer: PhoneHubServer? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -34,15 +36,38 @@ class PhoneHubService : Service() {
         return START_STICKY
     }
 
+    override fun onDestroy() {
+        phoneHubServer?.stop()
+        phoneHubServer = null
+        super.onDestroy()
+    }
+
     private fun startBackend() {
         setEnabled(this, true)
-        val paired = PairingStore(applicationContext).getPairedClient() != null
-        setState(if (paired) ServiceState.ACTIVE else ServiceState.WAITING_FOR_PAIRING)
+        val pairingStore = PairingStore(applicationContext)
+        val paired = pairingStore.getPairedClient() != null
+
+        currentState = if (paired) ServiceState.ACTIVE else ServiceState.WAITING_FOR_PAIRING
         startForeground(NOTIFICATION_ID, buildNotification(currentState))
+
+        if (phoneHubServer == null) {
+            val router = CommandRouter(DeviceInfoController(applicationContext))
+            val processor = PhoneHubRequestProcessor(
+                pairedClientProvider = { pairingStore.getPairedClient() },
+                router = router,
+                onAuthenticatedRequest = { setState(ServiceState.CONNECTED) }
+            )
+            phoneHubServer = PhoneHubServer(
+                processor = processor,
+                onServerError = { setState(ServiceState.ERROR) }
+            ).also { it.start() }
+        }
     }
 
     private fun stopBackend() {
         setEnabled(this, false)
+        phoneHubServer?.stop()
+        phoneHubServer = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
