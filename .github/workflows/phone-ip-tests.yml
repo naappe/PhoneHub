@@ -5,6 +5,7 @@ on:
     paths:
       - 'PhoneHub.bat'
       - 'app/PhoneHub.py'
+      - 'app/PhoneHubLink.py'
       - 'app/phone_config.py'
       - 'tests/test_phone_config.py'
       - 'tests/test_launcher_update.py'
@@ -37,4 +38,4 @@ jobs:
         run: python -m unittest tests.test_phonehub_link_ui -v
 
       - name: Compile changed Python files
-        run: python -m py_compile app/PhoneHub.py app/phone_config.py
+        run: python -m py_compile app/PhoneHub.py app/PhoneHubLink.py app/phone_config.py
