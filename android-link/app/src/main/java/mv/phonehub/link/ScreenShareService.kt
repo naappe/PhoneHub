@@ -43,7 +43,7 @@ class ScreenShareService : Service() {
         startForeground(
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("PhoneHub Link")
+                .setContentTitle("PhoneHub")
                 .setContentText("Sharing screen - room $room")
                 .setSmallIcon(android.R.drawable.presence_video_online)
                 .setOngoing(true)
@@ -69,6 +69,8 @@ class ScreenShareService : Service() {
 
         try {
             webRtcSender.start()
+            isSharing = true
+            ScreenRequestStore.clear(applicationContext)
             scope.launch {
                 try {
                     signalClient.connect()
@@ -77,6 +79,7 @@ class ScreenShareService : Service() {
                 }
             }
         } catch (_: Exception) {
+            isSharing = false
             updateNotification("Could not start screen capture")
             stopSharing()
         }
@@ -87,7 +90,7 @@ class ScreenShareService : Service() {
         manager.notify(
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("PhoneHub Link")
+                .setContentTitle("PhoneHub")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.presence_video_online)
                 .setOngoing(true)
@@ -109,6 +112,7 @@ class ScreenShareService : Service() {
     }
 
     private fun stopSharing() {
+        isSharing = false
         sender?.stop()
         sender = null
         scope.launch {
@@ -121,6 +125,7 @@ class ScreenShareService : Service() {
     }
 
     override fun onDestroy() {
+        isSharing = false
         sender?.stop()
         scope.cancel()
         super.onDestroy()
@@ -133,5 +138,9 @@ class ScreenShareService : Service() {
         const val EXTRA_PROJECTION_DATA = "projection_data"
         private const val CHANNEL_ID = "phonehub_link_share"
         private const val NOTIFICATION_ID = 8787
+
+        @Volatile
+        var isSharing: Boolean = false
+            private set
     }
 }
