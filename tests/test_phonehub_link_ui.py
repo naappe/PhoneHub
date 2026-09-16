@@ -5,7 +5,8 @@ import unittest
 class PhoneHubTailscaleUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = Path("app/PhoneHub.py").read_text(encoding="utf-8-sig")
+        cls.source = Path("app/PhoneHubTailscale.py").read_text(encoding="utf-8-sig")
+        cls.base_source = Path("app/PhoneHub.py").read_text(encoding="utf-8-sig")
         cls.launcher = Path("PhoneHub.bat").read_text(encoding="utf-8-sig").lower()
 
     def test_dashboard_has_tailscale_ip_input_and_save_connect(self):
@@ -20,12 +21,12 @@ class PhoneHubTailscaleUiTests(unittest.TestCase):
         self.assertIn('connect_remote_adb()', self.source)
 
     def test_existing_tools_continue_to_use_saved_tailscale_ip(self):
-        self.assertIn('def adb_target():', self.source)
-        self.assertIn('ip, port = get_saved_ip()', self.source)
-        self.assertIn('return f"{ip}:{port}" if ip else ""', self.source)
+        self.assertIn('def adb_target():', self.base_source)
+        self.assertIn('ip, port = get_saved_ip()', self.base_source)
+        self.assertIn('return f"{ip}:{port}" if ip else ""', self.base_source)
 
-    def test_launcher_prefers_tailscale_phonehub_source_and_falls_back_to_exe(self):
-        self.assertIn('app\\phonehub.py', self.launcher)
+    def test_launcher_prefers_tailscale_dashboard_and_falls_back_to_exe(self):
+        self.assertIn('app\\phonehubtailscale.py', self.launcher)
         self.assertNotIn('app\\phonehublink.py', self.launcher)
         self.assertIn('dist\\phonehub.exe', self.launcher)
 
