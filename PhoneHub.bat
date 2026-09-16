@@ -38,27 +38,30 @@ if errorlevel 1 (
 echo [PhoneHub] Update check complete.
 
 :launch_phonehub
-REM Close old PhoneHub tools/windows before starting the primary app.
+REM Close old PhoneHub tools/windows before starting the app.
 taskkill /IM PhoneHub.exe /F >nul 2>&1
 taskkill /IM scrcpy.exe /F >nul 2>&1
 taskkill /IM pythonw.exe /F >nul 2>&1
 
-REM PhoneHub Link is now the primary desktop app. It does not require ADB or Tailscale.
+REM Start ADB for the Tailscale remote connection mode.
+adb start-server >nul 2>&1
+
+REM Primary app: existing PhoneHub tools with the Tailscale IP box on Dashboard.
 where pythonw >nul 2>&1
 if not errorlevel 1 (
-    start "" pythonw "C:\PhoneHub\app\PhoneHubLink.py"
+    start "" pythonw "C:\PhoneHub\app\PhoneHubTailscale.py"
     goto done
 )
 
-REM If pythonw is unavailable, try normal Python without blocking this launcher.
+REM If pythonw is unavailable, try normal Python.
 where python >nul 2>&1
 if not errorlevel 1 (
-    start "" python "C:\PhoneHub\app\PhoneHubLink.py"
+    start "" python "C:\PhoneHub\app\PhoneHubTailscale.py"
     goto done
 )
 
 REM Final fallback: keep the previous compiled PhoneHub available.
-echo [PhoneHub] Python not found - opening legacy PhoneHub.
+echo [PhoneHub] Python not found - opening compiled PhoneHub.
 start "" "C:\PhoneHub\dist\PhoneHub.exe"
 
 :done
