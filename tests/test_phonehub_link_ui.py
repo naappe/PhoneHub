@@ -2,31 +2,31 @@ from pathlib import Path
 import unittest
 
 
-class PhoneHubLinkUiTests(unittest.TestCase):
+class PhoneHubTailscaleUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.link_source = Path("app/PhoneHubLink.py").read_text(encoding="utf-8-sig")
+        cls.source = Path("app/PhoneHub.py").read_text(encoding="utf-8-sig")
         cls.launcher = Path("PhoneHub.bat").read_text(encoding="utf-8-sig").lower()
 
-    def test_primary_app_is_phonehub_link(self):
-        self.assertIn('APP_VERSION = "v2.7-phonehub-link"', self.link_source)
-        self.assertIn('QLabel("PhoneHub Link")', self.link_source)
-        self.assertIn('QPushButton("Open Phone Viewer")', self.link_source)
-        self.assertIn('QPushButton("Install Phone App")', self.link_source)
+    def test_dashboard_has_tailscale_ip_input_and_save_connect(self):
+        self.assertIn('self.dashboard_ip_input = QLineEdit()', self.source)
+        self.assertIn('self.dashboard_ip_input.setPlaceholderText("Example: 100.70.94.21")', self.source)
+        self.assertIn('QPushButton("Save & Connect")', self.source)
 
-    def test_link_actions_use_published_urls(self):
-        self.assertIn('PHONEHUB_VIEWER_URL = "https://naappe.github.io/PhoneHub/"', self.link_source)
-        self.assertIn('PHONEHUB_APK_URL = "https://github.com/naappe/PhoneHub/releases/download/phonehub-link-v0.1-test/PhoneHub-Link-v0.1-debug.apk"', self.link_source)
-        self.assertIn('webbrowser.open(PHONEHUB_VIEWER_URL)', self.link_source)
-        self.assertIn('webbrowser.open(PHONEHUB_APK_URL)', self.link_source)
+    def test_dashboard_loads_saved_ip_and_reuses_existing_connection_logic(self):
+        self.assertIn('ip, _ = get_saved_ip()', self.source)
+        self.assertIn('self.dashboard_ip_input.setText(ip)', self.source)
+        self.assertIn('save_phone_ip(ip, 5555)', self.source)
+        self.assertIn('connect_remote_adb()', self.source)
 
-    def test_legacy_app_remains_available_as_fallback(self):
-        self.assertIn('QPushButton("Open Legacy PhoneHub")', self.link_source)
-        self.assertIn('dist\\phonehub.exe', self.link_source.lower())
+    def test_existing_tools_continue_to_use_saved_tailscale_ip(self):
+        self.assertIn('def adb_target():', self.source)
+        self.assertIn('ip, port = get_saved_ip()', self.source)
+        self.assertIn('return f"{ip}:{port}" if ip else ""', self.source)
 
-    def test_launcher_prefers_link_app_and_falls_back_to_legacy_exe(self):
-        self.assertIn('app\\phonehublink.py', self.launcher)
-        self.assertIn('pythonw', self.launcher)
+    def test_launcher_prefers_tailscale_phonehub_source_and_falls_back_to_exe(self):
+        self.assertIn('app\\phonehub.py', self.launcher)
+        self.assertNotIn('app\\phonehublink.py', self.launcher)
         self.assertIn('dist\\phonehub.exe', self.launcher)
 
 
