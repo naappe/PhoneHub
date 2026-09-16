@@ -13,6 +13,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.util.Base64
 import java.util.LinkedHashSet
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -21,7 +22,8 @@ class PhoneHubRequestProcessor(
     private val pairedClientProvider: () -> PairedClient?,
     private val router: CommandRouter,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
-    private val onAuthenticatedRequest: (() -> Unit)? = null
+    private val onAuthenticatedRequest: (() -> Unit)? = null,
+    private val pairingHandler: ((pcId: String, code: String) -> PairedClient?)? = null
 ) {
     private val usedNonces = LinkedHashSet<String>()
 
@@ -46,6 +48,10 @@ class PhoneHubRequestProcessor(
             ?: return unsignedError(type, "malformed_request")
         val signature = parsed["signature"]?.jsonPrimitive?.contentOrNullCompat()
             ?: return unsignedError(type, "malformed_request")
+
+        if (type == "pair" && pairedClientProvider() == null) {
+            return processFirstPairing(version, pcId, nonce, timestamp, payload)
+        }
 
         val paired = pairedClientProvider()
             ?: return unsignedError(type, "not_paired")
@@ -77,6 +83,48 @@ class PhoneHubRequestProcessor(
 
         onAuthenticatedRequest?.invoke()
         return signedResult(router.handle(type, payload), paired.secret, nonce)
+    }
+
+    private fun processFirstPairing(
+        version: Int,
+        pcId: String,
+        nonce: String,
+        timestamp: Long,
+        payload: JsonObject
+    ): String {
+        if (version != ProtocolModels.VERSION || pcId.isBlank()) {
+            return unsignedError("pair", "pairing_failed")
+        }
+
+        val now = nowMillis()
+        if (timestamp < now - MAX_CLOCK_SKEW_MILLIS || timestamp > now + MAX_CLOCK_SKEW_MILLIS) {
+            return unsignedError("pair", "stale_request")
+        }
+
+        val code = payload["code"]?.jsonPrimitive?.contentOrNullCompat()
+            ?.takeIf { it.length == 6 && it.all(Char::isDigit) }
+            ?: return unsignedError("pair", "pairing_failed")
+
+        val paired = try {
+            pairingHandler?.invoke(pcId, code)
+        } catch (_: Exception) {
+            null
+        } ?: return unsignedError("pair", "pairing_failed")
+
+        if (paired.pcId != pcId) {
+            return unsignedError("pair", "pairing_failed")
+        }
+
+        val result = CommandResult(
+            ok = true,
+            type = "pair",
+            data = buildJsonObject {
+                put("pcId", paired.pcId)
+                put("secret", Base64.getEncoder().encodeToString(paired.secret))
+            }
+        )
+        onAuthenticatedRequest?.invoke()
+        return signedResult(result, paired.secret, nonce)
     }
 
     private fun rememberNonce(nonce: String): Boolean = synchronized(usedNonces) {
