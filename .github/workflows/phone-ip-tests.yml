@@ -1,0 +1,31 @@
+name: Phone IP Tests
+
+on:
+  push:
+    paths:
+      - 'app/PhoneHub.py'
+      - 'app/phone_config.py'
+      - 'tests/test_phone_config.py'
+      - '.github/workflows/phone-ip-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run phone IP unit tests
+        run: python -m unittest tests.test_phone_config -v
+
+      - name: Compile changed Python files
+        run: python -m py_compile app/PhoneHub.py app/phone_config.py
