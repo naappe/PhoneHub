@@ -51,7 +51,11 @@ class PhoneHubService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification(currentState))
 
         if (phoneHubServer == null) {
-            val router = CommandRouter(DeviceInfoController(applicationContext))
+            val router = CommandRouter(
+                deviceInfoProvider = DeviceInfoController(applicationContext),
+                screenRequestHandler = { ScreenRequestStore.markPending(applicationContext) },
+                screenSharingProvider = { ScreenShareService.isSharing }
+            )
             val processor = PhoneHubRequestProcessor(
                 pairedClientProvider = { pairingStore.getPairedClient() },
                 router = router,
