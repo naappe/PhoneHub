@@ -1,10 +1,8 @@
-import os
 import subprocess
 import sys
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -20,7 +18,7 @@ APP_VERSION = "v2.7-phonehub-link"
 PHONEHUB_VIEWER_URL = "https://naappe.github.io/PhoneHub/"
 PHONEHUB_APK_URL = "https://github.com/naappe/PhoneHub/releases/download/phonehub-link-v0.1-test/PhoneHub-Link-v0.1-debug.apk"
 ROOT = Path(r"C:\PhoneHub")
-LEGACY_EXE = ROOT / "dist" / "PhoneHub.exe"
+LEGACY_EXE = Path(r"C:\PhoneHub\dist\PhoneHub.exe")
 
 
 class PhoneHubLink(QWidget):
