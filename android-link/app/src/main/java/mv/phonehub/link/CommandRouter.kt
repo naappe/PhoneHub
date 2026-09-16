@@ -4,9 +4,16 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+
+data class ScreenRequestState(val isSharing: Boolean) {
+    val resultCode: String
+        get() = if (isSharing) "already_sharing" else "permission_required"
+}
+
 class CommandRouter(
     private val deviceInfoProvider: DeviceInfoProvider,
-    private val screenRequestHandler: (() -> Unit)? = null
+    private val screenRequestHandler: (() -> Unit)? = null,
+    private val screenSharingProvider: () -> Boolean = { false }
 ) {
     fun handle(type: String, payload: JsonObject): CommandResult = when (type) {
         "ping" -> CommandResult(
@@ -32,14 +39,27 @@ class CommandRouter(
         }
 
         "screen_request" -> {
-            screenRequestHandler?.invoke()
-            CommandResult(
-                ok = true,
-                type = type,
-                data = buildJsonObject {
-                    put("status", "consent_required")
-                }
-            )
+            val state = ScreenRequestState(screenSharingProvider())
+            if (state.isSharing) {
+                CommandResult(
+                    ok = true,
+                    type = type,
+                    data = buildJsonObject {
+                        put("status", state.resultCode)
+                    }
+                )
+            } else {
+                screenRequestHandler?.invoke()
+                CommandResult(
+                    ok = false,
+                    type = type,
+                    data = buildJsonObject {
+                        put("status", state.resultCode)
+                        put("permission", "media_projection")
+                    },
+                    error = "permission_required"
+                )
+            }
         }
 
         else -> CommandResult(
