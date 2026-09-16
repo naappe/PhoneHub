@@ -3,9 +3,11 @@ name: Phone IP Tests
 on:
   push:
     paths:
+      - 'PhoneHub.bat'
       - 'app/PhoneHub.py'
       - 'app/phone_config.py'
       - 'tests/test_phone_config.py'
+      - 'tests/test_launcher_update.py'
       - '.github/workflows/phone-ip-tests.yml'
   workflow_dispatch:
 
@@ -26,6 +28,9 @@ jobs:
 
       - name: Run phone IP unit tests
         run: python -m unittest tests.test_phone_config -v
+
+      - name: Run launcher behavior tests
+        run: python -m unittest tests.test_launcher_update -v
 
       - name: Compile changed Python files
         run: python -m py_compile app/PhoneHub.py app/phone_config.py
