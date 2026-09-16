@@ -8,9 +8,12 @@ on:
       - 'app/PhoneHubTailscale.py'
       - 'app/PhoneHubLink.py'
       - 'app/phone_config.py'
+      - 'app/phonehub_service_client.py'
       - 'tests/test_phone_config.py'
       - 'tests/test_launcher_update.py'
       - 'tests/test_phonehub_link_ui.py'
+      - 'tests/test_phonehub_service_client.py'
+      - 'tests/test_phonehub_service_ui.py'
       - '.github/workflows/phone-ip-tests.yml'
   workflow_dispatch:
 
@@ -38,5 +41,11 @@ jobs:
       - name: Run Tailscale dashboard UI tests
         run: python -m unittest tests.test_phonehub_link_ui -v
 
+      - name: Run PhoneHub service client tests
+        run: python -m unittest tests.test_phonehub_service_client -v
+
+      - name: Run PhoneHub service UI tests
+        run: python -m unittest tests.test_phonehub_service_ui -v
+
       - name: Compile changed Python files
-        run: python -m py_compile app/PhoneHub.py app/PhoneHubTailscale.py app/PhoneHubLink.py app/phone_config.py
+        run: python -m py_compile app/PhoneHub.py app/PhoneHubTailscale.py app/PhoneHubLink.py app/phone_config.py app/phonehub_service_client.py
