@@ -8,6 +8,7 @@ on:
       - 'app/phone_config.py'
       - 'tests/test_phone_config.py'
       - 'tests/test_launcher_update.py'
+      - 'tests/test_phonehub_link_ui.py'
       - '.github/workflows/phone-ip-tests.yml'
   workflow_dispatch:
 
@@ -31,6 +32,9 @@ jobs:
 
       - name: Run launcher behavior tests
         run: python -m unittest tests.test_launcher_update -v
+
+      - name: Run PhoneHub Link UI tests
+        run: python -m unittest tests.test_phonehub_link_ui -v
 
       - name: Compile changed Python files
         run: python -m py_compile app/PhoneHub.py app/phone_config.py
