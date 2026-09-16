@@ -18,6 +18,17 @@ enum class ServiceState(val notificationText: String) {
     ERROR("Active - connection error")
 }
 
+internal fun safePairingHandler(
+    completePairing: (pcId: String, code: String) -> PairedClient,
+    onPaired: () -> Unit
+): (pcId: String, code: String) -> PairedClient? = { pcId, code ->
+    try {
+        completePairing(pcId, code).also { onPaired() }
+    } catch (_: Exception) {
+        null
+    }
+}
+
 class PhoneHubService : Service() {
     private var phoneHubServer: PhoneHubServer? = null
 
@@ -59,7 +70,11 @@ class PhoneHubService : Service() {
             val processor = PhoneHubRequestProcessor(
                 pairedClientProvider = { pairingStore.getPairedClient() },
                 router = router,
-                onAuthenticatedRequest = { setState(ServiceState.CONNECTED) }
+                onAuthenticatedRequest = { setState(ServiceState.CONNECTED) },
+                pairingHandler = safePairingHandler(
+                    completePairing = { pcId, code -> pairingStore.completePairing(pcId, code) },
+                    onPaired = { setState(ServiceState.CONNECTED) }
+                )
             )
             phoneHubServer = PhoneHubServer(
                 processor = processor,
