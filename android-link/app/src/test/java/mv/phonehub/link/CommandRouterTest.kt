@@ -33,6 +33,6 @@ private class FakeDeviceInfoController : DeviceInfoProvider {
         model = "Phone",
         androidVersion = "14",
         serviceState = "ACTIVE",
-        screenSharing = false
+        screenSharingActive = false
     )
 }
