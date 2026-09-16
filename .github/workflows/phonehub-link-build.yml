@@ -26,6 +26,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install viewer test dependency
+        run: python -m pip install pytest
+
       - name: Verify downloaded viewer file mode
         run: python -m pytest tests/test_viewer_file_mode.py -q
 
