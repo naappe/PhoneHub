@@ -5,30 +5,29 @@ import unittest
 class PhoneHubLinkUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = Path("app/PhoneHub.py").read_text(encoding="utf-8-sig")
+        cls.link_source = Path("app/PhoneHubLink.py").read_text(encoding="utf-8-sig")
+        cls.launcher = Path("PhoneHub.bat").read_text(encoding="utf-8-sig").lower()
 
-    def test_phonehub_link_is_primary_branding(self):
-        self.assertIn('APP_VERSION = "v2.7-phonehub-link"', self.source)
-        self.assertIn('sub = QLabel("PhoneHub Link")', self.source)
-
-    def test_dashboard_exposes_link_actions(self):
-        self.assertIn('"PhoneHub Link"', self.source)
-        self.assertIn('QPushButton("Open Phone Viewer")', self.source)
-        self.assertIn('QPushButton("Install Phone App")', self.source)
+    def test_primary_app_is_phonehub_link(self):
+        self.assertIn('APP_VERSION = "v2.7-phonehub-link"', self.link_source)
+        self.assertIn('QLabel("PhoneHub Link")', self.link_source)
+        self.assertIn('QPushButton("Open Phone Viewer")', self.link_source)
+        self.assertIn('QPushButton("Install Phone App")', self.link_source)
 
     def test_link_actions_use_published_urls(self):
-        self.assertIn('PHONEHUB_VIEWER_URL = "https://naappe.github.io/PhoneHub/"', self.source)
-        self.assertIn('PHONEHUB_APK_URL = "https://github.com/naappe/PhoneHub/releases/download/phonehub-link-v0.1-test/PhoneHub-Link-v0.1-debug.apk"', self.source)
-        self.assertIn('webbrowser.open(PHONEHUB_VIEWER_URL)', self.source)
-        self.assertIn('webbrowser.open(PHONEHUB_APK_URL)', self.source)
+        self.assertIn('PHONEHUB_VIEWER_URL = "https://naappe.github.io/PhoneHub/"', self.link_source)
+        self.assertIn('PHONEHUB_APK_URL = "https://github.com/naappe/PhoneHub/releases/download/phonehub-link-v0.1-test/PhoneHub-Link-v0.1-debug.apk"', self.link_source)
+        self.assertIn('webbrowser.open(PHONEHUB_VIEWER_URL)', self.link_source)
+        self.assertIn('webbrowser.open(PHONEHUB_APK_URL)', self.link_source)
 
-    def test_startup_does_not_refresh_adb_status(self):
-        init_block = self.source.split("    def build_ui(self):", 1)[0]
-        self.assertNotIn("self.refresh_status()", init_block)
+    def test_legacy_app_remains_available_as_fallback(self):
+        self.assertIn('QPushButton("Open Legacy PhoneHub")', self.link_source)
+        self.assertIn('dist\\phonehub.exe', self.link_source.lower())
 
-    def test_legacy_modes_are_clearly_labeled(self):
-        self.assertIn('("Legacy Tailscale Setup", self.page_setup_new_phone)', self.source)
-        self.assertIn('("Legacy Screen", self.page_screen)', self.source)
+    def test_launcher_prefers_link_app_and_falls_back_to_legacy_exe(self):
+        self.assertIn('app\\phonehublink.py', self.launcher)
+        self.assertIn('pythonw', self.launcher)
+        self.assertIn('dist\\phonehub.exe', self.launcher)
 
 
 if __name__ == "__main__":
