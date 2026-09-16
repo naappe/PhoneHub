@@ -1,8 +1,8 @@
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+const createClient = window.supabase.createClient;
 
 const SUPABASE_URL = 'https://tmupbruwmwlrmewhoodn.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_LAn1liS2zqMqlB33IQJxIw_NbgWKix1';
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const roomInput = document.querySelector('#room');
 const connectButton = document.querySelector('#connect');
@@ -96,13 +96,13 @@ async function connect() {
   setStatus('Joining room…');
 
   if (channel) {
-    await supabase.removeChannel(channel);
+    await supabaseClient.removeChannel(channel);
     channel = null;
   }
   if (pc) pc.close();
   pc = createPeer();
 
-  channel = supabase
+  channel = supabaseClient
     .channel(`phonehub-link:${room}`)
     .on('broadcast', { event: 'signal' }, ({ payload }) => handleSignal(payload))
     .subscribe(async (subscriptionStatus) => {
