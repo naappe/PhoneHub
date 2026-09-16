@@ -28,6 +28,10 @@ android {
     }
 }
 
+configurations.configureEach {
+    resolutionStrategy.force("androidx.browser:browser:1.8.0")
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
