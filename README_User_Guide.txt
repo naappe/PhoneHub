@@ -1,126 +1,112 @@
-﻿PHONEHUB SMART SETUP GUIDE
-Version: v2.2-smart-setup
+PHONEHUB SMART SETUP GUIDE
+Version: Android Service Mode v1
 
 WHAT PHONEHUB DOES
-PhoneHub lets the PC connect to your Android phone through Tailscale and ADB.
-You can open phone screen, camera, screenshot, apps list, and basic control.
+PhoneHub lets a Windows PC connect to your Android phone through Tailscale.
 
-MOBILE REQUIREMENT
-Only Tailscale is needed on the mobile.
-No PhoneHub Companion app is required.
+PhoneHub now has two connection paths:
 
-FIRST-TIME SETUP
-1. Install Tailscale on phone.
-2. Login with the same Tailscale account/tailnet as the PC.
+PRIMARY PATH - PHONEHUB ANDROID SERVICE
+Windows PhoneHub -> Tailscale -> PhoneHub Android app background service on port 8765
+
+This is the new normal mode.
+USB cable is not required after setup.
+USB debugging is not required for supported PhoneHub-service commands.
+The phone must keep Tailscale ON.
+The PhoneHub Android app must have its background service enabled.
+
+FALLBACK PATH - ADB / SCRCPY
+Windows PhoneHub -> Tailscale -> ADB on port 5555 -> scrcpy and legacy tools
+
+This is the older emergency fallback mode.
+Use it only from the explicit Use ADB Fallback button.
+
+MOBILE REQUIREMENT FOR NEW MODE
+1. Install Tailscale on the phone.
+2. Login to the same tailnet as the PC.
 3. Turn Tailscale ON.
-4. Enable Developer Options on phone.
-5. Enable USB Debugging.
-6. Connect USB cable once.
-7. Tap Always allow from this computer.
-8. Open PhoneHub.
-9. Open Setup New Phone.
-10. Click Smart Check.
-11. Click Enable Remote.
-12. Enter phone Tailscale IP.
-13. Click Save IP + Test.
-14. When PhoneHub says READY, remove USB cable.
+4. Install the PhoneHub Android app.
+5. Open PhoneHub Android app once.
+6. Enable PhoneHub service.
+7. Confirm the persistent PhoneHub notification is visible.
+8. Generate the six-digit pairing code.
+9. Enter that code on the Windows PhoneHub app.
 
-DAILY USE
+NORMAL DAILY USE
 1. Keep Tailscale ON on PC.
 2. Keep Tailscale ON on phone.
-3. Open C:\PhoneHub\PhoneHub.bat.
-4. Use Dashboard, Screen, Camera, Screenshot, Apps, and Control.
+3. Keep PhoneHub Android service enabled.
+4. Open C:\PhoneHub\PhoneHub.bat on Windows.
+5. PhoneHub checks the Android service first on port 8765.
+6. If paired and reachable, it uses PhoneHub Service mode.
+7. If service is not paired, it shows Android app not paired.
+8. Use ADB Fallback only when needed.
 
-BUTTON GUIDE
+WHAT SHOULD SHOW ON WINDOWS
+When new mode works:
+Connection: PhoneHub Service
+PhoneHub Android Service: Connected
+ADB Status: Fallback only
 
-Dashboard:
-Shows phone online/offline status, Android version, battery, and saved connection.
+When pairing is missing:
+Android app not paired
+Generate a code on the phone and pair the PC.
 
-Setup New Phone:
-Checks USB Debugging, Tailscale, phone IP, remote ADB, and tells when USB can be removed.
-
-Smart Check:
-Checks what is ready and what is missing.
-
-Open Tailscale:
-Opens Tailscale on the phone so you can copy the 100.x.x.x phone IP.
-
-Enable Remote:
-Uses the USB connection one time to enable remote ADB.
-
-Save IP + Test:
-Saves the phone Tailscale IP and tests remote connection.
-
-Finish Setup:
-Confirms whether USB cable can be removed.
-
-Screen:
-Opens the phone screen through scrcpy.
-
-Camera:
-Opens separate back/front camera window.
-
-Screenshot:
-Saves phone screenshot to:
-C:\PhoneHub\runtime\screenshots
-
-Files:
-Opens screenshot folder and location log.
-
-Apps:
-Shows installed phone apps.
-
-Control:
-Reconnects ADB, wakes phone, locks phone, or reboots phone.
-
-WHEN USB CAN BE REMOVED
-Only remove USB when PhoneHub says:
-READY
-or
-Remote ADB connected
-or
-USB cable can be removed
+SCREEN SHARING RULE
+Screen sharing still needs Android approval.
+The PC may request screen sharing, but it cannot bypass Android MediaProjection permission.
+On the phone, tap Approve PC Screen Request, then approve the Android screen-sharing prompt.
 
 WHAT TAILSCALE DOES
-Tailscale connects PC and phone privately.
+Tailscale creates the private route between PC and phone.
 It gives the phone a private 100.x.x.x IP.
-It allows PhoneHub to reach the phone remotely.
+PhoneHub uses that IP to reach the Android service on port 8765.
 
-WHAT TAILSCALE CANNOT DO
-Tailscale alone cannot give live GPS.
-Tailscale alone cannot approve Android permissions.
-Tailscale alone cannot unlock the phone.
+WHAT PHONEHUB ANDROID SERVICE DOES
+The Android app is the main backend aeroplane.
+It runs as a foreground service.
+It shows a persistent notification.
+It accepts only authenticated commands from the paired PC.
+It rejects unknown clients, bad signatures, and replayed requests.
+
+WHAT ADB DOES NOW
+ADB is no longer the primary path for supported service commands.
+ADB remains useful for legacy screen/camera/scrcpy tools while migration continues.
+ADB uses port 5555.
+PhoneHub uses ADB only when you choose Use ADB Fallback.
+
+SAFETY RULES
+PhoneHub does not hide its background service.
+PhoneHub does not bypass Android lock screen.
+PhoneHub does not silently start screen recording.
+PhoneHub does not store your phone PIN, password, pattern, or fingerprint.
+PhoneHub does not make the device impossible for the rightful owner to control.
 
 TROUBLESHOOTING
 
-Phone offline:
-- Check Tailscale ON on PC.
+PhoneHub Service offline:
 - Check Tailscale ON on phone.
-- Open Setup New Phone.
-- Click Smart Check.
+- Check Tailscale ON on PC.
+- Open PhoneHub Android app.
+- Confirm PhoneHub notification is visible.
+- Check the phone Tailscale IP.
 
-USB debugging not approved:
-- Look at phone screen.
-- Tap Always allow from this computer.
-- Tap OK.
+Android app not paired:
+- Open PhoneHub Android app.
+- Generate a six-digit pairing code.
+- Enter the code in Windows PhoneHub.
+- Pairing code expires after a short time, so generate a new one if needed.
 
-Remote not connected:
-- Check phone Tailscale IP.
-- Click Enable Remote while USB is connected.
-- Click Save IP + Test.
+Screen does not open:
+- Confirm the phone shows Approve PC Screen Request.
+- Approve the Android screen-sharing prompt.
+- If denied, the core PhoneHub service still remains running.
 
-Screen slow:
-- Use Fast Screen or Ultra Screen.
-- Readable Screen is clearer but heavier.
-
-Camera not opening:
-- Close Screen first.
-- Click Back Camera again.
-- Camera mode restarts scrcpy.
-
-Live location not moving:
-- Normal. Current clean version uses Tailscale only.
-- Live GPS needs an extra Android location app, which is not used now.
+Need old method:
+- Click Use ADB Fallback.
+- ADB fallback uses the phone Tailscale IP on port 5555.
+- This requires remote ADB to be enabled.
 
 FINAL STATUS
-PhoneHub v2.2 is the stable Tailscale-only version.
+PhoneHub Android Service Mode is the new primary direction.
+ADB/scrcpy remains as fallback until every feature is migrated to the Android backend.
