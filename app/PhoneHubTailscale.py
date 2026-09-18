@@ -33,7 +33,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.4-live-audio"
+APP_VERSION = "v3.5-audio-recording"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -70,6 +70,8 @@ class PhoneHubTailscale(PhoneHub):
         self._wizard_busy = False
         self._health_busy = False
         self.audio_process = None
+        self.audio_recording = False
+        self.audio_record_path = ""
 
         # Detection now runs in a background thread. The old implementation ran
         # several adb commands on the UI thread every 3 seconds, which caused
@@ -313,7 +315,7 @@ class PhoneHubTailscale(PhoneHub):
         box, box_layout, _ = self.card(
             "Phone Microphone",
             "Listen live to the microphone on your connected Android phone. "
-            "Audio is played on this PC and is not recorded by default.",
+            "Recording is optional and starts only when you press Record.",
         )
 
         self.audio_status = QLabel("Status: Idle")
@@ -329,20 +331,37 @@ class PhoneHubTailscale(PhoneHub):
         start_btn.setMinimumHeight(44)
         start_btn.clicked.connect(self.start_live_audio)
 
+        self.audio_record_button = QPushButton("Record")
+        self.audio_record_button.setMinimumHeight(44)
+        self.audio_record_button.clicked.connect(self.toggle_audio_recording)
+
         stop_btn = QPushButton("Stop")
         stop_btn.setMinimumHeight(44)
         stop_btn.clicked.connect(self.stop_live_audio)
 
         actions.addWidget(start_btn)
+        actions.addWidget(self.audio_record_button)
         actions.addWidget(stop_btn)
         box_layout.addLayout(actions)
+
+        self.audio_record_file = QLabel("Recording file: None")
+        self.audio_record_file.setObjectName("big")
+        self.audio_record_file.setWordWrap(True)
+        self.audio_record_file.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box_layout.addWidget(self.audio_record_file)
+
+        open_folder = QPushButton("Open Recordings Folder")
+        open_folder.clicked.connect(self.open_audio_recordings_folder)
+        box_layout.addWidget(open_folder)
+
         layout.addWidget(box)
 
         info, _, _ = self.card(
             "How it works",
-            "PhoneHub uses scrcpy microphone audio forwarding over the current ADB connection. "
-            "The phone must remain reachable through USB or Tailscale remote ADB. "
-            "No audio file is saved unless a separate recording feature is added later.",
+            "Live listening uses scrcpy microphone forwarding. When Record is enabled, "
+            "PhoneHub restarts the same microphone stream with scrcpy recording enabled and saves "
+            "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
+            "Press Record again to stop recording while continuing live listening.",
         )
         layout.addWidget(info)
         layout.addStretch()
@@ -359,34 +378,27 @@ class PhoneHubTailscale(PhoneHub):
             return usb[0]
         return ""
 
-    def start_live_audio(self):
-        existing = getattr(self, "audio_process", None)
-        if existing and existing.poll() is None:
-            if hasattr(self, "audio_status"):
-                self.audio_status.setText("Status: Listening")
-            self.set_footer("Phone microphone is already streaming.")
-            return
-
+    def _launch_live_audio(self, record_path=""):
         scrcpy = scrcpy_path()
         if not scrcpy:
             if hasattr(self, "audio_status"):
                 self.audio_status.setText("Status: Error — scrcpy not found")
             self.set_footer("scrcpy is required for live microphone audio.")
-            return
+            return False
 
         help_text = run_quiet([scrcpy, "--help"], timeout=5)
         if "--audio-source" not in help_text:
             if hasattr(self, "audio_status"):
                 self.audio_status.setText("Status: Error — this scrcpy build does not support microphone audio")
             self.set_footer("Update scrcpy to use PhoneHub live audio.")
-            return
+            return False
 
         target = self._audio_target()
         if not target:
             if hasattr(self, "audio_status"):
                 self.audio_status.setText("Status: Error — phone is not connected")
             self.set_footer("Connect the phone through USB or Tailscale ADB first.")
-            return
+            return False
 
         args = [
             scrcpy,
@@ -396,6 +408,8 @@ class PhoneHubTailscale(PhoneHub):
             "--no-control",
             "--audio-buffer=120",
         ]
+        if record_path:
+            args.append(f"--record={record_path}")
 
         try:
             self.audio_process = subprocess.Popen(
@@ -410,41 +424,124 @@ class PhoneHubTailscale(PhoneHub):
             if hasattr(self, "audio_status"):
                 self.audio_status.setText(f"Status: Error — {exc}")
             self.set_footer("Could not start phone microphone audio.")
-            return
+            return False
 
         if hasattr(self, "audio_status"):
-            self.audio_status.setText(f"Status: Connecting — {target}")
-        self.set_footer("Starting live phone microphone audio...")
+            self.audio_status.setText(
+                f"Status: Connecting + Recording — {target}"
+                if record_path else
+                f"Status: Connecting — {target}"
+            )
+        self.set_footer(
+            "Starting live microphone recording..."
+            if record_path else
+            "Starting live phone microphone audio..."
+        )
         QTimer.singleShot(1500, self._verify_live_audio)
+        return True
+
+    def start_live_audio(self):
+        existing = getattr(self, "audio_process", None)
+        if existing and existing.poll() is None:
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText(
+                    "Status: Listening + Recording"
+                    if getattr(self, "audio_recording", False)
+                    else "Status: Listening"
+                )
+            self.set_footer("Phone microphone is already streaming.")
+            return
+
+        self.audio_recording = False
+        self._launch_live_audio("")
 
     def _verify_live_audio(self):
         proc = getattr(self, "audio_process", None)
         if proc and proc.poll() is None:
             if hasattr(self, "audio_status"):
-                self.audio_status.setText("Status: Listening")
-            self.set_footer("Live phone microphone audio is playing on this PC.")
+                self.audio_status.setText(
+                    "Status: Listening + Recording"
+                    if getattr(self, "audio_recording", False)
+                    else "Status: Listening"
+                )
+            self.set_footer(
+                "Live microphone is playing and recording."
+                if getattr(self, "audio_recording", False)
+                else "Live phone microphone audio is playing on this PC."
+            )
         else:
             self.audio_process = None
             if hasattr(self, "audio_status"):
                 self.audio_status.setText("Status: Error — microphone stream could not start")
             self.set_footer("Live audio failed. Check phone connection and scrcpy audio support.")
 
-    def stop_live_audio(self):
+    def _stop_audio_process_only(self):
         proc = getattr(self, "audio_process", None)
         if proc and proc.poll() is None:
             try:
                 proc.terminate()
-                proc.wait(timeout=2)
+                proc.wait(timeout=3)
             except Exception:
                 try:
                     proc.kill()
                 except Exception:
                     pass
-
         self.audio_process = None
+
+    def toggle_audio_recording(self):
+        if getattr(self, "audio_recording", False):
+            self._stop_audio_process_only()
+            self.audio_recording = False
+            if hasattr(self, "audio_record_button"):
+                self.audio_record_button.setText("Record")
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Restarting live listening...")
+            self.set_footer("Recording saved. Continuing live listening...")
+            self._launch_live_audio("")
+            return
+
+        recordings = Path(r"C:\PhoneHub\runtime\audio")
+        recordings.mkdir(parents=True, exist_ok=True)
+
+        from datetime import datetime
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        record_path = recordings / f"phone_mic_{stamp}.opus"
+
+        self._stop_audio_process_only()
+        self.audio_recording = True
+        self.audio_record_path = str(record_path)
+
+        if hasattr(self, "audio_record_button"):
+            self.audio_record_button.setText("Stop Recording")
+        if hasattr(self, "audio_record_file"):
+            self.audio_record_file.setText(f"Recording file: {record_path}")
+
+        if not self._launch_live_audio(str(record_path)):
+            self.audio_recording = False
+            if hasattr(self, "audio_record_button"):
+                self.audio_record_button.setText("Record")
+
+    def open_audio_recordings_folder(self):
+        folder = Path(r"C:\PhoneHub\runtime\audio")
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.Popen(["explorer", str(folder)])
+        except Exception:
+            self.set_footer(f"Recordings folder: {folder}")
+
+    def stop_live_audio(self):
+        self._stop_audio_process_only()
+        was_recording = getattr(self, "audio_recording", False)
+        self.audio_recording = False
+        if hasattr(self, "audio_record_button"):
+            self.audio_record_button.setText("Record")
         if hasattr(self, "audio_status"):
             self.audio_status.setText("Status: Idle")
-        self.set_footer("Phone microphone audio stopped.")
+        self.set_footer(
+            "Phone microphone stopped. Recording saved."
+            if was_recording else
+            "Phone microphone audio stopped."
+        )
 
     def closeEvent(self, event):
         self.stop_live_audio()
