@@ -4,6 +4,11 @@ title PhoneHub
 
 cd /d C:\PhoneHub
 
+REM Prefer the self-contained PhoneHub scrcpy/ADB runtime when installed.
+if exist "C:\PhoneHub\runtime\scrcpy\scrcpy.exe" (
+    set "PATH=C:\PhoneHub\runtime\scrcpy;%PATH%"
+)
+
 echo [PhoneHub] Checking for updates...
 
 REM Only update when this folder is a Git working tree.
@@ -38,10 +43,9 @@ if errorlevel 1 (
 echo [PhoneHub] Update check complete.
 
 :launch_phonehub
-REM Close old PhoneHub tools/windows before starting the app.
+REM Do not kill every pythonw.exe process on the PC.
+REM PhoneHub now enforces its own single-instance lock inside the app.
 taskkill /IM PhoneHub.exe /F >nul 2>&1
-taskkill /IM scrcpy.exe /F >nul 2>&1
-taskkill /IM pythonw.exe /F >nul 2>&1
 
 REM Start ADB for the Tailscale remote connection mode.
 adb start-server >nul 2>&1
