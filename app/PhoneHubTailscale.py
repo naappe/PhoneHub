@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.28.1-admin-receiver-status-fix"
+APP_VERSION = "v3.29-managed-phone-ui"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2642,7 +2642,21 @@ class PhoneHubTailscale(PhoneHub):
             "PhoneHub will tell you exactly what is still required."
         )
         provision_layout.addWidget(self.provision_status)
+        self.provision_box = provision_box
         box_layout.addWidget(provision_box)
+
+        self.managed_phone_banner = QLabel("Managed phone status: checking...")
+        self.managed_phone_banner.setObjectName("big")
+        self.managed_phone_banner.setWordWrap(True)
+        box_layout.addWidget(self.managed_phone_banner)
+
+        setup_toggle_row = QHBoxLayout()
+        self.setup_toggle_btn = QPushButton("Show New Phone Setup")
+        self.setup_toggle_btn.clicked.connect(self.toggle_new_phone_setup)
+        self.setup_toggle_btn.setVisible(False)
+        setup_toggle_row.addWidget(self.setup_toggle_btn)
+        setup_toggle_row.addStretch()
+        box_layout.addLayout(setup_toggle_row)
 
         self.app_control_package = QLineEdit()
         self.app_control_package.setPlaceholderText("Package name, e.g. com.android.settings")
@@ -2727,6 +2741,16 @@ class PhoneHubTailscale(PhoneHub):
         layout.addWidget(note)
         layout.addStretch()
         return page
+
+    def toggle_new_phone_setup(self):
+        if not hasattr(self, "provision_box"):
+            return
+        visible = not self.provision_box.isVisible()
+        self.provision_box.setVisible(visible)
+        if hasattr(self, "setup_toggle_btn"):
+            self.setup_toggle_btn.setText(
+                "Hide New Phone Setup" if visible else "Show New Phone Setup"
+            )
 
     def _set_provision_status(self, lines):
         if not isinstance(lines, (list, tuple)):
@@ -3057,6 +3081,20 @@ class PhoneHubTailscale(PhoneHub):
                 if is_owner else
                 "Mode: READ-ONLY — this phone is already provisioned and PhoneHub is not Device Owner"
             )
+
+        if hasattr(self, "managed_phone_banner"):
+            self.managed_phone_banner.setText(
+                "Managed phone — Device Owner active. Daily App Control is ready."
+                if is_owner else
+                "Phone not fully managed yet — use New Phone Setup to finish provisioning."
+            )
+
+        if hasattr(self, "provision_box"):
+            self.provision_box.setVisible(not is_owner)
+
+        if hasattr(self, "setup_toggle_btn"):
+            self.setup_toggle_btn.setVisible(is_owner)
+            self.setup_toggle_btn.setText("Show New Phone Setup")
 
         if hasattr(self, "app_control_packages"):
             report = [
