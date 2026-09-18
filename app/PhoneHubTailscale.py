@@ -31,8 +31,9 @@ from PhoneHub import (
     scrcpy_path,
 )
 from phone_config import normalize_tailscale_ipv4
+from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v3.3-integrated-system-check"
+APP_VERSION = "v3.4-safe-security-monitor"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -44,6 +45,7 @@ class AutoDetectBridge(QObject):
     state = Signal(dict)
     wizard = Signal(dict)
     health = Signal(dict)
+    security = Signal(dict)
 
 class PhoneHubTailscale(PhoneHub):
     def __init__(self):
@@ -61,6 +63,7 @@ class PhoneHubTailscale(PhoneHub):
         self.auto_bridge.state.connect(self._apply_auto_detect_state)
         self.auto_bridge.wizard.connect(self._apply_wizard_result)
         self.auto_bridge.health.connect(self._apply_health_results)
+        self.auto_bridge.security.connect(self._apply_security_results)
 
         self.wizard_step = 1
         self.wizard_serial = ""
@@ -68,6 +71,7 @@ class PhoneHubTailscale(PhoneHub):
         self.wizard_remote_connected = False
         self._wizard_busy = False
         self._health_busy = False
+        self._security_busy = False
 
         # Detection now runs in a background thread. The old implementation ran
         # several adb commands on the UI thread every 3 seconds, which caused
@@ -128,6 +132,7 @@ class PhoneHubTailscale(PhoneHub):
             ("Files", self.page_files),
             ("Apps", self.page_apps),
             ("Control", self.page_control),
+            ("Security", self.page_security),
             ("Settings", self.page_settings),
         ]
 
@@ -356,6 +361,134 @@ class PhoneHubTailscale(PhoneHub):
         layout.addStretch()
 
         return page
+
+    def page_security(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        policy_box, policy_layout, _ = self.card(
+            "Safe Security Monitor",
+            "PhoneHub investigates first. Protected Android/Samsung/Tailscale components are never auto-killed. "
+            "Unknown activity is captured as evidence and shown for review before any containment action."
+        )
+
+        self.security_policy = QLabel(
+            "Policy: DETECT → IDENTIFY OWNER → PROTECT SYSTEM → CAPTURE EVIDENCE → CLASSIFY → ASK/BLOCK\n"
+            "Automatic destructive action: OFF\n"
+            "Protected components: Android framework, System UI/networking, Samsung core services, Tailscale, PhoneHub."
+        )
+        self.security_policy.setObjectName("big")
+        self.security_policy.setWordWrap(True)
+        policy_layout.addWidget(self.security_policy)
+        layout.addWidget(policy_box)
+
+        scan_box, scan_layout, _ = self.card(
+            "Connection & Security Scan",
+            "Scans the reachable phone for debugging state, VPN/Tailscale state, routes, visible sockets, "
+            "third-party package count, and enabled Accessibility services. Results are written to the evidence log."
+        )
+
+        self.security_scan_button = QPushButton("Scan Connections")
+        self.security_scan_button.setObjectName("primary")
+        self.security_scan_button.setMinimumHeight(44)
+        self.security_scan_button.clicked.connect(self.run_security_scan)
+        scan_layout.addWidget(self.security_scan_button)
+
+        self.security_summary = QLabel("Status: Not scanned")
+        self.security_summary.setObjectName("big")
+        self.security_summary.setWordWrap(True)
+        self.security_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        scan_layout.addWidget(self.security_summary)
+
+        layout.addWidget(scan_box)
+
+        safety_box, safety_layout, _ = self.card(
+            "Containment Safety",
+            "PhoneHub will not expose a Kill action for protected/system-critical owners. "
+            "Unknown items remain in REVIEW until the owner and impact are understood."
+        )
+        self.security_action_status = QLabel(
+            "Containment: observation mode\n"
+            "Evidence: C:\\PhoneHub\\runtime\\security\\events.jsonl"
+        )
+        self.security_action_status.setObjectName("sideStatus")
+        self.security_action_status.setWordWrap(True)
+        safety_layout.addWidget(self.security_action_status)
+        layout.addWidget(safety_box)
+
+        layout.addStretch()
+        return page
+
+    def run_security_scan(self):
+        if self._security_busy:
+            return
+
+        usb, remote, unauthorized, _ = parse_adb_devices()
+        if unauthorized:
+            self.security_summary.setText(
+                "USB debugging is not authorized. PhoneHub did not attempt any security action."
+            )
+            return
+
+        target = remote[0] if remote else (usb[0] if usb else "")
+        if not target:
+            self.security_summary.setText(
+                "No reachable phone. Connect through Tailscale/remote ADB or USB, then scan again."
+            )
+            return
+
+        self._security_busy = True
+        self.security_scan_button.setEnabled(False)
+        self.security_scan_button.setText("Scanning...")
+        self.security_summary.setText(
+            f"Investigating {target}. Evidence is captured before any containment decision."
+        )
+
+        def worker():
+            try:
+                findings = scan_device(target)
+                self.auto_bridge.security.emit({
+                    "ok": True,
+                    "target": target,
+                    "summary": summarize_findings(findings),
+                    "count": len(findings),
+                })
+            except Exception as exc:
+                self.auto_bridge.security.emit({
+                    "ok": False,
+                    "target": target,
+                    "summary": f"Security scan failed safely: {exc}",
+                    "count": 0,
+                })
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_security_results(self, payload):
+        self._security_busy = False
+        if hasattr(self, "security_scan_button"):
+            self.security_scan_button.setEnabled(True)
+            self.security_scan_button.setText("Scan Connections")
+
+        summary = payload.get("summary", "No results.")
+        if hasattr(self, "security_summary"):
+            self.security_summary.setText(summary)
+
+        if payload.get("ok"):
+            status = (
+                f"Security scan complete for {payload.get('target', 'phone')}. "
+                "No automatic kill was performed."
+            )
+        else:
+            status = "Security scan stopped safely; no connection was killed."
+
+        if hasattr(self, "security_action_status"):
+            self.security_action_status.setText(
+                status + "\nEvidence: C:\\PhoneHub\\runtime\\security\\events.jsonl"
+            )
+        self.set_footer(status)
 
     def page_setup_new_phone(self):
         """Simple one-path setup wizard.
