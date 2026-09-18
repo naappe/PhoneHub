@@ -126,6 +126,30 @@ public class MainActivity extends Activity {
         });
         root.addView(stopLan);
 
+        TextView setupTitle = new TextView(this);
+        setupTitle.setText("\nRemote Link Setup");
+        setupTitle.setTextColor(Color.WHITE);
+        setupTitle.setTextSize(20);
+        root.addView(setupTitle);
+
+        TextView setupGuide = new TextView(this);
+        setupGuide.setText(
+                "1. On the PC run START_PHONEHUB_VPN.bat setup.\n" +
+                "2. Copy the PC public key shown on the PC.\n" +
+                "3. Tap Open Private VPN / Remote Link below.\n" +
+                "4. Generate Phone Keys.\n" +
+                "5. Enter Phone address 10.77.0.2/32.\n" +
+                "6. Paste the PC public key.\n" +
+                "7. Enter the PC endpoint, for example 192.168.1.20:51820.\n" +
+                "8. Use Allowed IPs 10.77.0.1/32 and Keepalive 25.\n" +
+                "9. Save, then copy the Phone public key back to the PC.\n" +
+                "10. On the PC run setup again with the Phone public key, start the VPN, then Connect Private Link here."
+        );
+        setupGuide.setTextColor(Color.LTGRAY);
+        setupGuide.setTextSize(15);
+        setupGuide.setTextIsSelectable(true);
+        root.addView(setupGuide);
+
         Button openVpn = new Button(this);
         openVpn.setText("Open Private VPN / Remote Link");
         openVpn.setOnClickListener(v -> startActivity(new Intent(this, com.phonehub.link.VpnActivity.class)));
