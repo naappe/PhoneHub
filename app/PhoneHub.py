@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QObject, Signal
+from PySide6.QtCore import Qt, QObject, Signal, QTimer
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QFrame, QMessageBox, QStackedWidget, QTextEdit, QLineEdit
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 
-APP_VERSION = "v3.1-clean-navigation-layout"
+APP_VERSION = "v3.2-control-status-card"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -718,35 +718,87 @@ class PhoneHub(QWidget):
     def page_control(self):
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
 
         info, _, _ = self.card("Control", "Basic safe phone controls through ADB.")
         layout.addWidget(info)
 
         row = QHBoxLayout()
+        row.setSpacing(10)
 
         reconnect = QPushButton("Reconnect ADB")
         reconnect.setObjectName("primary")
-        reconnect.clicked.connect(self.refresh_status)
+        reconnect.setMinimumHeight(42)
+        reconnect.clicked.connect(self.control_reconnect)
 
         wake = QPushButton("Wake Phone")
-        wake.clicked.connect(self.wake_phone)
+        wake.setMinimumHeight(42)
+        wake.clicked.connect(self.control_wake_phone)
 
         lock = QPushButton("Lock Phone")
-        lock.clicked.connect(self.lock_phone)
+        lock.setMinimumHeight(42)
+        lock.clicked.connect(self.control_lock_phone)
 
         reboot = QPushButton("Reboot Phone")
         reboot.setObjectName("danger")
-        reboot.clicked.connect(self.reboot_phone)
+        reboot.setMinimumHeight(42)
+        reboot.clicked.connect(self.control_reboot_phone)
 
         row.addWidget(reconnect)
         row.addWidget(wake)
         row.addWidget(lock)
         row.addWidget(reboot)
-
         layout.addLayout(row)
-        layout.addStretch()
 
+        status_box, _, self.control_status_label = self.card(
+            "Connection Status",
+            "Checking current phone connection..."
+        )
+        layout.addWidget(status_box)
+
+        layout.addStretch()
+        QTimer.singleShot(250, self.update_control_status)
         return page
+
+    def update_control_status(self, last_action=None):
+        if not hasattr(self, "control_status_label"):
+            return
+
+        ip, port = get_saved_ip()
+        usb, remote, unauthorized, _ = parse_adb_devices()
+        target = f"{ip}:{port}" if ip else "Not set"
+
+        remote_connected = target in remote if ip else False
+
+        lines = [
+            f"Phone: {'Online' if remote_connected else 'Offline'}",
+            f"ADB: {'Connected' if remote_connected else 'Not connected'}",
+            f"Tailscale IP: {ip or 'Not set'}",
+            f"USB: {'Unauthorized' if unauthorized else ('Connected' if usb else 'Not connected')}",
+        ]
+
+        if last_action:
+            lines.append(f"Last action: {last_action}")
+
+        self.control_status_label.setText("\n".join(lines))
+
+    def control_reconnect(self):
+        self.set_footer("Reconnecting ADB...")
+        self.refresh_status()
+        QTimer.singleShot(1200, lambda: self.update_control_status("Reconnect ADB"))
+
+    def control_wake_phone(self):
+        self.wake_phone()
+        QTimer.singleShot(300, lambda: self.update_control_status("Wake Phone"))
+
+    def control_lock_phone(self):
+        self.lock_phone()
+        QTimer.singleShot(300, lambda: self.update_control_status("Lock Phone"))
+
+    def control_reboot_phone(self):
+        self.reboot_phone()
+        QTimer.singleShot(300, lambda: self.update_control_status("Reboot Phone"))
 
     def page_settings(self):
         page = QWidget()
@@ -849,6 +901,7 @@ class PhoneHub(QWidget):
         )
 
         self.location_info.setText(read_last_location_text())
+        self.update_control_status()
 
     def setup_log_add(self, text):
         old = self.setup_log.toPlainText() if hasattr(self, "setup_log") else ""
