@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.27.4-admin-receiver-check"
+APP_VERSION = "v3.28-new-phone-provisioning"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2595,6 +2595,55 @@ class PhoneHubTailscale(PhoneHub):
         top.addWidget(scan)
         box_layout.addLayout(top)
 
+        provision_box, provision_layout, _ = self.card(
+            "New Phone Setup",
+            "Use this once on each phone you own/manage. PhoneHub checks the APK, accounts, Device Admin receiver and Device Owner state. "
+            "It will not delete accounts or factory-reset the phone automatically.",
+        )
+
+        provision_actions = QHBoxLayout()
+
+        provision_check = QPushButton("1. Check New Phone")
+        provision_check.setObjectName("primary")
+        provision_check.clicked.connect(self.provision_phone_check)
+
+        open_accounts = QPushButton("2. Open Accounts")
+        open_accounts.clicked.connect(self.open_android_accounts)
+
+        provision_owner = QPushButton("3. Provision Device Owner")
+        provision_owner.setObjectName("primary")
+        provision_owner.clicked.connect(self.provision_device_owner)
+
+        verify_owner = QPushButton("4. Verify")
+        verify_owner.clicked.connect(self.check_device_owner_status)
+
+        provision_actions.addWidget(provision_check)
+        provision_actions.addWidget(open_accounts)
+        provision_actions.addWidget(provision_owner)
+        provision_actions.addWidget(verify_owner)
+        provision_layout.addLayout(provision_actions)
+
+        repair_actions = QHBoxLayout()
+        install_companion = QPushButton("Install / Update Companion")
+        install_companion.clicked.connect(self.install_latest_companion)
+
+        stale_session = QPushButton("Clear Stale Account Session + Reboot")
+        stale_session.clicked.connect(self.clear_stale_account_session)
+
+        repair_actions.addWidget(install_companion)
+        repair_actions.addWidget(stale_session)
+        provision_layout.addLayout(repair_actions)
+
+        self.provision_status = QTextEdit()
+        self.provision_status.setReadOnly(True)
+        self.provision_status.setMinimumHeight(135)
+        self.provision_status.setText(
+            "Connect the phone by USB, authorize USB debugging, then press '1. Check New Phone'.\n"
+            "PhoneHub will tell you exactly what is still required."
+        )
+        provision_layout.addWidget(self.provision_status)
+        box_layout.addWidget(provision_box)
+
         self.app_control_package = QLineEdit()
         self.app_control_package.setPlaceholderText("Package name, e.g. com.android.settings")
         box_layout.addWidget(self.app_control_package)
@@ -2679,6 +2728,231 @@ class PhoneHubTailscale(PhoneHub):
         layout.addStretch()
         return page
 
+    def _set_provision_status(self, lines):
+        if not isinstance(lines, (list, tuple)):
+            lines = [str(lines)]
+        text = "\n".join(str(line) for line in lines)
+        if hasattr(self, "provision_status"):
+            self.provision_status.setText(text)
+        self.set_footer(lines[-1] if lines else "Provisioning check complete.")
+
+    def _companion_apk_path(self):
+        candidates = [
+            Path(r"C:\PhoneHub\app\PhoneHubNotifier-v1.1.apk"),
+            Path(r"C:\PhoneHub\app\PhoneHubNotifier.apk"),
+        ]
+        candidates.extend(sorted(Path(r"C:\PhoneHub\app").glob("PhoneHubNotifier-v*.apk"), reverse=True))
+        for path in candidates:
+            if path.exists():
+                return path
+        return None
+
+    def _account_count(self, target):
+        output = run_quiet(["adb", "-s", target, "shell", "dumpsys", "account"], timeout=12)
+        match = re.search(r"^\s*Accounts:\s*(\d+)\s*$", output, flags=re.MULTILINE)
+        return (int(match.group(1)) if match else None), output
+
+    def provision_phone_check(self):
+        target = self._app_control_target()
+        if not target:
+            self._set_provision_status([
+                "FAIL: No phone connected.",
+                "Connect USB and accept the USB debugging prompt on the phone.",
+            ])
+            return
+
+        lines = [f"Phone: {target}"]
+
+        package_dump = run_quiet(
+            ["adb", "-s", target, "shell", "dumpsys", "package", "com.phonehub.notifier"],
+            timeout=10,
+        )
+        installed = "versionName=" in package_dump
+        receiver_ready = (
+            "PhoneHubDeviceAdminReceiver" in package_dump
+            and "android.permission.BIND_DEVICE_ADMIN" in package_dump
+        )
+
+        version_match = re.search(r"versionName=([^\s]+)", package_dump)
+        version_name = version_match.group(1) if version_match else "not installed"
+        lines.append(f"Companion: {'PASS' if installed else 'NEEDS INSTALL'} ({version_name})")
+        lines.append(f"Device Admin receiver: {'PASS' if receiver_ready else 'NEEDS UPDATE'}")
+
+        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list-owners"], timeout=8)
+        is_owner = "com.phonehub.notifier/.PhoneHubDeviceAdminReceiver" in owners and "DeviceOwner" in owners
+        lines.append(f"Device Owner: {'READY' if is_owner else 'NOT CONFIGURED'}")
+
+        account_count, _ = self._account_count(target)
+        if account_count is None:
+            lines.append("Accounts: could not read")
+        else:
+            lines.append(f"Accounts: {account_count} {'(READY)' if account_count == 0 else '(REMOVE TEMPORARILY)'}")
+
+        if is_owner:
+            lines.append("READY: This phone is already managed by PhoneHub.")
+        elif not installed or not receiver_ready:
+            lines.append("NEXT: Press 'Install / Update Companion'.")
+        elif account_count and account_count > 0:
+            lines.append("NEXT: Press '2. Open Accounts' and temporarily remove all accounts.")
+        elif account_count == 0:
+            lines.append("NEXT: Press '3. Provision Device Owner'.")
+        else:
+            lines.append("NEXT: Resolve the failed check above, then run Check New Phone again.")
+
+        self._set_provision_status(lines)
+
+    def install_latest_companion(self):
+        target = self._app_control_target()
+        if not target:
+            self._set_provision_status("FAIL: No phone connected.")
+            return
+
+        apk = self._companion_apk_path()
+        if not apk:
+            self._set_provision_status([
+                "FAIL: PhoneHub Notifier APK not found.",
+                r"Expected under C:\PhoneHub\app\PhoneHubNotifier-v*.apk",
+            ])
+            return
+
+        result = run_quiet(["adb", "-s", target, "install", "-r", str(apk)], timeout=90)
+        if "Success" not in result:
+            self._set_provision_status(["APK install failed:", result or "No output returned."])
+            return
+
+        self._set_provision_status([
+            f"PASS: Installed {apk.name}",
+            "NEXT: Press '1. Check New Phone'.",
+        ])
+
+    def open_android_accounts(self):
+        target = self._app_control_target()
+        if not target:
+            self._set_provision_status("FAIL: No phone connected.")
+            return
+
+        run_quiet(
+            ["adb", "-s", target, "shell", "am", "start", "-a", "android.settings.SYNC_SETTINGS"],
+            timeout=8,
+        )
+        count, _ = self._account_count(target)
+        self._set_provision_status([
+            "Accounts settings opened on the phone.",
+            f"Current Android account count: {count if count is not None else 'unknown'}",
+            "Temporarily remove every listed account. Do not uninstall the apps.",
+            "Then press '1. Check New Phone' again.",
+        ])
+
+    def clear_stale_account_session(self):
+        target = self._app_control_target()
+        if not target:
+            self._set_provision_status("FAIL: No phone connected.")
+            return
+
+        count, output = self._account_count(target)
+        if count not in (0, None):
+            self._set_provision_status([
+                f"Accounts are not empty ({count}).",
+                "Remove the accounts first; stale-session repair is only for Accounts: 0.",
+            ])
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Reboot phone?",
+            "PhoneHub will force-stop common account apps and reboot the phone to clear stale AccountManager sessions. Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        for package in (
+            "com.whatsapp",
+            "com.viber.voip",
+            "com.azure.authenticator",
+            "com.twitter.android",
+        ):
+            run_quiet(["adb", "-s", target, "shell", "am", "force-stop", package], timeout=5)
+
+        run_quiet(["adb", "-s", target, "reboot"], timeout=8)
+        self._set_provision_status([
+            "Phone reboot requested.",
+            "Wait for Android to boot fully and unlock the phone.",
+            "Then press '1. Check New Phone' and '3. Provision Device Owner'.",
+        ])
+
+    def provision_device_owner(self):
+        target = self._app_control_target()
+        if not target:
+            self._set_provision_status("FAIL: No phone connected.")
+            return
+
+        package_dump = run_quiet(
+            ["adb", "-s", target, "shell", "dumpsys", "package", "com.phonehub.notifier"],
+            timeout=10,
+        )
+        if "PhoneHubDeviceAdminReceiver" not in package_dump:
+            self._set_provision_status([
+                "STOP: Device Admin receiver is missing.",
+                "Press 'Install / Update Companion' first.",
+            ])
+            return
+
+        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list-owners"], timeout=8)
+        if "com.phonehub.notifier/.PhoneHubDeviceAdminReceiver" in owners and "DeviceOwner" in owners:
+            self._set_provision_status("READY: PhoneHub Notifier is already Device Owner.")
+            self.check_device_owner_status()
+            return
+
+        count, _ = self._account_count(target)
+        if count is None:
+            self._set_provision_status("STOP: Could not verify Android account count.")
+            return
+        if count > 0:
+            self._set_provision_status([
+                f"STOP: Android still has {count} account(s).",
+                "Press '2. Open Accounts' and temporarily remove all accounts first.",
+            ])
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Provision Device Owner",
+            "Accounts: 0 and the PhoneHub admin receiver is ready. Set PhoneHub Notifier as Device Owner on this phone?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        result = run_quiet([
+            "adb", "-s", target, "shell", "dpm", "set-device-owner",
+            "com.phonehub.notifier/.PhoneHubDeviceAdminReceiver",
+        ], timeout=15)
+
+        if "Success:" in result:
+            verify = run_quiet(["adb", "-s", target, "shell", "dpm", "list-owners"], timeout=8)
+            self._set_provision_status([
+                "SUCCESS: PhoneHub Notifier is Device Owner.",
+                verify or "Owner verification returned no output.",
+                "You can now add your accounts back to the phone.",
+            ])
+            self.check_device_owner_status()
+            return
+
+        if "already some accounts" in result.lower():
+            self._set_provision_status([
+                "Android still reports an account/session even though the visible count may be zero.",
+                "Press 'Clear Stale Account Session + Reboot', wait for the phone to boot, then retry.",
+            ])
+            return
+
+        self._set_provision_status([
+            "Device Owner provisioning failed:",
+            result or "No output returned.",
+        ])
+
     def _app_control_target(self):
         return self._device_target()
 
@@ -2689,7 +2963,7 @@ class PhoneHubTailscale(PhoneHub):
                 self.app_control_status.setText("Status: Phone not connected")
             return
 
-        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list", "owners"], timeout=8)
+        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list-owners"], timeout=8)
         policy = run_quiet(["adb", "-s", target, "shell", "dumpsys", "device_policy"], timeout=12)
         output = owners or policy
 
@@ -2842,7 +3116,7 @@ class PhoneHubTailscale(PhoneHub):
             self.set_footer("Phone is not connected.")
             return
 
-        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list", "owners"], timeout=8)
+        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list-owners"], timeout=8)
         policy = run_quiet(["adb", "-s", target, "shell", "dumpsys", "device_policy"], timeout=10)
         combined = owners + "\n" + policy
 
