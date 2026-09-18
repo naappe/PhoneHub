@@ -450,6 +450,59 @@ class PhoneHubTailscale(PhoneHub):
         self.stop_live_audio()
         event.accept()
 
+    def page_settings(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        ip, port = get_saved_ip()
+        shown_ip = ip or "Not set"
+        shown_target = f"{ip}:{port}" if ip else "Not set"
+
+        text = (
+            f"PhoneHub {APP_VERSION}\n\n"
+            f"Saved Phone IP: {shown_ip}\n"
+            f"ADB Target: {shown_target}\n\n"
+            f"Mobile requirement: Tailscale only.\n"
+            f"Screen/control works through Tailscale + ADB.\n"
+            f"Audio page uses scrcpy microphone forwarding.\n"
+            f"No audio recording is enabled by default.\n\n"
+            f"Daily use:\n"
+            f"1. Keep Tailscale ON on PC\n"
+            f"2. Keep Tailscale ON on phone\n"
+            f"3. Open PhoneHub\n"
+            f"4. Use Home / Screen / Camera / Audio / Files / Apps / Control\n\n"
+            f"For a new phone or repairs, use Setup."
+        )
+
+        info, _, _ = self.card("Settings", text)
+        layout.addWidget(info)
+        layout.addStretch()
+        return page
+
+    def show_page(self, index):
+        self.stack.setCurrentIndex(index)
+
+        for i, btn in enumerate(self.nav_buttons):
+            btn.setObjectName("navActive" if i == index else "nav")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+        names = [
+            "Home",
+            "Setup",
+            "Screen",
+            "Camera",
+            "Audio",
+            "Files",
+            "Apps",
+            "Control",
+            "Settings",
+        ]
+        if 0 <= index < len(names):
+            self.set_footer(f"Opened {names[index]} page.")
+
     def page_dashboard(self):
         page = QWidget()
         layout = QVBoxLayout(page)
