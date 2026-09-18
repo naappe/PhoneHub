@@ -30,7 +30,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v2.9.4-local-apk-first"
+APP_VERSION = "v2.9.5-safe-local-tailscale-apk"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -473,15 +473,31 @@ class PhoneHubTailscale(PhoneHub):
                 # when the PC has an APK saved locally but it is not in GitHub.
                 apk_path = None
                 if LOCAL_APK_DIR.exists():
-                    candidates = sorted(
-                        LOCAL_APK_DIR.glob("*.apk"),
+                    # Prefer a real Tailscale APK by filename. Do not blindly
+                    # install another APK such as PhoneHub's small app-debug.apk.
+                    preferred = sorted(
+                        LOCAL_APK_DIR.glob("tailscale-android-universal-*.apk"),
                         key=lambda p: p.stat().st_mtime,
                         reverse=True,
                     )
+
+                    # Fallback: any APK with "tailscale" in the name and a
+                    # realistic package size (>10 MB).
+                    fallback = sorted(
+                        [
+                            p for p in LOCAL_APK_DIR.glob("*.apk")
+                            if "tailscale" in p.name.lower()
+                            and p.stat().st_size > 10 * 1024 * 1024
+                        ],
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+
+                    candidates = preferred or fallback
                     if candidates:
                         apk_path = candidates[0]
                         self.bridge.message.emit(
-                            f"Using local APK: {apk_path.name}"
+                            f"Using local Tailscale APK: {apk_path.name}"
                         )
 
                 if apk_path is None:
