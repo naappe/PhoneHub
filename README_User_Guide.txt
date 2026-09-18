@@ -1,126 +1,69 @@
-﻿PHONEHUB SMART SETUP GUIDE
-Version: v2.2-smart-setup
+PHONEHUB USER GUIDE
+Version: v3.2
 
-WHAT PHONEHUB DOES
-PhoneHub lets the PC connect to your Android phone through Tailscale and ADB.
-You can open phone screen, camera, screenshot, apps list, and basic control.
+OVERVIEW
+PhoneHub connects a Windows PC to an Android phone using Tailscale + ADB.
 
-MOBILE REQUIREMENT
-Only Tailscale is needed on the mobile.
-No PhoneHub Companion app is required.
+CURRENT CORE FEATURES
+- Guided first-time setup
+- Automatic Tailscale IP detection
+- Remote ADB connection
+- Screen mirroring/control through scrcpy
+- Independent front/back camera window
+- Screenshot capture
+- Installed-app list
+- Basic safe controls: reconnect, wake, lock, reboot
+- Live connection status card
 
 FIRST-TIME SETUP
-1. Install Tailscale on phone.
-2. Login with the same Tailscale account/tailnet as the PC.
-3. Turn Tailscale ON.
-4. Enable Developer Options on phone.
-5. Enable USB Debugging.
-6. Connect USB cable once.
-7. Tap Always allow from this computer.
-8. Open PhoneHub.
-9. Open Setup New Phone.
-10. Click Smart Check.
-11. Click Enable Remote.
-12. Enter phone Tailscale IP.
-13. Click Save IP + Test.
-14. When PhoneHub says READY, remove USB cable.
+1. Keep Tailscale installed and connected on the PC.
+2. Enable Developer Options and USB Debugging on the phone.
+3. Connect the phone by USB.
+4. Open C:\PhoneHub\PhoneHub.bat.
+5. Open Setup.
+6. Follow the guided setup one step at a time.
+7. Approve USB debugging on the phone if Android asks.
+8. PhoneHub detects Tailscale and the phone's 100.x.x.x address.
+9. Enable remote ADB when prompted.
+10. Finish when PhoneHub reports the remote connection is ready.
 
 DAILY USE
-1. Keep Tailscale ON on PC.
-2. Keep Tailscale ON on phone.
-3. Open C:\PhoneHub\PhoneHub.bat.
-4. Use Dashboard, Screen, Camera, Screenshot, Apps, and Control.
+1. Keep Tailscale ON on PC and phone.
+2. Start C:\PhoneHub\PhoneHub.bat.
+3. PhoneHub reconnects using the saved phone Tailscale IP.
+4. USB is only needed for initial setup or repair if remote ADB is no longer available.
 
-BUTTON GUIDE
+CONTROL STATUS
+The Control page shows:
+- Phone Online / Offline
+- ADB Connected / Not connected
+- Tailscale IP
+- USB Connected / Not connected
+- Last control action
 
-Dashboard:
-Shows phone online/offline status, Android version, battery, and saved connection.
+SCREEN
+- Wake + Open Screen: normal daily view
+- Fast Screen: lower bandwidth
+- Ultra Screen: minimum bandwidth
+- Screenshot: saves a phone screenshot
+- Lock State Test: diagnostic only
 
-Setup New Phone:
-Checks USB Debugging, Tailscale, phone IP, remote ADB, and tells when USB can be removed.
+CAMERA
+- Back Camera and Front Camera are separate from the normal screen window.
+- Switching front/back replaces only the camera stream.
+- Closing the camera does not close the screen.
 
-Smart Check:
-Checks what is ready and what is missing.
-
-Open Tailscale:
-Opens Tailscale on the phone so you can copy the 100.x.x.x phone IP.
-
-Enable Remote:
-Uses the USB connection one time to enable remote ADB.
-
-Save IP + Test:
-Saves the phone Tailscale IP and tests remote connection.
-
-Finish Setup:
-Confirms whether USB cable can be removed.
-
-Screen:
-Opens the phone screen through scrcpy.
-
-Camera:
-Opens separate back/front camera window.
-
-Screenshot:
-Saves phone screenshot to:
+FILES
+Screenshots are stored under:
 C:\PhoneHub\runtime\screenshots
 
-Files:
-Opens screenshot folder and location log.
+SETUP / REPAIR
+PhoneHub Setup is maintained separately from the working PhoneHub application.
+Use the setup/repair utility for Platform-Tools, scrcpy, USB debugging, Tailscale, or remote ADB problems.
 
-Apps:
-Shows installed phone apps.
+CLEAN ARCHITECTURE
+The current PhoneHub no longer uses the old QR companion, web viewer, location receiver, control-center prototype, or legacy setup scripts.
 
-Control:
-Reconnects ADB, wakes phone, locks phone, or reboots phone.
-
-WHEN USB CAN BE REMOVED
-Only remove USB when PhoneHub says:
-READY
-or
-Remote ADB connected
-or
-USB cable can be removed
-
-WHAT TAILSCALE DOES
-Tailscale connects PC and phone privately.
-It gives the phone a private 100.x.x.x IP.
-It allows PhoneHub to reach the phone remotely.
-
-WHAT TAILSCALE CANNOT DO
-Tailscale alone cannot give live GPS.
-Tailscale alone cannot approve Android permissions.
-Tailscale alone cannot unlock the phone.
-
-TROUBLESHOOTING
-
-Phone offline:
-- Check Tailscale ON on PC.
-- Check Tailscale ON on phone.
-- Open Setup New Phone.
-- Click Smart Check.
-
-USB debugging not approved:
-- Look at phone screen.
-- Tap Always allow from this computer.
-- Tap OK.
-
-Remote not connected:
-- Check phone Tailscale IP.
-- Click Enable Remote while USB is connected.
-- Click Save IP + Test.
-
-Screen slow:
-- Use Fast Screen or Ultra Screen.
-- Readable Screen is clearer but heavier.
-
-Camera not opening:
-- Close Screen first.
-- Click Back Camera again.
-- Camera mode restarts scrcpy.
-
-Live location not moving:
-- Normal. Current clean version uses Tailscale only.
-- Live GPS needs an extra Android location app, which is not used now.
-
-FINAL STATUS
-PhoneHub v2.2 is the stable Tailscale-only version.
+IMPORTANT
+PhoneHub does not store your PIN/password and does not bypass Android security.
+Tailscale authentication and Android security approval remain user-controlled.
