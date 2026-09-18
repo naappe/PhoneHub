@@ -30,7 +30,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v2.9.5-safe-local-tailscale-apk"
+APP_VERSION = "v2.9.6-auto-wake-unlock-flow"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -46,11 +46,17 @@ class PhoneHubTailscale(PhoneHub):
         # Automatically detect USB/remote connection changes so the Setup page
         # changes to Connected without requiring the user to press Smart Check.
         self._last_connection_signature = None
+        self._auto_unlock_waiting = False
+        self._auto_unlock_serial = ""
         self.connection_timer = QTimer(self)
         self.connection_timer.setInterval(3000)
         self.connection_timer.timeout.connect(self.auto_refresh_connection_state)
         self.connection_timer.start()
         QTimer.singleShot(500, self.auto_refresh_connection_state)
+
+        self.unlock_timer = QTimer(self)
+        self.unlock_timer.setInterval(1500)
+        self.unlock_timer.timeout.connect(self._check_unlock_progress)
 
         # Keep the window inside the visible desktop area on smaller laptops.
         screen = QApplication.primaryScreen()
@@ -377,6 +383,9 @@ class PhoneHubTailscale(PhoneHub):
                 self.side_status.setText("USB authorization needed")
             elif usb:
                 self.side_status.setText("USB connected")
+                # Start the safe one-time unlock flow when a USB phone appears.
+                if not self._auto_unlock_waiting:
+                    self._begin_unlock_flow(usb[0])
             elif remote:
                 self.side_status.setText("Phone online")
             else:
@@ -384,6 +393,100 @@ class PhoneHubTailscale(PhoneHub):
         except Exception:
             # Never let background status polling interrupt PhoneHub.
             pass
+
+    def _is_device_unlocked(self, serial):
+        # Android exposes the current lockscreen/keyguard state through dumpsys.
+        # We only use this to detect whether the user has completed normal
+        # authentication on the phone; PhoneHub never bypasses the lockscreen.
+        window = run_quiet(
+            ["adb", "-s", serial, "shell", "dumpsys", "window", "policy"],
+            timeout=5,
+        ).lower()
+        power = run_quiet(
+            ["adb", "-s", serial, "shell", "dumpsys", "power"],
+            timeout=5,
+        ).lower()
+
+        locked_markers = (
+            "mshowinglockscreen=true",
+            "iskeyguardshowing=true",
+            "keyguard showing=true",
+            "mkeyguardshowing=true",
+        )
+        if any(marker in window for marker in locked_markers):
+            return False
+
+        # If Android's policy output is inconclusive, treat an interactive
+        # device without a showing keyguard as unlocked.
+        interactive = "minteractive=true" in power or "display power: state=on" in power
+        return interactive
+
+    def _begin_unlock_flow(self, serial):
+        self._auto_unlock_waiting = True
+        self._auto_unlock_serial = serial
+
+        # Wake only. Do not send PIN, pattern, swipe credentials, or any
+        # lockscreen-bypass command.
+        run_quiet(
+            ["adb", "-s", serial, "shell", "input", "keyevent", "224"],
+            timeout=3,
+        )
+
+        self.side_status.setText("Unlock phone once")
+        self.set_footer("Phone detected. Unlock the phone once; PhoneHub will continue automatically.")
+
+        QMessageBox.information(
+            self,
+            "Unlock phone once",
+            "PhoneHub detected the USB-connected phone and woke the screen.\n\n"
+            "Please unlock the phone normally using fingerprint, face, PIN, pattern, or password.\n\n"
+            "PhoneHub will continue automatically after Android reports that the phone is unlocked.",
+        )
+
+        self.unlock_timer.start()
+        QTimer.singleShot(1000, self._check_unlock_progress)
+
+    def _check_unlock_progress(self):
+        if not self._auto_unlock_waiting or not self._auto_unlock_serial:
+            self.unlock_timer.stop()
+            return
+
+        # Stop waiting if this USB device disappeared.
+        usb, _, _, _ = parse_adb_devices()
+        if self._auto_unlock_serial not in usb:
+            self._auto_unlock_waiting = False
+            self._auto_unlock_serial = ""
+            self.unlock_timer.stop()
+            return
+
+        if not self._is_device_unlocked(self._auto_unlock_serial):
+            self.side_status.setText("Waiting for unlock")
+            return
+
+        self.unlock_timer.stop()
+        self._auto_unlock_waiting = False
+        serial = self._auto_unlock_serial
+        self._auto_unlock_serial = ""
+
+        self.side_status.setText("USB connected")
+        self.set_footer("Phone unlocked. Continuing setup automatically...")
+
+        # Refresh the setup state immediately. If Tailscale is installed, open
+        # it for the next setup step; otherwise leave the Install Tailscale
+        # action visible for the user.
+        if hasattr(self, "setup_log"):
+            self.setup_smart_check()
+
+        if self._tailscale_installed(serial):
+            run_background([
+                "adb", "-s", serial, "shell", "monkey",
+                "-p", TAILSCALE_PACKAGE,
+                "-c", "android.intent.category.LAUNCHER",
+                "1",
+            ])
+            self.set_footer("Phone unlocked. Tailscale opened; finish sign-in/VPN approval on the phone.")
+        else:
+            self.set_footer("Phone unlocked. Tailscale is missing; click Install Tailscale.")
 
     def _usb_serial(self):
         usb, _, unauthorized, _ = parse_adb_devices()
