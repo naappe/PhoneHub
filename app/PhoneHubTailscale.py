@@ -38,7 +38,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.16-call-dialer-flow"
+APP_VERSION = "v3.17-audio-monitor-reconnect"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -558,6 +558,9 @@ class PhoneHubTailscale(PhoneHub):
         source = getattr(self, "audio_source", "")
         if not source.startswith("voice-call"):
             self._call_was_active = False
+        self.audio_listen_requested = False
+        self.audio_monitor_window = None
+        self.audio_monitor_status = None
             return
 
         proc = getattr(self, "audio_process", None)
@@ -627,6 +630,13 @@ class PhoneHubTailscale(PhoneHub):
 
         if target and target in remote:
             return target
+
+        if target:
+            run_quiet(["adb", "connect", target], timeout=6)
+            usb, remote, unauthorized, _ = parse_adb_devices()
+            if target in remote:
+                return target
+
         if usb:
             return usb[0]
         return ""
@@ -715,7 +725,53 @@ class PhoneHubTailscale(PhoneHub):
         QTimer.singleShot(1500, self._verify_live_audio)
         return True
 
+    def _show_audio_monitor(self):
+        if self.audio_monitor_window is None:
+            win = QWidget()
+            win.setWindowTitle("PhoneHub Audio Monitor")
+            win.resize(430, 190)
+
+            lay = QVBoxLayout(win)
+            lay.setContentsMargins(18, 18, 18, 18)
+            lay.setSpacing(12)
+
+            title = QLabel("Live Phone Audio")
+            title.setObjectName("title")
+            lay.addWidget(title)
+
+            self.audio_monitor_status = QLabel("Connecting...")
+            self.audio_monitor_status.setWordWrap(True)
+            lay.addWidget(self.audio_monitor_status)
+
+            row = QHBoxLayout()
+            down = QPushButton("Volume -")
+            down.clicked.connect(lambda: self.adjust_windows_volume(-2))
+            up = QPushButton("Volume +")
+            up.clicked.connect(lambda: self.adjust_windows_volume(2))
+            stop = QPushButton("Stop Listening")
+            stop.setObjectName("danger")
+            stop.clicked.connect(self.stop_live_audio)
+
+            row.addWidget(down)
+            row.addWidget(up)
+            row.addWidget(stop)
+            lay.addLayout(row)
+
+            win.setStyleSheet(self.styleSheet())
+            self.audio_monitor_window = win
+
+        self.audio_monitor_window.show()
+        self.audio_monitor_window.raise_()
+        self.audio_monitor_window.activateWindow()
+
+    def _set_audio_monitor_status(self, text):
+        if self.audio_monitor_status is not None:
+            self.audio_monitor_status.setText(text)
+
     def start_live_audio(self):
+        self.audio_listen_requested = True
+        self._show_audio_monitor()
+
         existing = getattr(self, "audio_process", None)
         if existing and existing.poll() is None:
             if hasattr(self, "audio_status"):
@@ -724,10 +780,23 @@ class PhoneHubTailscale(PhoneHub):
                     if getattr(self, "audio_recording", False)
                     else "Status: Listening"
                 )
+            self._set_audio_monitor_status("Listening")
             self.set_footer("Phone microphone is already streaming.")
             return
 
         self.audio_recording = False
+
+        source = getattr(self, "audio_source", "")
+        if source.startswith("voice-call") and self._android_call_state() != "active":
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Waiting for active call")
+            self._set_audio_monitor_status(
+                "Waiting for an active call. Start or answer the call on the phone."
+            )
+            self.set_footer("Waiting for active call before starting call audio.")
+            return
+
+        self._set_audio_monitor_status("Connecting to phone audio...")
         self._launch_live_audio("")
 
     def _verify_live_audio(self):
@@ -739,6 +808,11 @@ class PhoneHubTailscale(PhoneHub):
                     if getattr(self, "audio_recording", False)
                     else "Status: Listening"
                 )
+            self._set_audio_monitor_status(
+                "Listening + Recording"
+                if getattr(self, "audio_recording", False)
+                else "Listening"
+            )
             self.set_footer(
                 "Live microphone is playing and recording."
                 if getattr(self, "audio_recording", False)
@@ -762,11 +836,32 @@ class PhoneHubTailscale(PhoneHub):
                 self.audio_status.setText(
                     "Status: Error — " + (detail or "microphone stream could not start")
                 )
+            self._set_audio_monitor_status(
+                "Audio stream stopped. PhoneHub will retry automatically."
+            )
             self.set_footer(
                 "Recording failed. PhoneHub saved the scrcpy error log for diagnosis."
                 if getattr(self, "audio_recording", False)
-                else "Live audio failed. Check phone connection and scrcpy audio support."
+                else "Audio stream stopped. Reconnecting automatically."
             )
+            if getattr(self, "audio_listen_requested", False) and not getattr(self, "audio_recording", False):
+                QTimer.singleShot(1800, self._retry_audio_stream)
+
+    def _retry_audio_stream(self):
+        if not getattr(self, "audio_listen_requested", False):
+            return
+
+        proc = getattr(self, "audio_process", None)
+        if proc and proc.poll() is None:
+            return
+
+        source = getattr(self, "audio_source", "")
+        if source.startswith("voice-call") and self._android_call_state() != "active":
+            self._set_audio_monitor_status("Waiting for active call...")
+            return
+
+        self._set_audio_monitor_status("Reconnecting audio...")
+        self._launch_live_audio("")
 
     def _stop_audio_process_only(self):
         proc = getattr(self, "audio_process", None)
@@ -991,6 +1086,7 @@ class PhoneHubTailscale(PhoneHub):
             self.set_footer(f"Recordings folder: {folder}")
 
     def stop_live_audio(self):
+        self.audio_listen_requested = False
         self._stop_audio_process_only()
         was_recording = getattr(self, "audio_recording", False)
         self.audio_recording = False
@@ -999,6 +1095,9 @@ class PhoneHubTailscale(PhoneHub):
             self.audio_record_button.setText("Record")
         if hasattr(self, "audio_status"):
             self.audio_status.setText("Status: Idle")
+        self._set_audio_monitor_status("Stopped")
+        if self.audio_monitor_window is not None:
+            self.audio_monitor_window.hide()
         self.set_footer(
             "Phone microphone stopped. Recording saved."
             if was_recording else
