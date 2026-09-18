@@ -13,6 +13,7 @@ import android.provider.Settings;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 public class MainActivity extends Activity {
@@ -38,10 +39,15 @@ public class MainActivity extends Activity {
             prefs.edit().putString("endpoint", intentEndpoint).putString("token", intentToken).apply();
         }
 
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(Color.rgb(7, 17, 31));
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(40, 48, 40, 40);
+        root.setPadding(40, 48, 40, 64);
         root.setBackgroundColor(Color.rgb(7, 17, 31));
+        scroll.addView(root);
 
         TextView title = new TextView(this);
         title.setText("PhoneHub One");
@@ -203,7 +209,7 @@ public class MainActivity extends Activity {
         status.setTextSize(15);
         root.addView(status);
 
-        setContentView(root);
+        setContentView(scroll);
 
         handlePolicyIntent(getIntent());
         refreshStatus();
