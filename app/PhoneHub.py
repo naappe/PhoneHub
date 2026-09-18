@@ -150,6 +150,13 @@ def adb_target():
 
 
 def scrcpy_path():
+    candidates = [
+        Path(r"C:\PhoneHub\runtime\scrcpy\scrcpy.exe"),
+        Path(r"C:\PhoneHub\tools\scrcpy\scrcpy.exe"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
     return shutil.which("scrcpy")
 
 
