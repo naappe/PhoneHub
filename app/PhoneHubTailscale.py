@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.27.3-app-control-readonly"
+APP_VERSION = "v3.27.4-admin-receiver-check"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2698,6 +2698,15 @@ class PhoneHubTailscale(PhoneHub):
             timeout=6,
         )
 
+        receiver_dump = run_quiet(
+            ["adb", "-s", target, "shell", "dumpsys", "package", "com.phonehub.notifier"],
+            timeout=10,
+        )
+        admin_receiver_present = (
+            "PhoneHubDeviceAdminReceiver" in receiver_dump
+            and "android.permission.BIND_DEVICE_ADMIN" in receiver_dump
+        )
+
         combined = (owners + "\n" + policy)
         combined_lower = combined.lower()
 
@@ -2739,6 +2748,7 @@ class PhoneHubTailscale(PhoneHub):
             summary = (
                 "Status: Device Owner READY\n"
                 f"Companion installed: {'YES' if installed else 'NO'}\n"
+                f"Device Admin receiver: {'READY' if admin_receiver_present else 'MISSING / OLD APK'}\n"
                 "App suspension: AVAILABLE\n"
                 "Install restrictions: AVAILABLE\n"
                 "Uninstall protection: AVAILABLE"
@@ -2747,6 +2757,7 @@ class PhoneHubTailscale(PhoneHub):
             summary = (
                 "Status: Device Owner NOT CONFIGURED\n"
                 f"Companion installed: {'YES' if installed else 'NO'}\n"
+                f"Device Admin receiver: {'READY' if admin_receiver_present else 'MISSING / OLD APK'}\n"
                 f"Device already provisioned: {'YES' if provisioned else 'NO'}\n"
                 f"Device Admin enabled: {'YES' if enabled_admin else 'NO'}\n"
                 "App suspension: UNAVAILABLE\n"
