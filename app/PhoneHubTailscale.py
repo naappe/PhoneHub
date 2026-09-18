@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -50,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.23-notification-listener"
+APP_VERSION = "v3.24-engine-core"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2575,8 +2576,81 @@ class PhoneHubTailscale(PhoneHub):
 
         info, _, _ = self.card("Settings", text)
         layout.addWidget(info)
+
+        engine_box, engine_layout, _ = self.card(
+            "PhoneHub Engine",
+            "PhoneHub now prefers its own portable scrcpy/ADB runtime under C:\\PhoneHub\\runtime\\scrcpy instead of depending only on Windows PATH.",
+        )
+
+        engine_actions = QHBoxLayout()
+        engine_check = QPushButton("Check Engine")
+        engine_check.setObjectName("primary")
+        engine_check.clicked.connect(self.check_engine_runtime)
+
+        open_runtime = QPushButton("Open Runtime Folder")
+        open_runtime.clicked.connect(self.open_engine_runtime_folder)
+
+        engine_actions.addWidget(engine_check)
+        engine_actions.addWidget(open_runtime)
+        engine_layout.addLayout(engine_actions)
+
+        self.engine_status_label = QLabel("Engine status: not checked yet")
+        self.engine_status_label.setObjectName("big")
+        self.engine_status_label.setWordWrap(True)
+        self.engine_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        engine_layout.addWidget(self.engine_status_label)
+
+        layout.addWidget(engine_box)
         layout.addStretch()
         return page
+
+    def check_engine_runtime(self):
+        scrcpy = scrcpy_path()
+        adb = shutil.which("adb")
+
+        lines = []
+        lines.append(f"scrcpy path: {scrcpy or 'NOT FOUND'}")
+        lines.append(f"adb path: {adb or 'NOT FOUND'}")
+
+        if scrcpy:
+            version = run_quiet([scrcpy, "--version"], timeout=8)
+            first = version.splitlines()[0] if version else "version unavailable"
+            lines.append(f"scrcpy: {first}")
+
+        if adb:
+            version = run_quiet([adb, "version"], timeout=8)
+            first = version.splitlines()[0] if version else "version unavailable"
+            lines.append(f"adb: {first}")
+
+        runtime_dir = Path(r"C:\PhoneHub\runtime\scrcpy")
+        required = [
+            "scrcpy.exe",
+            "scrcpy-server",
+            "adb.exe",
+            "AdbWinApi.dll",
+            "AdbWinUsbApi.dll",
+            "SDL2.dll",
+        ]
+        present = [name for name in required if (runtime_dir / name).exists()]
+        missing = [name for name in required if not (runtime_dir / name).exists()]
+
+        lines.append(f"portable runtime: {'READY' if not missing else 'INCOMPLETE'}")
+        lines.append(f"present: {', '.join(present) if present else 'none'}")
+        if missing:
+            lines.append(f"missing: {', '.join(missing)}")
+
+        if hasattr(self, "engine_status_label"):
+            self.engine_status_label.setText("\n".join(lines))
+
+        self.set_footer("Engine check complete.")
+
+    def open_engine_runtime_folder(self):
+        folder = Path(r"C:\PhoneHub\runtime\scrcpy")
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(folder))
+        except Exception:
+            self.set_footer(f"Runtime folder: {folder}")
 
     def show_page(self, index):
         self.stack.setCurrentIndex(index)
@@ -3737,6 +3811,37 @@ class PhoneHubTailscale(PhoneHub):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    instance_name = "PhoneHub_Main_Instance"
+    probe = QLocalSocket()
+    probe.connectToServer(instance_name)
+
+    if probe.waitForConnected(250):
+        probe.write(b"show")
+        probe.flush()
+        probe.waitForBytesWritten(250)
+        sys.exit(0)
+
+    QLocalServer.removeServer(instance_name)
+    server = QLocalServer()
+    server.listen(instance_name)
+
     win = PhoneHubTailscale()
+
+    def handle_instance_request():
+        socket = server.nextPendingConnection()
+        if socket is not None:
+            socket.waitForReadyRead(150)
+            try:
+                win.restore_from_tray()
+            except Exception:
+                win.show()
+                win.raise_()
+                win.activateWindow()
+            socket.disconnectFromServer()
+
+    server.newConnection.connect(handle_instance_request)
+    win._single_instance_server = server
+
     win.show()
     sys.exit(app.exec())
