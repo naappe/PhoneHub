@@ -43,8 +43,9 @@ if errorlevel 1 (
 echo [PhoneHub] Update check complete.
 
 :launch_phonehub
-REM Do not kill every pythonw.exe process on the PC.
-REM PhoneHub now enforces its own single-instance lock inside the app.
+REM Stop only the old PhoneHub Python process so a newly pulled version actually reloads.
+REM Do not kill unrelated python/pythonw applications.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process ^| Where-Object { ($_.Name -eq 'pythonw.exe' -or $_.Name -eq 'python.exe') -and $_.CommandLine -like '*PhoneHubTailscale.py*' } ^| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 taskkill /IM PhoneHub.exe /F >nul 2>&1
 
 REM Start ADB for the Tailscale remote connection mode.
