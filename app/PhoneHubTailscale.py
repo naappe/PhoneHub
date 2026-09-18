@@ -7,6 +7,7 @@ import ctypes
 import math
 import wave
 import struct
+import signal
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
@@ -37,7 +38,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.10-recording-fix"
+APP_VERSION = "v3.11-recording-finalize-fix"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -418,7 +419,7 @@ class PhoneHubTailscale(PhoneHub):
             "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
             "Press Record again to stop recording while continuing live listening. "
             "For the strongest echo reduction, use headphones on the PC or keep PC speaker volume low so the phone microphone does not hear the delayed PC playback. "
-            "Recordings are saved as AAC (.aac), matching scrcpy's official audio-only recording format. Peak analysis uses FFmpeg when available.",
+            "Recordings are saved as AAC audio in an M4A container for Windows playback. PhoneHub now stops scrcpy gracefully so the file is finalized correctly. Peak analysis uses FFmpeg when available.",
         )
         layout.addWidget(info)
         layout.addStretch()
@@ -510,7 +511,10 @@ class PhoneHubTailscale(PhoneHub):
                 stdout=self.audio_log_handle,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
-                creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform.startswith("win") else 0),
+                creationflags=(
+                    (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
+                    if sys.platform.startswith("win") else 0
+                ),
             )
         except Exception as exc:
             self.audio_process = None
@@ -589,17 +593,41 @@ class PhoneHubTailscale(PhoneHub):
     def _stop_audio_process_only(self):
         proc = getattr(self, "audio_process", None)
         if proc and proc.poll() is None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=3)
-            except Exception:
+            graceful = False
+
+            # scrcpy must exit cleanly so MP4/M4A can write its final moov index.
+            # On Windows, CTRL_BREAK reaches the new process group without
+            # abruptly killing the recorder.
+            if sys.platform.startswith("win"):
                 try:
-                    proc.kill()
+                    proc.send_signal(signal.CTRL_BREAK_EVENT)
+                    proc.wait(timeout=5)
+                    graceful = True
                 except Exception:
-                    pass
+                    graceful = False
+            else:
+                try:
+                    proc.send_signal(signal.SIGINT)
+                    proc.wait(timeout=5)
+                    graceful = True
+                except Exception:
+                    graceful = False
+
+            if not graceful and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+
         self.audio_process = None
+
         if self.audio_log_handle:
             try:
+                self.audio_log_handle.flush()
                 self.audio_log_handle.close()
             except Exception:
                 pass
@@ -623,7 +651,7 @@ class PhoneHubTailscale(PhoneHub):
 
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        record_path = recordings / f"phone_mic_{stamp}.aac"
+        record_path = recordings / f"phone_mic_{stamp}.m4a"
 
         self._stop_audio_process_only()
         self.audio_recording = True
@@ -682,7 +710,7 @@ class PhoneHubTailscale(PhoneHub):
 
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
-            text = "Level: Recording saved as AAC. Install FFmpeg for peak analysis."
+            text = "Level: Recording saved as M4A/AAC. Install FFmpeg for peak analysis."
             if hasattr(self, "audio_level_label"):
                 self.audio_level_label.setText(text)
             self.set_footer(text)
