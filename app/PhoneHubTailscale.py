@@ -37,7 +37,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.9-compatible-audio-recording"
+APP_VERSION = "v3.10-recording-fix"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -77,6 +77,8 @@ class PhoneHubTailscale(PhoneHub):
         self.audio_recording = False
         self.audio_record_path = ""
         self.audio_source = "mic-voice-communication"
+        self.audio_log_handle = None
+        self.audio_log_path = ""
         self.audio_level_text = "Level: No recording analyzed yet"
 
         # Detection now runs in a background thread. The old implementation ran
@@ -416,7 +418,7 @@ class PhoneHubTailscale(PhoneHub):
             "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
             "Press Record again to stop recording while continuing live listening. "
             "For the strongest echo reduction, use headphones on the PC or keep PC speaker volume low so the phone microphone does not hear the delayed PC playback. "
-            "Recordings are saved as AAC/M4A for Windows Media Player compatibility. Peak analysis uses FFmpeg when available.",
+            "Recordings are saved as AAC (.aac), matching scrcpy's official audio-only recording format. Peak analysis uses FFmpeg when available.",
         )
         layout.addWidget(info)
         layout.addStretch()
@@ -487,14 +489,26 @@ class PhoneHubTailscale(PhoneHub):
             args.extend([
                 "--audio-codec=aac",
                 "--audio-bit-rate=128K",
+                "--require-audio",
                 f"--record={record_path}",
             ])
 
+        log_dir = Path(r"C:\PhoneHub\runtime\logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_stamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.audio_log_path = str(log_dir / f"audio_{log_stamp}.log")
+
         try:
+            if self.audio_log_handle:
+                try:
+                    self.audio_log_handle.close()
+                except Exception:
+                    pass
+            self.audio_log_handle = open(self.audio_log_path, "w", encoding="utf-8", errors="ignore")
             self.audio_process = subprocess.Popen(
                 args,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=self.audio_log_handle,
+                stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
                 creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform.startswith("win") else 0),
             )
@@ -550,9 +564,27 @@ class PhoneHubTailscale(PhoneHub):
             )
         else:
             self.audio_process = None
+            detail = ""
+            try:
+                if self.audio_log_handle:
+                    self.audio_log_handle.flush()
+                log_path = Path(getattr(self, "audio_log_path", ""))
+                if log_path.exists():
+                    lines = log_path.read_text(encoding="utf-8", errors="ignore").strip().splitlines()
+                    if lines:
+                        detail = lines[-1][:180]
+            except Exception:
+                pass
+
             if hasattr(self, "audio_status"):
-                self.audio_status.setText("Status: Error — microphone stream could not start")
-            self.set_footer("Live audio failed. Check phone connection and scrcpy audio support.")
+                self.audio_status.setText(
+                    "Status: Error — " + (detail or "microphone stream could not start")
+                )
+            self.set_footer(
+                "Recording failed. PhoneHub saved the scrcpy error log for diagnosis."
+                if getattr(self, "audio_recording", False)
+                else "Live audio failed. Check phone connection and scrcpy audio support."
+            )
 
     def _stop_audio_process_only(self):
         proc = getattr(self, "audio_process", None)
@@ -566,6 +598,12 @@ class PhoneHubTailscale(PhoneHub):
                 except Exception:
                     pass
         self.audio_process = None
+        if self.audio_log_handle:
+            try:
+                self.audio_log_handle.close()
+            except Exception:
+                pass
+            self.audio_log_handle = None
 
     def toggle_audio_recording(self):
         if getattr(self, "audio_recording", False):
@@ -585,7 +623,7 @@ class PhoneHubTailscale(PhoneHub):
 
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        record_path = recordings / f"phone_mic_{stamp}.m4a"
+        record_path = recordings / f"phone_mic_{stamp}.aac"
 
         self._stop_audio_process_only()
         self.audio_recording = True
@@ -644,7 +682,7 @@ class PhoneHubTailscale(PhoneHub):
 
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
-            text = "Level: Recording saved as Windows-compatible AAC/M4A. Install FFmpeg for peak analysis."
+            text = "Level: Recording saved as AAC. Install FFmpeg for peak analysis."
             if hasattr(self, "audio_level_label"):
                 self.audio_level_label.setText(text)
             self.set_footer(text)
