@@ -52,6 +52,7 @@ public class VpnActivity extends Activity {
         backend = new GoBackend(getApplicationContext());
         buildUi();
         loadSaved();
+        applyIncomingConfig(getIntent());
         refreshState();
     }
 
@@ -166,6 +167,34 @@ public class VpnActivity extends Activity {
         lp.setMargins(0, 8, 0, 0);
         b.setLayoutParams(lp);
         return b;
+    }
+
+    private void applyIncomingConfig(Intent intent) {
+        if (intent == null) return;
+
+        setIfPresent(phoneAddress, intent, "phone_address");
+        setIfPresent(privateKey, intent, "private_key");
+        setIfPresent(publicKey, intent, "public_key");
+        setIfPresent(pcPublicKey, intent, "pc_public_key");
+        setIfPresent(endpoint, intent, "endpoint");
+        setIfPresent(allowedIps, intent, "allowed_ips");
+        setIfPresent(keepalive, intent, "keepalive");
+
+        if (intent.getBooleanExtra("auto_save", false)) {
+            saveValues();
+            setStatus("PhoneHub PC paired this private link automatically.");
+        }
+
+        if (intent.getBooleanExtra("auto_connect", false)) {
+            phoneAddress.postDelayed(this::requestConnect, 450);
+        }
+    }
+
+    private void setIfPresent(EditText field, Intent intent, String key) {
+        String value = intent.getStringExtra(key);
+        if (value != null && !value.trim().isEmpty()) {
+            field.setText(value.trim());
+        }
     }
 
     private void loadSaved() {
