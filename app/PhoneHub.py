@@ -12,12 +12,12 @@ from PySide6.QtCore import Qt, QObject, Signal, QTimer
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QFrame, QMessageBox, QStackedWidget, QTextEdit, QLineEdit,
-    QScrollArea, QSizePolicy
+    QScrollArea, QSizePolicy, QFileDialog
 )
 
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 
-APP_VERSION = "v3.3.1-responsive-window"
+APP_VERSION = "v3.4-apk-analysis-lab"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -26,6 +26,7 @@ ROOT = Path(r"C:\PhoneHub")
 RUNTIME = ROOT / "runtime"
 SCREENSHOT_DIR = RUNTIME / "screenshots"
 LOCATION_LOG = RUNTIME / "data" / "location_log.csv"
+APK_LAB_DIR = RUNTIME / "apk_lab"
 
 CONFIG_DIR = Path.home() / ".phone_remote"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -270,6 +271,7 @@ class Bridge(QObject):
     status = Signal(dict)
     screen_result = Signal(str)
     service_result = Signal(str)
+    apk_result = Signal(str)
 
 
 class PhoneHub(QWidget):
@@ -296,6 +298,7 @@ class PhoneHub(QWidget):
         self.bridge.status.connect(self.apply_status)
         self.bridge.screen_result.connect(self.set_screen_result)
         self.bridge.service_result.connect(self.set_service_result)
+        self.bridge.apk_result.connect(self.set_apk_result)
 
         self.nav_buttons = []
         self.build_ui()
@@ -334,6 +337,7 @@ class PhoneHub(QWidget):
             ("Apps", self.page_apps),
             ("Control", self.page_control),
             ("Service Lab", self.page_service_lab),
+            ("APK Analysis", self.page_apk_analysis),
             ("Settings", self.page_settings),
         ]
 
@@ -1108,6 +1112,351 @@ class PhoneHub(QWidget):
     def service_reboot_system(self):
         self._service_reboot("", "System")
 
+
+    def page_apk_analysis(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        info, _, _ = self.card(
+            "APK Analysis Lab",
+            "Static analysis for APKs you own or are authorized to test. "
+            "PhoneHub can inspect an APK with JADX / Apktool, locate RootBeer and other root-detection references, "
+            "and show the relevant files. It does not automatically flip conditions, bypass root checks, "
+            "or alter third-party app security controls."
+        )
+        layout.addWidget(info)
+
+        select_box, select_layout, _ = self.card(
+            "APK File",
+            "Choose an APK from this PC. Analysis files are written under C:\\PhoneHub\\runtime\\apk_lab."
+        )
+
+        self.apk_path_input = QLineEdit()
+        self.apk_path_input.setPlaceholderText(r"Example: C:\Users\User\Downloads\test-app.apk")
+        select_layout.addWidget(self.apk_path_input)
+
+        choose = QPushButton("Choose APK")
+        choose.setObjectName("primary")
+        choose.clicked.connect(self.apk_choose_file)
+        select_layout.addWidget(choose)
+        layout.addWidget(select_box)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        check = QPushButton("Check Tools")
+        check.clicked.connect(self.apk_check_tools)
+
+        jadx = QPushButton("JADX Analyze")
+        jadx.setObjectName("primary")
+        jadx.clicked.connect(self.apk_jadx_async)
+
+        apktool = QPushButton("Apktool Decode")
+        apktool.clicked.connect(self.apk_apktool_async)
+
+        rootbeer = QPushButton("Find Root Detection")
+        rootbeer.clicked.connect(self.apk_find_root_detection_async)
+
+        row.addWidget(check)
+        row.addWidget(jadx)
+        row.addWidget(apktool)
+        row.addWidget(rootbeer)
+        layout.addLayout(row)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(10)
+
+        open_lab = QPushButton("Open APK Lab Folder")
+        open_lab.clicked.connect(self.apk_open_lab_folder)
+
+        clear = QPushButton("Clear Report")
+        clear.clicked.connect(lambda: self.set_apk_result("No APK analysis yet."))
+
+        row2.addWidget(open_lab)
+        row2.addWidget(clear)
+        layout.addLayout(row2)
+
+        result_box, result_layout, _ = self.card(
+            "Analysis Report",
+            "RootBeer indicators include package/class names such as com.scottyab.rootbeer and calls like isRooted()."
+        )
+
+        self.apk_result_box = QTextEdit()
+        self.apk_result_box.setReadOnly(True)
+        self.apk_result_box.setMinimumHeight(260)
+        self.apk_result_box.setText("No APK analysis yet.")
+        result_layout.addWidget(self.apk_result_box)
+
+        layout.addWidget(result_box)
+        layout.addStretch()
+        return page
+
+    def set_apk_result(self, text):
+        if hasattr(self, "apk_result_box"):
+            self.apk_result_box.setText(text)
+
+    def _apk_selected_path(self):
+        if not hasattr(self, "apk_path_input"):
+            return None
+        raw = self.apk_path_input.text().strip().strip('"')
+        if not raw:
+            return None
+        path = Path(raw)
+        if not path.exists() or not path.is_file() or path.suffix.lower() != ".apk":
+            return None
+        return path
+
+    def _apk_project_dir(self, apk_path, suffix):
+        safe_name = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in apk_path.stem)
+        return APK_LAB_DIR / f"{safe_name}_{suffix}"
+
+    def apk_choose_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose APK",
+            str(Path.home()),
+            "Android APK (*.apk)"
+        )
+        if path:
+            self.apk_path_input.setText(path)
+            self.set_footer("APK selected.")
+
+    def apk_check_tools(self):
+        jadx = shutil.which("jadx") or shutil.which("jadx.bat")
+        jadx_gui = shutil.which("jadx-gui") or shutil.which("jadx-gui.bat")
+        apktool = shutil.which("apktool") or shutil.which("apktool.bat")
+        java = shutil.which("java")
+
+        lines = [
+            "APK ANALYSIS TOOL CHECK",
+            "",
+            f"JADX CLI: {jadx or 'Not found'}",
+            f"JADX GUI: {jadx_gui or 'Not found'}",
+            f"Apktool: {apktool or 'Not found'}",
+            f"Java: {java or 'Not found'}",
+            "",
+            "Required for full workflow: Java + JADX + Apktool.",
+            "PhoneHub performs analysis only; it does not automate root-check bypass patches."
+        ]
+        self.set_apk_result("\n".join(lines))
+        self.set_footer("APK tool check complete.")
+
+    def apk_jadx_async(self):
+        apk_path = self._apk_selected_path()
+        if not apk_path:
+            QMessageBox.warning(self, "PhoneHub APK Analysis", "Choose a valid APK file first.")
+            return
+
+        jadx = shutil.which("jadx") or shutil.which("jadx.bat")
+        if not jadx:
+            QMessageBox.warning(self, "PhoneHub APK Analysis", "JADX CLI was not found in PATH.")
+            return
+
+        self.set_footer("Running JADX analysis...")
+        threading.Thread(
+            target=self.apk_jadx_worker,
+            args=(apk_path, jadx),
+            daemon=True
+        ).start()
+
+    def apk_jadx_worker(self, apk_path, jadx):
+        APK_LAB_DIR.mkdir(parents=True, exist_ok=True)
+        out_dir = self._apk_project_dir(apk_path, "jadx")
+        if out_dir.exists():
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+        try:
+            proc = subprocess.run(
+                [jadx, "-d", str(out_dir), str(apk_path)],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=180,
+                creationflags=no_window_flag()
+            )
+            tail = (proc.stdout or "").strip()
+            if len(tail) > 3000:
+                tail = tail[-3000:]
+
+            lines = [
+                "JADX ANALYSIS COMPLETE" if proc.returncode == 0 else "JADX FINISHED WITH WARNINGS",
+                "",
+                f"APK: {apk_path}",
+                f"Output: {out_dir}",
+                f"Exit code: {proc.returncode}",
+            ]
+            if tail:
+                lines.extend(["", "JADX output:", tail])
+
+            self.bridge.apk_result.emit("\n".join(lines))
+            self.bridge.message.emit("JADX analysis finished.")
+        except Exception as exc:
+            self.bridge.apk_result.emit(f"JADX failed:\n{exc}")
+            self.bridge.message.emit("JADX analysis failed.")
+
+    def apk_apktool_async(self):
+        apk_path = self._apk_selected_path()
+        if not apk_path:
+            QMessageBox.warning(self, "PhoneHub APK Analysis", "Choose a valid APK file first.")
+            return
+
+        apktool = shutil.which("apktool") or shutil.which("apktool.bat")
+        if not apktool:
+            QMessageBox.warning(self, "PhoneHub APK Analysis", "Apktool was not found in PATH.")
+            return
+
+        self.set_footer("Decoding APK resources and smali...")
+        threading.Thread(
+            target=self.apk_apktool_worker,
+            args=(apk_path, apktool),
+            daemon=True
+        ).start()
+
+    def apk_apktool_worker(self, apk_path, apktool):
+        APK_LAB_DIR.mkdir(parents=True, exist_ok=True)
+        out_dir = self._apk_project_dir(apk_path, "apktool")
+        if out_dir.exists():
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+        try:
+            proc = subprocess.run(
+                [apktool, "d", "-f", "-o", str(out_dir), str(apk_path)],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=180,
+                creationflags=no_window_flag()
+            )
+            tail = (proc.stdout or "").strip()
+            if len(tail) > 3000:
+                tail = tail[-3000:]
+
+            lines = [
+                "APKTOOL DECODE COMPLETE" if proc.returncode == 0 else "APKTOOL FINISHED WITH WARNINGS",
+                "",
+                f"APK: {apk_path}",
+                f"Output: {out_dir}",
+                f"Exit code: {proc.returncode}",
+            ]
+            if tail:
+                lines.extend(["", "Apktool output:", tail])
+
+            self.bridge.apk_result.emit("\n".join(lines))
+            self.bridge.message.emit("Apktool decode finished.")
+        except Exception as exc:
+            self.bridge.apk_result.emit(f"Apktool failed:\n{exc}")
+            self.bridge.message.emit("Apktool decode failed.")
+
+    def apk_find_root_detection_async(self):
+        apk_path = self._apk_selected_path()
+        if not apk_path:
+            QMessageBox.warning(self, "PhoneHub APK Analysis", "Choose a valid APK file first.")
+            return
+
+        self.set_footer("Searching decoded sources for root-detection indicators...")
+        threading.Thread(
+            target=self.apk_find_root_detection_worker,
+            args=(apk_path,),
+            daemon=True
+        ).start()
+
+    def apk_find_root_detection_worker(self, apk_path):
+        jadx_dir = self._apk_project_dir(apk_path, "jadx")
+        apktool_dir = self._apk_project_dir(apk_path, "apktool")
+        roots = [p for p in (jadx_dir, apktool_dir) if p.exists()]
+
+        if not roots:
+            self.bridge.apk_result.emit(
+                "No decoded project was found.\n\n"
+                "Run JADX Analyze or Apktool Decode first."
+            )
+            self.bridge.message.emit("Root-detection search needs decoded files.")
+            return
+
+        indicators = (
+            "com.scottyab.rootbeer",
+            "rootbeer",
+            "isrooted(",
+            "isrootedwithoutbusyboxcheck(",
+            "detectrootmanagementapps",
+            "detectpotentiallydangerousapps",
+            "checkforsubinary",
+            "checkforrwpaths",
+            "checkfortestkeys",
+            "checkformagiskbinary",
+            "magisk",
+            "su",
+        )
+
+        hits = []
+        scanned = 0
+        allowed_ext = {".java", ".kt", ".smali", ".xml", ".txt"}
+
+        for root in roots:
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix.lower() not in allowed_ext:
+                    continue
+                scanned += 1
+                if scanned > 20000:
+                    break
+
+                try:
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+
+                lower = text.lower()
+                matched = [item for item in indicators if item in lower]
+                if not matched:
+                    continue
+
+                rel = str(path.relative_to(root))
+                line_numbers = []
+                for n, line in enumerate(text.splitlines(), start=1):
+                    ll = line.lower()
+                    if any(item in ll for item in matched):
+                        line_numbers.append(n)
+                        if len(line_numbers) >= 8:
+                            break
+
+                hits.append((root.name, rel, matched[:5], line_numbers))
+                if len(hits) >= 80:
+                    break
+
+        lines = [
+            "ROOT-DETECTION STATIC ANALYSIS",
+            "",
+            f"APK: {apk_path.name}",
+            f"Files scanned: {scanned}",
+            f"Matches: {len(hits)}",
+            "",
+        ]
+
+        if not hits:
+            lines.append("No common RootBeer/root-detection indicators were found in the decoded text.")
+        else:
+            for source, rel, matched, nums in hits:
+                lines.append(f"[{source}] {rel}")
+                lines.append("  Indicators: " + ", ".join(matched))
+                if nums:
+                    lines.append("  Lines: " + ", ".join(str(n) for n in nums))
+                lines.append("")
+
+        lines.extend([
+            "Analysis note:",
+            "A match shows where root-detection logic or related strings appear. "
+            "It does not prove that the application blocks rooted devices, and PhoneHub does not automatically modify the decision branch."
+        ])
+
+        self.bridge.apk_result.emit("\n".join(lines))
+        self.bridge.message.emit("Root-detection search complete.")
+
+    def apk_open_lab_folder(self):
+        APK_LAB_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(APK_LAB_DIR))
+
     def page_settings(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1149,7 +1498,7 @@ class PhoneHub(QWidget):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
-        names = ["Dashboard", "Setup New Phone", "Screen", "Camera", "Files", "Apps", "Control", "Service Lab", "Settings"]
+        names = ["Dashboard", "Setup New Phone", "Screen", "Camera", "Files", "Apps", "Control", "Service Lab", "APK Analysis", "Settings"]
         if index < len(names):
             self.set_footer(f"Opened {names[index]} page.")
 
