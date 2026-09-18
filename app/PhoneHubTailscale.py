@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.31-policy-profiles"
+APP_VERSION = "v3.31.1-profiles-v11-compatible"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -3276,21 +3276,28 @@ class PhoneHubTailscale(PhoneHub):
                 self.profile_status_label.setText(f"{label}: no matching apps are installed.")
             return
 
-        package_arg = ",".join(packages)
+        # Compatibility path: apply one package at a time using the original
+        # PhoneHub Notifier v1.1 policy actions. This avoids requiring an APK
+        # replacement just to use desktop policy profiles.
+        single_action = "unsuspend" if name == "full" else "suspend"
+        changed = 0
+        refused = []
 
-        cmd = [
-            "adb", "-s", target, "shell", "am", "start",
-            "-n", "com.phonehub.notifier/.MainActivity",
-            "--es", "policy_action", action,
-            "--es", "packages", package_arg,
-        ]
-        result = run_quiet(cmd, timeout=12)
-        if "Error" in result or "Exception" in result:
-            self.set_footer(f"{label} could not be sent.")
-            return
+        for pkg in packages:
+            result = run_quiet([
+                "adb", "-s", target, "shell", "am", "start",
+                "-n", "com.phonehub.notifier/.MainActivity",
+                "--es", "policy_action", single_action,
+                "--es", "package", pkg,
+            ], timeout=10)
+
+            if "Error" in result or "Exception" in result:
+                refused.append(pkg)
+            else:
+                changed += 1
 
         install_action = "block_installs" if block_installs else "allow_installs"
-        run_quiet([
+        install_result = run_quiet([
             "adb", "-s", target, "shell", "am", "start",
             "-n", "com.phonehub.notifier/.MainActivity",
             "--es", "policy_action", install_action,
@@ -3298,17 +3305,17 @@ class PhoneHubTailscale(PhoneHub):
 
         if hasattr(self, "profile_status_label"):
             if name == "full":
-                self.profile_status_label.setText(
-                    f"Profile: Full Access — restored {len(packages)} managed apps and allowed app installation."
-                )
+                msg = f"Profile: Full Access — restore sent to {changed} managed apps; app installation allowed."
             else:
                 install_text = " App installation blocked." if block_installs else ""
-                self.profile_status_label.setText(
-                    f"Profile: {label} — suspended {len(packages)} installed apps.{install_text}"
-                )
+                msg = f"Profile: {label} — suspend sent to {changed} installed apps.{install_text}"
 
-        self.set_footer(f"{label} applied.")
-        QTimer.singleShot(1200, self.check_device_owner_status)
+            if refused:
+                msg += f" Could not send policy to: {', '.join(refused[:4])}"
+            self.profile_status_label.setText(msg)
+
+        self.set_footer(f"{label} applied with PhoneHub Notifier v1.1 compatibility.")
+        QTimer.singleShot(1600, self.check_device_owner_status)
 
     def _schedule_app_status_check(self):
         if hasattr(self, "app_status_timer"):
