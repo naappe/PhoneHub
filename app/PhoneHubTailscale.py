@@ -1,6 +1,7 @@
 import sys
 import re
 import urllib.request
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
@@ -27,10 +28,11 @@ from PhoneHub import (
     parse_adb_devices,
     run_quiet,
     run_background,
+    scrcpy_path,
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.1-clean-navigation-layout"
+APP_VERSION = "v3.3-integrated-system-check"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -41,6 +43,7 @@ LOCAL_APK_DIR = Path(r"C:\\PhoneHub\\apps")
 class AutoDetectBridge(QObject):
     state = Signal(dict)
     wizard = Signal(dict)
+    health = Signal(dict)
 
 class PhoneHubTailscale(PhoneHub):
     def __init__(self):
@@ -57,12 +60,14 @@ class PhoneHubTailscale(PhoneHub):
         self.auto_bridge = AutoDetectBridge()
         self.auto_bridge.state.connect(self._apply_auto_detect_state)
         self.auto_bridge.wizard.connect(self._apply_wizard_result)
+        self.auto_bridge.health.connect(self._apply_health_results)
 
         self.wizard_step = 1
         self.wizard_serial = ""
         self.wizard_detected_ip = ""
         self.wizard_remote_connected = False
         self._wizard_busy = False
+        self._health_busy = False
 
         # Detection now runs in a background thread. The old implementation ran
         # several adb commands on the UI thread every 3 seconds, which caused
@@ -411,6 +416,50 @@ class PhoneHubTailscale(PhoneHub):
         overview_layout.addWidget(self.wizard_steps_label)
         layout.addWidget(overview)
 
+        health_box, health_layout, _ = self.card(
+            "System Check",
+            "Check the complete PhoneHub path inside this app: PC tools, Tailscale, USB, phone, remote ADB and Android readiness."
+        )
+
+        health_actions = QHBoxLayout()
+        health_actions.setSpacing(8)
+
+        self.health_check_button = QPushButton("Run Check All")
+        self.health_check_button.setObjectName("primary")
+        self.health_check_button.setMinimumHeight(44)
+        self.health_check_button.clicked.connect(self.run_health_check)
+
+        refresh_setup = QPushButton("Retry Current Setup Step")
+        refresh_setup.setMinimumHeight(44)
+        refresh_setup.clicked.connect(self.wizard_action)
+
+        health_actions.addWidget(self.health_check_button)
+        health_actions.addWidget(refresh_setup)
+        health_layout.addLayout(health_actions)
+
+        self.health_summary = QLabel(
+            "1. Platform-Tools      — Not checked\n"
+            "2. scrcpy              — Not checked\n"
+            "3. Python + PySide6     — Not checked\n"
+            "4. PhoneHub + Git       — Not checked\n"
+            "5. Tailscale PC         — Not checked\n"
+            "6. USB + debugging      — Not checked\n"
+            "7. Tailscale phone      — Not checked\n"
+            "8. Remote ADB           — Not checked\n"
+            "9. Android readiness    — Not checked"
+        )
+        self.health_summary.setObjectName("big")
+        self.health_summary.setWordWrap(True)
+        self.health_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        health_layout.addWidget(self.health_summary)
+
+        self.health_overall = QLabel("Status: Not checked")
+        self.health_overall.setObjectName("sideStatus")
+        self.health_overall.setWordWrap(True)
+        health_layout.addWidget(self.health_overall)
+
+        layout.addWidget(health_box)
+
         layout.addStretch()
         QTimer.singleShot(200, self._render_wizard_step)
         return page
@@ -652,6 +701,190 @@ class PhoneHubTailscale(PhoneHub):
                 )
 
         self._render_wizard_step()
+
+    def _health_state_line(self, index, name, state, detail=""):
+        suffix = f" — {detail}" if detail else ""
+        return f"{index}. {name:<19} — {state}{suffix}"
+
+    def run_health_check(self):
+        if self._health_busy:
+            return
+
+        self._health_busy = True
+        if hasattr(self, "health_check_button"):
+            self.health_check_button.setEnabled(False)
+            self.health_check_button.setText("Checking...")
+        if hasattr(self, "health_overall"):
+            self.health_overall.setText("Status: Running all checks...")
+        self.set_footer("Running PhoneHub system check in background...")
+
+        def worker():
+            results = []
+
+            def add(name, state, detail=""):
+                results.append({"name": name, "state": state, "detail": detail})
+
+            # 1. Platform-Tools
+            adb = shutil.which("adb")
+            fastboot = shutil.which("fastboot")
+            if adb and fastboot:
+                version = run_quiet([adb, "version"], timeout=4).splitlines()
+                add("Platform-Tools", "PASS", version[0] if version else "ADB + Fastboot found")
+            elif adb:
+                add("Platform-Tools", "WARN", "ADB found; Fastboot missing")
+            else:
+                add("Platform-Tools", "FAIL", "ADB not found")
+
+            # 2. scrcpy
+            scrcpy = scrcpy_path()
+            if scrcpy:
+                ver = run_quiet([scrcpy, "--version"], timeout=4).splitlines()
+                add("scrcpy", "PASS", ver[0] if ver else "Ready")
+            else:
+                add("scrcpy", "FAIL", "scrcpy not found")
+
+            # 3. Python + PySide6
+            try:
+                import PySide6
+                add("Python + PySide6", "PASS", f"Python {sys.version_info.major}.{sys.version_info.minor}; PySide6 {PySide6.__version__}")
+            except Exception:
+                add("Python + PySide6", "FAIL", "PySide6 import failed")
+
+            # 4. PhoneHub files + Git
+            root = Path(r"C:\PhoneHub")
+            launcher = root / "PhoneHub.bat"
+            git_dir = root / ".git"
+            if not launcher.exists():
+                add("PhoneHub + Git", "FAIL", "PhoneHub.bat missing")
+            elif not git_dir.exists():
+                add("PhoneHub + Git", "WARN", "PhoneHub found; Git repo missing")
+            else:
+                git = shutil.which("git")
+                if not git:
+                    add("PhoneHub + Git", "WARN", "Git executable missing")
+                else:
+                    status = run_quiet([git, "-C", str(root), "status", "--porcelain"], timeout=5)
+                    if status:
+                        add("PhoneHub + Git", "WARN", "Local changes detected")
+                    else:
+                        branch = run_quiet([git, "-C", str(root), "branch", "--show-current"], timeout=4) or "main"
+                        add("PhoneHub + Git", "PASS", f"Clean working tree; branch {branch}")
+
+            # 5. Tailscale PC
+            tailscale = shutil.which("tailscale")
+            if not tailscale:
+                for candidate in (
+                    Path(r"C:\Program Files\Tailscale\tailscale.exe"),
+                    Path(r"C:\Program Files (x86)\Tailscale\tailscale.exe"),
+                ):
+                    if candidate.exists():
+                        tailscale = str(candidate)
+                        break
+            if tailscale:
+                pc_ip = run_quiet([tailscale, "ip", "-4"], timeout=5).splitlines()
+                if pc_ip:
+                    add("Tailscale PC", "PASS", pc_ip[0])
+                else:
+                    add("Tailscale PC", "WARN", "Installed but not connected")
+            else:
+                add("Tailscale PC", "FAIL", "Not installed")
+
+            # 6-8. Device path
+            usb, remote, unauthorized, _ = parse_adb_devices()
+            serial = usb[0] if usb else ""
+
+            if unauthorized:
+                add("USB + debugging", "WARN", "USB debugging authorization required")
+            elif serial:
+                model = run_quiet(["adb", "-s", serial, "shell", "getprop", "ro.product.model"], timeout=4) or "Android phone"
+                add("USB + debugging", "PASS", f"Connected: {model}")
+            else:
+                add("USB + debugging", "WARN", "USB not connected")
+
+            detected_ip = ""
+            installed = False
+            if serial:
+                installed = self._tailscale_installed(serial)
+                if installed:
+                    detected_ip = self._detect_tailscale_ip(serial)
+
+            saved_ip, port = get_saved_ip()
+            phone_ip = detected_ip or saved_ip
+
+            if installed and detected_ip:
+                add("Tailscale phone", "PASS", detected_ip)
+            elif installed:
+                add("Tailscale phone", "WARN", "Installed; no active 100.x.x.x IP detected")
+            elif serial:
+                add("Tailscale phone", "FAIL", "App not detected")
+            elif saved_ip:
+                add("Tailscale phone", "WARN", f"USB absent; saved IP {saved_ip}")
+            else:
+                add("Tailscale phone", "FAIL", "Cannot verify")
+
+            target = f"{phone_ip}:{port}" if phone_ip else ""
+            remote_ok = bool(target and target in remote)
+            if remote_ok:
+                add("Remote ADB", "PASS", target)
+            elif target:
+                add("Remote ADB", "WARN", f"Not connected: {target}")
+            else:
+                add("Remote ADB", "FAIL", "No phone Tailscale IP")
+
+            # 9. Android readiness. Prefer remote target, then USB.
+            check_target = target if remote_ok else serial
+            if check_target:
+                boot = run_quiet(["adb", "-s", check_target, "shell", "getprop", "sys.boot_completed"], timeout=5).strip()
+                shell_echo = run_quiet(["adb", "-s", check_target, "shell", "echo", "PHONEHUB_READY"], timeout=5).strip()
+                if boot == "1" and shell_echo == "PHONEHUB_READY":
+                    add("Android readiness", "PASS", "Boot complete; ADB shell responsive")
+                elif shell_echo == "PHONEHUB_READY":
+                    add("Android readiness", "WARN", f"ADB responsive; boot_completed={boot or 'unknown'}")
+                else:
+                    add("Android readiness", "FAIL", "ADB shell not responsive")
+            else:
+                add("Android readiness", "FAIL", "No reachable device")
+
+            self.auto_bridge.health.emit({"results": results})
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_health_results(self, payload):
+        self._health_busy = False
+        results = payload.get("results", [])
+
+        if hasattr(self, "health_check_button"):
+            self.health_check_button.setEnabled(True)
+            self.health_check_button.setText("Run Check All")
+
+        lines = []
+        fail_count = 0
+        warn_count = 0
+
+        for index, item in enumerate(results, start=1):
+            state = item.get("state", "UNKNOWN")
+            name = item.get("name", "Check")
+            detail = item.get("detail", "")
+            if state == "FAIL":
+                fail_count += 1
+            elif state == "WARN":
+                warn_count += 1
+            lines.append(self._health_state_line(index, name, state, detail))
+
+        if hasattr(self, "health_summary"):
+            self.health_summary.setText("\n".join(lines))
+
+        if fail_count:
+            overall = f"Status: Needs attention — {fail_count} failed, {warn_count} warning(s)"
+        elif warn_count:
+            overall = f"Status: Ready with {warn_count} warning(s)"
+        else:
+            overall = "Status: PHONEHUB READY — all checks passed"
+
+        if hasattr(self, "health_overall"):
+            self.health_overall.setText(overall)
+        self.set_footer(overall)
 
     def _detect_tailscale_ip(self, serial):
         """Return the phone's active Tailscale IPv4 address, if visible."""
