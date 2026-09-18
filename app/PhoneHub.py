@@ -15,7 +15,9 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QFileDialog
 )
 
-from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4\nfrom state_engine import detect_device_state, state_summary\nfrom security_monitor import scan_device, summarize_findings, EVIDENCE_DIR
+from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
+from state_engine import detect_device_state, state_summary
+from security_monitor import scan_device, summarize_findings, EVIDENCE_DIR
 
 APP_VERSION = "v3.5-unified-state-security"
 
@@ -271,7 +273,9 @@ class Bridge(QObject):
     status = Signal(dict)
     screen_result = Signal(str)
     service_result = Signal(str)
-    apk_result = Signal(str)\n    state_result = Signal(str)\n    security_result = Signal(str)
+    apk_result = Signal(str)
+    state_result = Signal(str)
+    security_result = Signal(str)
 
 
 class PhoneHub(QWidget):
@@ -291,18 +295,29 @@ class PhoneHub(QWidget):
         self.current_view = ""
         self.screen_process = None
         self.camera_process = None
-        self.camera_facing = ""\n        self.last_device_state = None\n        self._state_busy = False\n        self._security_busy = False
+        self.camera_facing = ""
+        self.last_device_state = None
+        self._state_busy = False
+        self._security_busy = False
 
         self.bridge = Bridge()
         self.bridge.message.connect(self.set_footer)
         self.bridge.status.connect(self.apply_status)
         self.bridge.screen_result.connect(self.set_screen_result)
         self.bridge.service_result.connect(self.set_service_result)
-        self.bridge.apk_result.connect(self.set_apk_result)\n        self.bridge.state_result.connect(self.set_state_result)\n        self.bridge.security_result.connect(self.set_security_result)
+        self.bridge.apk_result.connect(self.set_apk_result)
+        self.bridge.state_result.connect(self.set_state_result)
+        self.bridge.security_result.connect(self.set_security_result)
 
         self.nav_buttons = []
         self.build_ui()
         self.refresh_status()
+
+        self.state_timer = QTimer(self)
+        self.state_timer.setInterval(5000)
+        self.state_timer.timeout.connect(self.state_refresh_async)
+        self.state_timer.start()
+        QTimer.singleShot(800, self.state_refresh_async)
 
     def build_ui(self):
         root = QHBoxLayout(self)
@@ -337,6 +352,8 @@ class PhoneHub(QWidget):
             ("Apps", self.page_apps),
             ("Control", self.page_control),
             ("Service Lab", self.page_service_lab),
+            ("Device State", self.page_device_state),
+            ("Security", self.page_security),
             ("APK Analysis", self.page_apk_analysis),
             ("Settings", self.page_settings),
         ]
@@ -1112,6 +1129,142 @@ class PhoneHub(QWidget):
     def service_reboot_system(self):
         self._service_reboot("", "System")
 
+
+
+    def page_device_state(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        info, _, _ = self.card(
+            "Device State Engine",
+            "PhoneHub automatically detects the current transport/mode and records state transitions. "
+            "This is condition-driven switching: the UI follows ANDROID_ADB, RECOVERY_ADB, FASTBOOT, "
+            "ADB_UNAUTHORIZED, or OFFLINE without triggering destructive actions."
+        )
+        layout.addWidget(info)
+
+        row = QHBoxLayout()
+        refresh = QPushButton("Refresh State")
+        refresh.setObjectName("primary")
+        refresh.clicked.connect(self.state_refresh_async)
+
+        scan = QPushButton("Run Service Scan")
+        scan.clicked.connect(self.service_scan_async)
+
+        row.addWidget(refresh)
+        row.addWidget(scan)
+        layout.addLayout(row)
+
+        box, box_layout, _ = self.card(
+            "Live State",
+            "Auto-monitoring every 5 seconds. No destructive action is triggered automatically."
+        )
+        self.state_result_box = QTextEdit()
+        self.state_result_box.setReadOnly(True)
+        self.state_result_box.setMinimumHeight(260)
+        self.state_result_box.setText("Waiting for first state scan...")
+        box_layout.addWidget(self.state_result_box)
+        layout.addWidget(box)
+        layout.addStretch()
+        return page
+
+    def set_state_result(self, text):
+        if hasattr(self, "state_result_box"):
+            self.state_result_box.setText(text)
+
+    def state_refresh_async(self):
+        if self._state_busy:
+            return
+        self._state_busy = True
+        threading.Thread(target=self.state_refresh_worker, daemon=True).start()
+
+    def state_refresh_worker(self):
+        try:
+            current = detect_device_state()
+            previous = self.last_device_state
+            self.last_device_state = current
+            self.bridge.state_result.emit(state_summary(current, previous))
+        finally:
+            self._state_busy = False
+
+    def page_security(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        info, _, _ = self.card(
+            "Security Monitor",
+            "Read-only Android security telemetry. PhoneHub captures ADB state, Tailscale/VPN presence, "
+            "routes, visible sockets, third-party package count, and enabled accessibility services. "
+            "System-critical and trusted components are protected from automatic actions."
+        )
+        layout.addWidget(info)
+
+        row = QHBoxLayout()
+
+        scan = QPushButton("Run Security Scan")
+        scan.setObjectName("primary")
+        scan.clicked.connect(self.security_scan_async)
+
+        evidence = QPushButton("Open Evidence Folder")
+        evidence.clicked.connect(self.open_security_evidence)
+
+        row.addWidget(scan)
+        row.addWidget(evidence)
+        layout.addLayout(row)
+
+        box, box_layout, _ = self.card(
+            "Security Report",
+            "Policy: detect -> identify owner -> protect trusted/system items -> capture evidence -> review."
+        )
+        self.security_result_box = QTextEdit()
+        self.security_result_box.setReadOnly(True)
+        self.security_result_box.setMinimumHeight(280)
+        self.security_result_box.setText("No security scan yet.")
+        box_layout.addWidget(self.security_result_box)
+        layout.addWidget(box)
+        layout.addStretch()
+        return page
+
+    def set_security_result(self, text):
+        if hasattr(self, "security_result_box"):
+            self.security_result_box.setText(text)
+
+    def security_scan_async(self):
+        if self._security_busy:
+            self.set_footer("Security scan already running.")
+            return
+
+        target, error = self._service_adb_target()
+        if not target:
+            QMessageBox.warning(self, "PhoneHub Security", error)
+            return
+
+        self._security_busy = True
+        self.set_footer("Running read-only security scan...")
+        threading.Thread(
+            target=self.security_scan_worker,
+            args=(target,),
+            daemon=True
+        ).start()
+
+    def security_scan_worker(self, target):
+        try:
+            findings = scan_device(target)
+            self.bridge.security_result.emit(summarize_findings(findings))
+            self.bridge.message.emit("Security scan complete.")
+        except Exception as exc:
+            self.bridge.security_result.emit(f"Security scan failed:\n{exc}")
+            self.bridge.message.emit("Security scan failed.")
+        finally:
+            self._security_busy = False
+
+    def open_security_evidence(self):
+        EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(EVIDENCE_DIR))
 
     def page_apk_analysis(self):
         page = QWidget()
