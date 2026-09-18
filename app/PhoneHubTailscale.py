@@ -3,7 +3,7 @@ import re
 import urllib.request
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -30,7 +30,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v2.9.1-auto-tailscale-installer-fix"
+APP_VERSION = "v2.9.2-auto-connect-status"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -41,6 +41,15 @@ class PhoneHubTailscale(PhoneHub):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"PhoneHub {APP_VERSION}")
+
+        # Automatically detect USB/remote connection changes so the Setup page
+        # changes to Connected without requiring the user to press Smart Check.
+        self._last_connection_signature = None
+        self.connection_timer = QTimer(self)
+        self.connection_timer.setInterval(3000)
+        self.connection_timer.timeout.connect(self.auto_refresh_connection_state)
+        self.connection_timer.start()
+        QTimer.singleShot(500, self.auto_refresh_connection_state)
 
         # Keep the window inside the visible desktop area on smaller laptops.
         screen = QApplication.primaryScreen()
@@ -344,6 +353,36 @@ class PhoneHubTailscale(PhoneHub):
 
         layout.addWidget(tailscale_box)
         return page
+
+    def auto_refresh_connection_state(self):
+        try:
+            usb, remote, unauthorized, _ = parse_adb_devices()
+            signature = (
+                tuple(sorted(usb)),
+                tuple(sorted(remote)),
+                tuple(sorted(unauthorized)),
+            )
+            if signature == self._last_connection_signature:
+                return
+
+            self._last_connection_signature = signature
+
+            # Reuse the existing Smart Check output so the user sees the same
+            # detailed state immediately after plugging/unplugging the phone.
+            if hasattr(self, "setup_log"):
+                self.setup_smart_check()
+
+            if unauthorized:
+                self.side_status.setText("USB authorization needed")
+            elif usb:
+                self.side_status.setText("USB connected")
+            elif remote:
+                self.side_status.setText("Phone online")
+            else:
+                self.side_status.setText("Phone offline")
+        except Exception:
+            # Never let background status polling interrupt PhoneHub.
+            pass
 
     def _usb_serial(self):
         usb, _, unauthorized, _ = parse_adb_devices()
