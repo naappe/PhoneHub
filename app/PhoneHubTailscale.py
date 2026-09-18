@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.27-app-control"
+APP_VERSION = "v3.27.1-app-control-status"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2676,28 +2676,73 @@ class PhoneHubTailscale(PhoneHub):
                 self.app_control_status.setText("Status: Phone not connected")
             return
 
-        output = run_quiet(["adb", "-s", target, "shell", "dpm", "list", "owners"], timeout=8)
-        if not output:
-            output = run_quiet(["adb", "-s", target, "shell", "dumpsys", "device_policy"], timeout=10)
-
-        is_owner = "com.phonehub.notifier" in output and (
-            "device owner" in output.lower() or "DeviceOwner" in output or "Owner" in output
-        )
+        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list", "owners"], timeout=8)
+        policy = run_quiet(["adb", "-s", target, "shell", "dumpsys", "device_policy"], timeout=12)
+        output = owners or policy
 
         installed = "com.phonehub.notifier" in run_quiet(
             ["adb", "-s", target, "shell", "pm", "list", "packages", "com.phonehub.notifier"],
             timeout=6,
         )
 
-        text = (
-            f"Status: Companion {'installed' if installed else 'not installed'} · "
-            f"Device Owner {'READY' if is_owner else 'NOT CONFIGURED'}"
+        combined = (owners + "\n" + policy).lower()
+        is_owner = (
+            "com.phonehub.notifier" in combined
+            and (
+                "device owner" in combined
+                or "deviceowner" in combined
+                or "owner component" in combined
+            )
         )
-        if hasattr(self, "app_control_status"):
-            self.app_control_status.setText(text)
 
-        if hasattr(self, "app_control_packages") and output:
-            self.app_control_packages.setText(output[:3500])
+        provisioned = bool(
+            "device provisioned: true" in policy.lower()
+            or "musersetupcomplete=true" in policy.lower()
+            or "musersetupcomplete: true" in policy.lower()
+        )
+
+        enabled_admin = (
+            "com.phonehub.notifier" in combined
+            and "enabled device admins" in policy.lower()
+        )
+
+        if is_owner:
+            summary = (
+                "Status: Device Owner READY\n"
+                f"Companion installed: {'YES' if installed else 'NO'}\n"
+                "App suspension: AVAILABLE\n"
+                "Install restrictions: AVAILABLE\n"
+                "Uninstall protection: AVAILABLE"
+            )
+        else:
+            summary = (
+                "Status: Device Owner NOT CONFIGURED\n"
+                f"Companion installed: {'YES' if installed else 'NO'}\n"
+                f"Device already provisioned: {'YES' if provisioned else 'NO'}\n"
+                f"Device Admin enabled: {'YES' if enabled_admin else 'NO'}\n"
+                "App suspension: UNAVAILABLE\n"
+                "Install restrictions: UNAVAILABLE\n"
+                "Uninstall protection: UNAVAILABLE"
+            )
+            if provisioned:
+                summary += (
+                    "\n\nThis phone is already provisioned. "
+                    "PhoneHub will not attempt Device Owner provisioning automatically."
+                )
+
+        if hasattr(self, "app_control_status"):
+            self.app_control_status.setText(summary)
+
+        if hasattr(self, "app_control_packages"):
+            report = [
+                "PHONEHUB APP CONTROL DIAGNOSTICS",
+                "",
+                summary,
+                "",
+                "Android Device Policy Manager:",
+                policy[:6000] if policy else "No device_policy output returned.",
+            ]
+            self.app_control_packages.setText("\n".join(report))
 
     def open_phonehub_companion(self):
         target = self._app_control_target()
@@ -2744,6 +2789,16 @@ class PhoneHubTailscale(PhoneHub):
         target = self._app_control_target()
         if not target:
             self.set_footer("Phone is not connected.")
+            return
+
+        policy = run_quiet(["adb", "-s", target, "shell", "dumpsys", "device_policy"], timeout=10)
+        if "com.phonehub.notifier" not in policy.lower() or "device owner" not in policy.lower():
+            if hasattr(self, "app_control_status"):
+                self.app_control_status.setText(
+                    "Status: Device Owner NOT CONFIGURED\n"
+                    "Policy action not sent. App Control remains read-only on this phone."
+                )
+            self.set_footer("Device Owner is required before applying App Control policies.")
             return
 
         pkg = self.app_control_package.text().strip() if hasattr(self, "app_control_package") else ""
