@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.31.1-profiles-v11-compatible"
+APP_VERSION = "v3.31.2-copy-profile-status"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2694,7 +2694,12 @@ class PhoneHubTailscale(PhoneHub):
         )
         self.profile_status_label.setObjectName("sideStatus")
         self.profile_status_label.setWordWrap(True)
+        self.profile_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         profile_layout.addWidget(self.profile_status_label)
+
+        copy_profile_status = QPushButton("Copy Profile Status")
+        copy_profile_status.clicked.connect(self.copy_profile_status)
+        profile_layout.addWidget(copy_profile_status)
 
         box_layout.addWidget(profile_box)
 
@@ -3194,6 +3199,14 @@ class PhoneHubTailscale(PhoneHub):
         if hasattr(self, "app_control_packages"):
             self.app_control_packages.setText(text)
         self.set_footer("Package scan complete.")
+
+    def copy_profile_status(self):
+        text = self.profile_status_label.text() if hasattr(self, "profile_status_label") else ""
+        if not text:
+            self.set_footer("No profile status to copy.")
+            return
+        QApplication.clipboard().setText(text)
+        self.set_footer("Profile status copied to clipboard.")
 
     def _policy_profile_packages(self, name):
         profiles = {
