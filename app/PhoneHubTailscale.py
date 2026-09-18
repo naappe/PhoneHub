@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QHBoxLayout,
+    QComboBox,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -38,7 +39,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.18.1-startup-hotfix"
+APP_VERSION = "v3.19-audio-studio"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -80,8 +81,11 @@ class PhoneHubTailscale(PhoneHub):
         self.audio_source = "mic-voice-communication"
         self.audio_log_handle = None
         self.audio_log_path = ""
-        self.audio_buffer_ms = 30
-        self.audio_output_buffer_ms = 5
+        self.audio_buffer_ms = 50
+        self.audio_output_buffer_ms = 10
+        self.audio_codec = "aac"
+        self.audio_bit_rate = "128K"
+        self.audio_dup = False
         self.audio_no_playback = False
         self.audio_listen_requested = False
         self.audio_monitor_window = None
@@ -381,6 +385,102 @@ class PhoneHubTailscale(PhoneHub):
         box_layout.addLayout(echo_free_actions)
         box_layout.addWidget(monitor_note)
 
+        source_box, source_layout, _ = self.card(
+            "Audio Source",
+            "Choose what Android audio source PhoneHub should monitor.",
+        )
+
+        self.audio_source_combo = QComboBox()
+        self.audio_source_combo.addItem("Clear Speech", "mic-voice-communication")
+        self.audio_source_combo.addItem("Natural Mic", "mic")
+        self.audio_source_combo.addItem("Raw Mic", "mic-unprocessed")
+        self.audio_source_combo.addItem("Camera Mic", "mic-camcorder")
+        self.audio_source_combo.addItem("Voice Recognition", "mic-voice-recognition")
+        self.audio_source_combo.addItem("Phone Audio Output", "output")
+        self.audio_source_combo.addItem("App Playback", "playback")
+        self.audio_source_combo.addItem("Call - Other Side", "voice-call-downlink")
+        self.audio_source_combo.addItem("Call - My Side", "voice-call-uplink")
+        self.audio_source_combo.addItem("Call - Both", "voice-call")
+        self.audio_source_combo.addItem("Voice Performance", "voice-performance")
+        self.audio_source_combo.currentIndexChanged.connect(self.on_audio_source_changed)
+        source_layout.addWidget(self.audio_source_combo)
+
+        source_row = QHBoxLayout()
+        dup_btn = QPushButton("Playback + Keep Sound on Phone")
+        dup_btn.clicked.connect(self.toggle_audio_dup)
+
+        encoders_btn = QPushButton("List Audio Encoders")
+        encoders_btn.clicked.connect(self.list_audio_encoders)
+
+        source_row.addWidget(dup_btn)
+        source_row.addWidget(encoders_btn)
+        source_layout.addLayout(source_row)
+
+        self.audio_encoder_info = QLabel("Encoder: Auto")
+        self.audio_encoder_info.setObjectName("big")
+        self.audio_encoder_info.setWordWrap(True)
+        source_layout.addWidget(self.audio_encoder_info)
+        box_layout.addWidget(source_box)
+
+        quality_box, quality_layout, _ = self.card(
+            "Audio Quality",
+            "AAC is the safest Windows-compatible default. Opus, FLAC and RAW are available for testing.",
+        )
+
+        quality_row = QHBoxLayout()
+        self.audio_codec_combo = QComboBox()
+        self.audio_codec_combo.addItem("AAC", "aac")
+        self.audio_codec_combo.addItem("Opus", "opus")
+        self.audio_codec_combo.addItem("FLAC", "flac")
+        self.audio_codec_combo.addItem("RAW", "raw")
+        self.audio_codec_combo.currentIndexChanged.connect(self.on_audio_codec_changed)
+
+        q96 = QPushButton("Voice 96K")
+        q96.clicked.connect(lambda: self.set_audio_quality("96K"))
+        q128 = QPushButton("Standard 128K")
+        q128.setObjectName("primary")
+        q128.clicked.connect(lambda: self.set_audio_quality("128K"))
+        q192 = QPushButton("High 192K")
+        q192.clicked.connect(lambda: self.set_audio_quality("192K"))
+
+        quality_row.addWidget(self.audio_codec_combo)
+        quality_row.addWidget(q96)
+        quality_row.addWidget(q128)
+        quality_row.addWidget(q192)
+        quality_layout.addLayout(quality_row)
+
+        self.audio_quality_label = QLabel("Quality: AAC · 128K")
+        self.audio_quality_label.setObjectName("big")
+        quality_layout.addWidget(self.audio_quality_label)
+        box_layout.addWidget(quality_box)
+
+        latency_box, latency_layout, _ = self.card(
+            "Latency / Stability",
+            "Use Low for responsiveness, Balanced for normal listening, and Stable/Smooth if audio breaks up.",
+        )
+
+        latency_row = QHBoxLayout()
+        low = QPushButton("Low 40ms")
+        low.clicked.connect(lambda: self.set_audio_latency(40, "Low"))
+        balanced = QPushButton("Balanced 50ms")
+        balanced.setObjectName("primary")
+        balanced.clicked.connect(lambda: self.set_audio_latency(50, "Balanced"))
+        stable = QPushButton("Stable 100ms")
+        stable.clicked.connect(lambda: self.set_audio_latency(100, "Stable"))
+        smooth = QPushButton("Smooth 200ms")
+        smooth.clicked.connect(lambda: self.set_audio_latency(200, "Smooth"))
+
+        latency_row.addWidget(low)
+        latency_row.addWidget(balanced)
+        latency_row.addWidget(stable)
+        latency_row.addWidget(smooth)
+        latency_layout.addLayout(latency_row)
+
+        self.audio_latency_label = QLabel("Latency: Balanced · 50 ms stream · 10 ms output")
+        self.audio_latency_label.setObjectName("big")
+        latency_layout.addWidget(self.audio_latency_label)
+        box_layout.addWidget(latency_box)
+
         voice_actions = QHBoxLayout()
         voice_actions.setSpacing(8)
 
@@ -430,7 +530,7 @@ class PhoneHubTailscale(PhoneHub):
         self.call_test_note.setWordWrap(True)
         box_layout.addWidget(self.call_test_note)
 
-        self.audio_mode_label = QLabel("Voice mode: Anti Echo (30 ms stream buffer + 5 ms output buffer + Android voice processing)")
+        self.audio_mode_label = QLabel("Voice mode: Clear Speech · Android voice processing · Balanced buffer")
         self.audio_mode_label.setObjectName("big")
         self.audio_mode_label.setWordWrap(True)
         box_layout.addWidget(self.audio_mode_label)
@@ -475,14 +575,15 @@ class PhoneHubTailscale(PhoneHub):
 
         info, _, _ = self.card(
             "How it works",
-            "Anti Echo is the recommended mode for live listening: Android voice-communication processing, 30 ms stream buffering and 5 ms PC output buffering. "
-            "Clear Voice uses the same Android voice-processing source with conservative defaults. "
+            "Clear Speech is the recommended voice mode. It uses Android voice-communication processing when available. "
+            "Balanced audio uses 50 ms stream buffering and scrcpy's normal 10 ms output buffer. "
+
             "For active calls, try Other Side first. Call Both may sound doubled or echo-like on some phones because it includes both uplink and downlink paths. "
             "Call Both / Other Side / My Side use Android call-audio sources when the device permits it. "
             "This can reduce delayed echo and may use Android echo cancellation / automatic gain control when supported. "
             "Natural Mic uses the raw normal microphone path. When Record is enabled, "
             "PhoneHub restarts the same selected microphone stream with scrcpy recording enabled and saves "
-            "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
+            "an AAC/M4A audio file under C:\\PhoneHub\\runtime\\audio. "
             "Press Record again to stop recording while continuing live listening. "
             "Live listening always has some transport delay. If the phone microphone hears the PC speaker, that delayed sound returns as echo. "
             "Echo-Free Record disables PC audio playback while recording, which removes that feedback path and gives the cleanest saved speech. "
@@ -495,12 +596,12 @@ class PhoneHubTailscale(PhoneHub):
 
     def set_anti_echo_mode(self):
         self.audio_source = "mic-voice-communication"
-        self.audio_buffer_ms = 30
-        self.audio_output_buffer_ms = 5
+        self.audio_buffer_ms = 40
+        self.audio_output_buffer_ms = 10
 
         if hasattr(self, "audio_mode_label"):
             self.audio_mode_label.setText(
-                "Voice mode: Anti Echo (30 ms stream buffer + 5 ms output buffer + Android voice processing)"
+                "Voice mode: Clear Speech · 40 ms stream · 10 ms output · Android voice processing"
             )
 
         proc = getattr(self, "audio_process", None)
@@ -512,6 +613,86 @@ class PhoneHubTailscale(PhoneHub):
             self._launch_live_audio(record_path)
         else:
             self.set_footer("Anti Echo mode selected.")
+
+    def on_audio_source_changed(self):
+        if not hasattr(self, "audio_source_combo"):
+            return
+        source = self.audio_source_combo.currentData()
+        label = self.audio_source_combo.currentText()
+        if source:
+            self.set_audio_source(source, label)
+
+    def on_audio_codec_changed(self):
+        if not hasattr(self, "audio_codec_combo"):
+            return
+        codec = self.audio_codec_combo.currentData()
+        if codec:
+            self.audio_codec = codec
+            if hasattr(self, "audio_quality_label"):
+                rate = "PCM" if codec == "raw" else self.audio_bit_rate
+                self.audio_quality_label.setText(f"Quality: {codec.upper()} · {rate}")
+            self.set_footer(f"Audio codec set to {codec.upper()}.")
+
+    def set_audio_quality(self, bit_rate):
+        self.audio_bit_rate = bit_rate
+        if hasattr(self, "audio_quality_label"):
+            codec = getattr(self, "audio_codec", "aac")
+            rate = "PCM" if codec == "raw" else bit_rate
+            self.audio_quality_label.setText(f"Quality: {codec.upper()} · {rate}")
+        self.set_footer(f"Audio bitrate set to {bit_rate}.")
+
+    def set_audio_latency(self, buffer_ms, label):
+        self.audio_buffer_ms = int(buffer_ms)
+        self.audio_output_buffer_ms = 10
+        if hasattr(self, "audio_latency_label"):
+            self.audio_latency_label.setText(
+                f"Latency: {label} · {buffer_ms} ms stream · 10 ms output"
+            )
+
+        proc = getattr(self, "audio_process", None)
+        if proc and proc.poll() is None:
+            was_recording = getattr(self, "audio_recording", False)
+            record_path = self.audio_record_path if was_recording else ""
+            self._stop_audio_process_only()
+            self._launch_live_audio(record_path)
+        self.set_footer(f"Audio latency preset: {label}.")
+
+    def toggle_audio_dup(self):
+        self.audio_dup = not getattr(self, "audio_dup", False)
+        if self.audio_dup:
+            self.audio_source = "playback"
+            if hasattr(self, "audio_source_combo"):
+                index = self.audio_source_combo.findData("playback")
+                if index >= 0:
+                    self.audio_source_combo.blockSignals(True)
+                    self.audio_source_combo.setCurrentIndex(index)
+                    self.audio_source_combo.blockSignals(False)
+            self.set_footer("Audio duplication ON: playback stays on the phone when Android/app permits it.")
+        else:
+            self.set_footer("Audio duplication OFF.")
+
+        if hasattr(self, "audio_encoder_info"):
+            self.audio_encoder_info.setText(
+                "Audio duplication: ON · Android 13+"
+                if self.audio_dup else
+                "Encoder: Auto · Audio duplication OFF"
+            )
+
+    def list_audio_encoders(self):
+        scrcpy = scrcpy_path()
+        if not scrcpy:
+            self.set_footer("scrcpy not found.")
+            return
+
+        output = run_quiet([scrcpy, "--list-encoders"], timeout=12)
+        lines = [
+            line.strip() for line in output.splitlines()
+            if "audio" in line.lower() or "opus" in line.lower() or "aac" in line.lower() or "flac" in line.lower()
+        ]
+        shown = "\n".join(lines[:12]) if lines else (output[:1200] or "No encoder information returned.")
+        if hasattr(self, "audio_encoder_info"):
+            self.audio_encoder_info.setText(shown)
+        self.set_footer("Audio encoder list refreshed.")
 
     def open_phone_dialer(self):
         target = self._audio_target()
@@ -604,12 +785,7 @@ class PhoneHubTailscale(PhoneHub):
         self.audio_source = source
         if not source.startswith("voice-call"):
             self._call_was_active = False
-        if source == "mic-voice-communication":
-            self.audio_buffer_ms = 30
-            self.audio_output_buffer_ms = 5
-        else:
-            self.audio_buffer_ms = 40
-            self.audio_output_buffer_ms = 10
+        self.audio_output_buffer_ms = 10
         if hasattr(self, "audio_mode_label"):
             labels = {
                 "mic-voice-communication": "Voice mode: Clear Voice + Low Echo",
@@ -676,10 +852,18 @@ class PhoneHubTailscale(PhoneHub):
             f"--audio-source={getattr(self, 'audio_source', 'mic-voice-communication')}",
             "--no-video",
             "--no-control",
-            f"--audio-buffer={getattr(self, 'audio_buffer_ms', 30)}",
-            f"--audio-output-buffer={getattr(self, 'audio_output_buffer_ms', 5)}",
+            f"--audio-buffer={getattr(self, 'audio_buffer_ms', 50)}",
+            f"--audio-output-buffer={getattr(self, 'audio_output_buffer_ms', 10)}",
+            f"--audio-codec={getattr(self, 'audio_codec', 'aac')}",
         ]
+
+        if getattr(self, "audio_codec", "aac") != "raw":
+            args.append(f"--audio-bit-rate={getattr(self, 'audio_bit_rate', '128K')}")
+
+        if getattr(self, "audio_dup", False):
+            args.append("--audio-dup")
         if record_path:
+            args = [arg for arg in args if not arg.startswith("--audio-codec=") and not arg.startswith("--audio-bit-rate=")]
             args.extend([
                 "--audio-codec=aac",
                 "--audio-bit-rate=128K",
@@ -1360,7 +1544,7 @@ class PhoneHubTailscale(PhoneHub):
             f"1. Keep Tailscale ON on PC\n"
             f"2. Keep Tailscale ON on phone\n"
             f"3. Open PhoneHub\n"
-            f"4. Use Home / Screen / Camera / Audio / Files / Apps / Control\n\n"
+            f"4. Use Home / Screen / Camera / Audio / Files / Apps / Control / Device\n\n"
             f"For a new phone or repairs, use Setup."
         )
 
