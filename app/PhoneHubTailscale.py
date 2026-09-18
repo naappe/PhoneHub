@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.27.1-app-control-status"
+APP_VERSION = "v3.27.2-device-owner-detection-fix"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2685,15 +2685,28 @@ class PhoneHubTailscale(PhoneHub):
             timeout=6,
         )
 
-        combined = (owners + "\n" + policy).lower()
-        is_owner = (
-            "com.phonehub.notifier" in combined
-            and (
-                "device owner" in combined
-                or "deviceowner" in combined
-                or "owner component" in combined
-            )
+        combined = (owners + "\n" + policy)
+        combined_lower = combined.lower()
+
+        # Detect an actual Device Owner assignment, not incidental mentions such as
+        # "Device Owner Type: -1" or package listings inside dumpsys output.
+        owner_patterns = [
+            r"device\s+owner[^\n]*com\.phonehub\.notifier",
+            r"deviceowner[^\n]*com\.phonehub\.notifier",
+            r"owner\s+component[^\n]*com\.phonehub\.notifier",
+            r"com\.phonehub\.notifier/\.phonehubdeviceadminreceiver",
+        ]
+        explicit_owner_match = any(
+            re.search(pattern, combined, flags=re.IGNORECASE)
+            for pattern in owner_patterns
         )
+
+        explicit_no_owner = bool(
+            re.search(r"device\s+owner\s+type\s*:\s*-1", policy, flags=re.IGNORECASE)
+            or re.search(r"no\s+device\s+owner", owners, flags=re.IGNORECASE)
+        )
+
+        is_owner = explicit_owner_match and not explicit_no_owner
 
         provisioned = bool(
             "device provisioned: true" in policy.lower()
@@ -2701,9 +2714,12 @@ class PhoneHubTailscale(PhoneHub):
             or "musersetupcomplete: true" in policy.lower()
         )
 
-        enabled_admin = (
-            "com.phonehub.notifier" in combined
-            and "enabled device admins" in policy.lower()
+        enabled_admin = bool(
+            re.search(
+                r"enabled\s+device\s+admins[\s\S]{0,1200}com\.phonehub\.notifier",
+                policy,
+                flags=re.IGNORECASE,
+            )
         )
 
         if is_owner:
@@ -2791,8 +2807,26 @@ class PhoneHubTailscale(PhoneHub):
             self.set_footer("Phone is not connected.")
             return
 
+        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list", "owners"], timeout=8)
         policy = run_quiet(["adb", "-s", target, "shell", "dumpsys", "device_policy"], timeout=10)
-        if "com.phonehub.notifier" not in policy.lower() or "device owner" not in policy.lower():
+        combined = owners + "\n" + policy
+
+        owner_patterns = [
+            r"device\s+owner[^\n]*com\.phonehub\.notifier",
+            r"deviceowner[^\n]*com\.phonehub\.notifier",
+            r"owner\s+component[^\n]*com\.phonehub\.notifier",
+            r"com\.phonehub\.notifier/\.phonehubdeviceadminreceiver",
+        ]
+        actual_owner = any(
+            re.search(pattern, combined, flags=re.IGNORECASE)
+            for pattern in owner_patterns
+        )
+        no_owner = bool(
+            re.search(r"device\s+owner\s+type\s*:\s*-1", policy, flags=re.IGNORECASE)
+            or re.search(r"no\s+device\s+owner", owners, flags=re.IGNORECASE)
+        )
+
+        if not actual_owner or no_owner:
             if hasattr(self, "app_control_status"):
                 self.app_control_status.setText(
                     "Status: Device Owner NOT CONFIGURED\n"
