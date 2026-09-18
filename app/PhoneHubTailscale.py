@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.26-clean-message-feed"
+APP_VERSION = "v3.27-app-control"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -203,6 +203,7 @@ class PhoneHubTailscale(PhoneHub):
             ("Control", self.page_control),
             ("Device", self.page_device_tools),
             ("Notifications", self.page_notifications),
+            ("App Control", self.page_app_control),
             ("Settings", self.page_settings),
         ]
 
@@ -2560,6 +2561,214 @@ class PhoneHubTailscale(PhoneHub):
         except Exception as exc:
             self.set_footer(f"Could not enable Windows startup: {exc}")
 
+    def page_app_control(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        box, box_layout, _ = self.card(
+            "Managed App Control",
+            "Device Owner mode can suspend selected apps, protect them from uninstall, and restrict app installation. "
+            "PhoneHub never enables Device Owner automatically because Android provisioning requirements can affect device setup.",
+        )
+
+        self.app_control_status = QLabel("Status: Check Device Owner first")
+        self.app_control_status.setObjectName("sideStatus")
+        self.app_control_status.setWordWrap(True)
+        box_layout.addWidget(self.app_control_status)
+
+        top = QHBoxLayout()
+
+        check = QPushButton("Check Device Owner")
+        check.setObjectName("primary")
+        check.clicked.connect(self.check_device_owner_status)
+
+        open_companion = QPushButton("Open Companion")
+        open_companion.clicked.connect(self.open_phonehub_companion)
+
+        scan = QPushButton("Find Control Packages")
+        scan.clicked.connect(self.scan_control_packages)
+
+        top.addWidget(check)
+        top.addWidget(open_companion)
+        top.addWidget(scan)
+        box_layout.addLayout(top)
+
+        self.app_control_package = QLineEdit()
+        self.app_control_package.setPlaceholderText("Package name, e.g. com.android.settings")
+        box_layout.addWidget(self.app_control_package)
+
+        presets = QHBoxLayout()
+        settings_btn = QPushButton("Settings")
+        settings_btn.clicked.connect(lambda: self.app_control_package.setText("com.android.settings"))
+        fdroid_btn = QPushButton("F-Droid")
+        fdroid_btn.clicked.connect(lambda: self.app_control_package.setText("org.fdroid.fdroid"))
+        aurora_btn = QPushButton("Aurora")
+        aurora_btn.clicked.connect(lambda: self.app_control_package.setText("com.aurora.store"))
+        presets.addWidget(settings_btn)
+        presets.addWidget(fdroid_btn)
+        presets.addWidget(aurora_btn)
+        box_layout.addLayout(presets)
+
+        rules = QHBoxLayout()
+
+        suspend = QPushButton("Suspend App")
+        suspend.setObjectName("danger")
+        suspend.clicked.connect(lambda: self.send_app_policy("suspend"))
+
+        unsuspend = QPushButton("Unsuspend App")
+        unsuspend.clicked.connect(lambda: self.send_app_policy("unsuspend"))
+
+        block_uninstall = QPushButton("Block Uninstall")
+        block_uninstall.clicked.connect(lambda: self.send_app_policy("block_uninstall"))
+
+        allow_uninstall = QPushButton("Allow Uninstall")
+        allow_uninstall.clicked.connect(lambda: self.send_app_policy("allow_uninstall"))
+
+        rules.addWidget(suspend)
+        rules.addWidget(unsuspend)
+        rules.addWidget(block_uninstall)
+        rules.addWidget(allow_uninstall)
+        box_layout.addLayout(rules)
+
+        installs = QHBoxLayout()
+
+        block_installs = QPushButton("Block App Installs")
+        block_installs.setObjectName("danger")
+        block_installs.clicked.connect(lambda: self.send_app_policy("block_installs", package_required=False))
+
+        allow_installs = QPushButton("Allow App Installs")
+        allow_installs.clicked.connect(lambda: self.send_app_policy("allow_installs", package_required=False))
+
+        installs.addWidget(block_installs)
+        installs.addWidget(allow_installs)
+        box_layout.addLayout(installs)
+
+        self.app_control_packages = QTextEdit()
+        self.app_control_packages.setReadOnly(True)
+        self.app_control_packages.setMinimumHeight(180)
+        self.app_control_packages.setText(
+            "Package Installer and system package names vary by Android/OEM.\n"
+            "Use Find Control Packages before creating rules.\n\n"
+            "Android may refuse to suspend critical system packages; PhoneHub reports that instead of forcing it."
+        )
+        box_layout.addWidget(self.app_control_packages)
+
+        layout.addWidget(box)
+
+        note, _, _ = self.card(
+            "Provisioning requirement",
+            "App suspension and install restrictions require PhoneHub Notifier to be Device Owner (or an appropriate managed profile owner). "
+            "This is intended for a phone you own/manage. Device Owner provisioning is not performed automatically and may require a freshly provisioned device.",
+        )
+        layout.addWidget(note)
+        layout.addStretch()
+        return page
+
+    def _app_control_target(self):
+        return self._device_target()
+
+    def check_device_owner_status(self):
+        target = self._app_control_target()
+        if not target:
+            if hasattr(self, "app_control_status"):
+                self.app_control_status.setText("Status: Phone not connected")
+            return
+
+        output = run_quiet(["adb", "-s", target, "shell", "dpm", "list", "owners"], timeout=8)
+        if not output:
+            output = run_quiet(["adb", "-s", target, "shell", "dumpsys", "device_policy"], timeout=10)
+
+        is_owner = "com.phonehub.notifier" in output and (
+            "device owner" in output.lower() or "DeviceOwner" in output or "Owner" in output
+        )
+
+        installed = "com.phonehub.notifier" in run_quiet(
+            ["adb", "-s", target, "shell", "pm", "list", "packages", "com.phonehub.notifier"],
+            timeout=6,
+        )
+
+        text = (
+            f"Status: Companion {'installed' if installed else 'not installed'} · "
+            f"Device Owner {'READY' if is_owner else 'NOT CONFIGURED'}"
+        )
+        if hasattr(self, "app_control_status"):
+            self.app_control_status.setText(text)
+
+        if hasattr(self, "app_control_packages") and output:
+            self.app_control_packages.setText(output[:3500])
+
+    def open_phonehub_companion(self):
+        target = self._app_control_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+
+        result = run_quiet([
+            "adb", "-s", target, "shell", "am", "start",
+            "-n", "com.phonehub.notifier/.MainActivity",
+        ], timeout=8)
+
+        if "Error" in result or "Exception" in result:
+            self.set_footer("Could not open PhoneHub Notifier.")
+        else:
+            self.set_footer("PhoneHub Notifier opened on the phone.")
+
+    def scan_control_packages(self):
+        target = self._app_control_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+
+        output = run_quiet(["adb", "-s", target, "shell", "pm", "list", "packages"], timeout=15)
+        keywords = (
+            "settings", "packageinstaller", "permissioncontroller",
+            "fdroid", "aurora", "vending", "appmarket", "market"
+        )
+
+        matches = []
+        for line in output.splitlines():
+            pkg = line.replace("package:", "").strip()
+            if any(word in pkg.lower() for word in keywords):
+                matches.append(pkg)
+
+        text = "Detected control/store packages:\n\n" + (
+            "\n".join(matches[:80]) if matches else "No matching packages found."
+        )
+        if hasattr(self, "app_control_packages"):
+            self.app_control_packages.setText(text)
+        self.set_footer("Package scan complete.")
+
+    def send_app_policy(self, action, package_required=True):
+        target = self._app_control_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+
+        pkg = self.app_control_package.text().strip() if hasattr(self, "app_control_package") else ""
+        if package_required and not pkg:
+            self.set_footer("Enter or select a package first.")
+            return
+
+        cmd = [
+            "adb", "-s", target, "shell", "am", "start",
+            "-n", "com.phonehub.notifier/.MainActivity",
+            "--es", "policy_action", action,
+        ]
+        if pkg:
+            cmd.extend(["--es", "package", pkg])
+
+        result = run_quiet(cmd, timeout=10)
+        if "Error" in result or "Exception" in result:
+            self.set_footer("Policy command could not be sent.")
+            return
+
+        label = action.replace("_", " ").title()
+        if hasattr(self, "app_control_status"):
+            self.app_control_status.setText(f"Status: Sent {label} to companion")
+        self.set_footer(f"App Control: {label} sent.")
+
     def page_settings(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -2582,7 +2791,7 @@ class PhoneHubTailscale(PhoneHub):
             f"1. Keep Tailscale ON on PC\n"
             f"2. Keep Tailscale ON on phone\n"
             f"3. Open PhoneHub\n"
-            f"4. Use Home / Screen / Camera / Audio / Files / Apps / Control / Device / Notifications\n\n"
+            f"4. Use Home / Screen / Camera / Audio / Files / Apps / Control / Device / Notifications / App Control\n\n"
             f"For a new phone or repairs, use Setup."
         )
 
@@ -2683,6 +2892,7 @@ class PhoneHubTailscale(PhoneHub):
             "Control",
             "Device",
             "Notifications",
+            "App Control",
             "Settings",
         ]
         if 0 <= index < len(names):
