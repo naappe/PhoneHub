@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 
-APP_VERSION = "v2.9-lock-state-test"
+APP_VERSION = "v3.0-lock-state-test-v2"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -997,65 +997,103 @@ class PhoneHub(QWidget):
     def _android_lock_state(self):
         target = adb_target()
         if not target:
-            return "unknown", "Phone IP is not configured."
+            return "unknown", "Phone IP is not configured.", {}
 
-        window = run_quiet(
-            ["adb", "-s", target, "shell", "dumpsys", "window", "policy"],
-            timeout=4,
-        ).lower()
-        power = run_quiet(
-            ["adb", "-s", target, "shell", "dumpsys", "power"],
-            timeout=4,
-        ).lower()
+        evidence = {}
+
+        commands = {
+            "window_policy": ["adb", "-s", target, "shell", "dumpsys", "window", "policy"],
+            "window": ["adb", "-s", target, "shell", "dumpsys", "window"],
+            "trust": ["adb", "-s", target, "shell", "dumpsys", "trust"],
+            "power": ["adb", "-s", target, "shell", "dumpsys", "power"],
+            "device_policy": ["adb", "-s", target, "shell", "dumpsys", "device_policy"],
+        }
+
+        for name, cmd in commands.items():
+            evidence[name] = run_quiet(cmd, timeout=4).lower()
+
+        combined = "\n".join(evidence.values())
 
         locked_markers = (
+            "devicelocked=true",
+            "device locked=true",
             "mshowinglockscreen=true",
             "iskeyguardshowing=true",
             "keyguard showing=true",
             "mkeyguardshowing=true",
+            "keyguard=true",
+            "showing=true secure=true",
         )
 
         unlocked_markers = (
+            "devicelocked=false",
+            "device locked=false",
             "mshowinglockscreen=false",
             "iskeyguardshowing=false",
             "mkeyguardshowing=false",
+            "keyguard=false",
         )
 
-        if any(m in window for m in locked_markers):
-            return "locked", "Android reports the secure keyguard is showing."
+        locked_hits = [m for m in locked_markers if m in combined]
+        unlocked_hits = [m for m in unlocked_markers if m in combined]
 
-        if any(m in window for m in unlocked_markers):
-            return "unlocked", "Android reports the keyguard is not showing."
+        if locked_hits and not unlocked_hits:
+            return "locked", "Android reports the secure keyguard/device is locked.", {
+                "locked_hits": locked_hits,
+                "unlocked_hits": unlocked_hits,
+            }
 
+        if unlocked_hits and not locked_hits:
+            return "unlocked", "Android reports the keyguard/device is unlocked.", {
+                "locked_hits": locked_hits,
+                "unlocked_hits": unlocked_hits,
+            }
+
+        power = evidence.get("power", "")
         interactive = "minteractive=true" in power or "display power: state=on" in power
-        if interactive:
-            return "likely_unlocked", "Android is interactive and no lock marker was found."
+        asleep = "minteractive=false" in power or "display power: state=off" in power
 
-        return "unknown", "Android lock state could not be determined reliably."
+        detail = "Android returned conflicting or vendor-specific lock-state data."
+        if interactive:
+            detail += " Screen is interactive."
+        elif asleep:
+            detail += " Screen is not interactive."
+
+        return "unknown", detail, {
+            "locked_hits": locked_hits,
+            "unlocked_hits": unlocked_hits,
+            "interactive": interactive,
+            "asleep": asleep,
+        }
 
     def lock_state_test(self):
         self.set_footer("Checking Android lock state...")
 
         def worker():
-            state, detail = self._android_lock_state()
+            state, detail, evidence = self._android_lock_state()
+
+            locked_hits = ", ".join(evidence.get("locked_hits", [])) or "none"
+            unlocked_hits = ", ".join(evidence.get("unlocked_hits", [])) or "none"
 
             if state == "locked":
                 message = (
                     "TEST RESULT: LOCKED\n\n"
                     + detail
-                    + "\n\nPhoneHub should not treat the phone as fully unlocked."
+                    + f"\n\nLocked markers: {locked_hits}"
                 )
-            elif state in ("unlocked", "likely_unlocked"):
+            elif state == "unlocked":
                 message = (
                     "TEST RESULT: UNLOCKED\n\n"
                     + detail
-                    + "\n\nThis explains why the normal home screen can appear in scrcpy."
+                    + f"\n\nUnlocked markers: {unlocked_hits}"
                 )
             else:
                 message = (
                     "TEST RESULT: UNKNOWN\n\n"
                     + detail
-                    + "\n\nLock-state reporting varies by Android vendor, so we should not assume it is unlocked."
+                    + f"\n\nLocked markers: {locked_hits}"
+                    + f"\nUnlocked markers: {unlocked_hits}"
+                    + "\n\nThis phone does not expose a reliable single lock flag through standard ADB dumpsys output."
                 )
 
             self.bridge.message.emit(message)
