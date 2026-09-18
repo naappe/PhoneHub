@@ -1,4 +1,7 @@
 import sys
+import re
+import urllib.request
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -21,10 +24,17 @@ from PhoneHub import (
     connect_remote_adb,
     get_saved_ip,
     save_phone_ip,
+    parse_adb_devices,
+    run_quiet,
+    run_background,
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v2.8-compact-ui"
+APP_VERSION = "v2.9-auto-tailscale-installer"
+TAILSCALE_PACKAGE = "com.tailscale.ipn"
+TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
+TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
+TAILSCALE_APK_DIR = Path(r"C:\\PhoneHub\\runtime\\downloads")
 
 
 class PhoneHubTailscale(PhoneHub):
@@ -306,6 +316,175 @@ class PhoneHubTailscale(PhoneHub):
         layout.addStretch()
 
         return page
+
+    def page_setup_new_phone(self):
+        page = super().page_setup_new_phone()
+        layout = page.layout()
+
+        tailscale_box, tailscale_layout, self.tailscale_setup_status = self.card(
+            "Tailscale on phone",
+            "PhoneHub checks the connected USB phone. If Tailscale is missing, you can install the official stable APK directly from PhoneHub without Google Play.",
+        )
+
+        row = QHBoxLayout()
+        check_btn = QPushButton("Check Tailscale")
+        check_btn.clicked.connect(self.check_tailscale_clicked)
+
+        install_btn = QPushButton("Install Tailscale")
+        install_btn.setObjectName("primary")
+        install_btn.clicked.connect(self.install_tailscale_clicked)
+
+        open_btn = QPushButton("Open Tailscale")
+        open_btn.clicked.connect(self.open_tailscale_clicked)
+
+        row.addWidget(check_btn)
+        row.addWidget(install_btn)
+        row.addWidget(open_btn)
+        tailscale_layout.addLayout(row)
+
+        layout.addWidget(tailscale_box)
+        return page
+
+    def _usb_serial(self):
+        usb, _, unauthorized, _ = parse_adb_devices()
+        if unauthorized:
+            return "", "USB debugging is not authorized. Approve the popup on the phone first."
+        if not usb:
+            return "", "No USB phone detected. Connect the phone with USB and keep USB debugging ON."
+        return usb[0], ""
+
+    def _tailscale_installed(self, serial):
+        out = run_quiet(
+            ["adb", "-s", serial, "shell", "pm", "list", "packages", TAILSCALE_PACKAGE],
+            timeout=8,
+        )
+        return TAILSCALE_PACKAGE in out
+
+    def _set_tailscale_status(self, text):
+        if hasattr(self, "tailscale_setup_status"):
+            self.tailscale_setup_status.setText(text)
+        self.set_footer(text)
+
+    def check_tailscale_clicked(self):
+        serial, error = self._usb_serial()
+        if error:
+            self._set_tailscale_status(error)
+            return
+
+        model = run_quiet(
+            ["adb", "-s", serial, "shell", "getprop", "ro.product.model"], timeout=5
+        ) or "Android phone"
+
+        if self._tailscale_installed(serial):
+            self._set_tailscale_status(
+                f"Tailscale detected on {model}. Open it, sign in, and turn the Tailscale connection ON."
+            )
+        else:
+            self._set_tailscale_status(
+                f"Tailscale is NOT installed on {model}. Click 'Install Tailscale' to download the official stable APK and install it through USB."
+            )
+
+    def _latest_tailscale_apk_url(self):
+        req = urllib.request.Request(
+            TAILSCALE_STABLE_PAGE,
+            headers={"User-Agent": "PhoneHub/2.9"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as response:
+            html = response.read().decode("utf-8", errors="ignore")
+
+        matches = re.findall(
+            r'tailscale-android-universal-[0-9][0-9A-Za-z.\-]*\\.apk',
+            html,
+        )
+        if not matches:
+            raise RuntimeError("Could not find the stable Android APK on the official Tailscale package page.")
+
+        # The stable page normally exposes one current universal Android APK.
+        filename = matches[0]
+        return TAILSCALE_BASE_URL + filename, filename
+
+    def install_tailscale_clicked(self):
+        serial, error = self._usb_serial()
+        if error:
+            QMessageBox.warning(self, "PhoneHub", error)
+            return
+
+        if self._tailscale_installed(serial):
+            self._set_tailscale_status(
+                "Tailscale is already installed. Click 'Open Tailscale', then sign in and turn it ON."
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Install Tailscale",
+            "PhoneHub will download the official stable universal Tailscale APK from pkgs.tailscale.com and install it on the USB-connected phone.\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        self._set_tailscale_status("Downloading official Tailscale APK...")
+
+        def worker():
+            try:
+                TAILSCALE_APK_DIR.mkdir(parents=True, exist_ok=True)
+                url, filename = self._latest_tailscale_apk_url()
+                apk_path = TAILSCALE_APK_DIR / filename
+
+                req = urllib.request.Request(url, headers={"User-Agent": "PhoneHub/2.9"})
+                with urllib.request.urlopen(req, timeout=90) as response:
+                    data = response.read()
+
+                if len(data) < 1_000_000:
+                    raise RuntimeError("Downloaded APK looks incomplete.")
+
+                apk_path.write_bytes(data)
+                result = run_quiet(
+                    ["adb", "-s", serial, "install", "-r", str(apk_path)],
+                    timeout=120,
+                )
+
+                if "Success" not in result:
+                    raise RuntimeError(result or "ADB installation failed.")
+
+                run_background([
+                    "adb", "-s", serial, "shell", "monkey",
+                    "-p", TAILSCALE_PACKAGE,
+                    "-c", "android.intent.category.LAUNCHER",
+                    "1",
+                ])
+
+                self.bridge.message.emit(
+                    "Tailscale installed successfully. On the phone, finish sign-in and approve the VPN connection, then return to PhoneHub and run Smart Check."
+                )
+            except Exception as exc:
+                self.bridge.message.emit(f"Tailscale install failed: {exc}")
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def open_tailscale_clicked(self):
+        serial, error = self._usb_serial()
+        if error:
+            QMessageBox.warning(self, "PhoneHub", error)
+            return
+
+        if not self._tailscale_installed(serial):
+            self._set_tailscale_status(
+                "Tailscale is not installed. Click 'Install Tailscale' first."
+            )
+            return
+
+        run_background([
+            "adb", "-s", serial, "shell", "monkey",
+            "-p", TAILSCALE_PACKAGE,
+            "-c", "android.intent.category.LAUNCHER",
+            "1",
+        ])
+        self._set_tailscale_status(
+            "Tailscale opened on the phone. Sign in and approve the VPN connection if Android asks."
+        )
 
     def _location_text(self):
         from PhoneHub import read_last_location_text
