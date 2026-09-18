@@ -8,6 +8,10 @@ import math
 import wave
 import struct
 import signal
+import os
+import json
+import hashlib
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
@@ -17,6 +21,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QComboBox,
     QLabel,
+    QListWidget,
+    QMenu,
+    QSystemTrayIcon,
+    QStyle,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -39,7 +47,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.19-audio-studio"
+APP_VERSION = "v3.20-notification-feed"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -51,6 +59,7 @@ class AutoDetectBridge(QObject):
     state = Signal(dict)
     wizard = Signal(dict)
     health = Signal(dict)
+    notifications = Signal(list)
 
 class PhoneHubTailscale(PhoneHub):
     def __init__(self):
@@ -68,6 +77,7 @@ class PhoneHubTailscale(PhoneHub):
         self.auto_bridge.state.connect(self._apply_auto_detect_state)
         self.auto_bridge.wizard.connect(self._apply_wizard_result)
         self.auto_bridge.health.connect(self._apply_health_results)
+        self.auto_bridge.notifications.connect(self._apply_notification_results)
 
         self.wizard_step = 1
         self.wizard_serial = ""
@@ -93,6 +103,16 @@ class PhoneHubTailscale(PhoneHub):
         self._call_was_active = False
         self.audio_level_text = "Level: No recording analyzed yet"
 
+        self.notification_feed_enabled = True
+        self.notification_poll_busy = False
+        self.notification_seen = set()
+        self.notification_baseline_ready = False
+        self.notification_items = []
+        self.notification_store = Path(r"C:\PhoneHub\runtime\notifications\feed.jsonl")
+        self.notification_store.parent.mkdir(parents=True, exist_ok=True)
+        self._force_exit = False
+        self.tray_icon = None
+
         # Detection now runs in a background thread. The old implementation ran
         # several adb commands on the UI thread every 3 seconds, which caused
         # visible freezing/slowness.
@@ -110,6 +130,14 @@ class PhoneHubTailscale(PhoneHub):
         self.call_monitor_timer.setInterval(2000)
         self.call_monitor_timer.timeout.connect(self._monitor_call_audio_state)
         self.call_monitor_timer.start()
+
+        self.notification_timer = QTimer(self)
+        self.notification_timer.setInterval(8000)
+        self.notification_timer.timeout.connect(self.poll_notifications)
+        self.notification_timer.start()
+        QTimer.singleShot(1800, self.poll_notifications)
+
+        self._setup_system_tray()
 
         # Keep the window inside the visible desktop area on smaller laptops.
         screen = QApplication.primaryScreen()
@@ -159,6 +187,7 @@ class PhoneHubTailscale(PhoneHub):
             ("Apps", self.page_apps),
             ("Control", self.page_control),
             ("Device", self.page_device_tools),
+            ("Notifications", self.page_notifications),
             ("Settings", self.page_settings),
         ]
 
@@ -1298,8 +1327,24 @@ class PhoneHubTailscale(PhoneHub):
             self.analyze_last_audio_recording()
 
     def closeEvent(self, event):
-        self.stop_live_audio()
-        event.accept()
+        if getattr(self, "_force_exit", False) or not self.tray_icon:
+            try:
+                self.stop_live_audio()
+            except Exception:
+                pass
+            event.accept()
+            return
+
+        # Keep background notification feed alive in the Windows tray.
+        self.hide()
+        if self.tray_icon:
+            self.tray_icon.showMessage(
+                "PhoneHub is still running",
+                "Notification Feed continues in the background. Use the tray icon to reopen or quit.",
+                QSystemTrayIcon.Information,
+                5000,
+            )
+        event.ignore()
 
     def page_device_tools(self):
         page = QWidget()
@@ -1522,6 +1567,343 @@ class PhoneHubTailscale(PhoneHub):
         except Exception as exc:
             self.set_footer(f"Could not start app: {exc}")
 
+    def page_notifications(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        box, box_layout, _ = self.card(
+            "Notification Feed",
+            "RSS-style feed from notifications currently exposed by your Android phone over ADB. "
+            "PhoneHub can stay in the Windows tray; the main window does not need to remain open.",
+        )
+
+        self.notification_status = QLabel("Status: Starting background feed...")
+        self.notification_status.setObjectName("sideStatus")
+        self.notification_status.setWordWrap(True)
+        box_layout.addWidget(self.notification_status)
+
+        actions = QHBoxLayout()
+
+        refresh = QPushButton("Refresh Now")
+        refresh.setObjectName("primary")
+        refresh.clicked.connect(self.poll_notifications)
+
+        self.notification_pause_button = QPushButton("Pause Feed")
+        self.notification_pause_button.clicked.connect(self.toggle_notification_feed)
+
+        clear = QPushButton("Clear View")
+        clear.clicked.connect(self.clear_notification_view)
+
+        startup = QPushButton("Enable Windows Startup")
+        startup.clicked.connect(self.enable_phonehub_startup)
+
+        actions.addWidget(refresh)
+        actions.addWidget(self.notification_pause_button)
+        actions.addWidget(clear)
+        actions.addWidget(startup)
+        box_layout.addLayout(actions)
+
+        self.notification_list = QListWidget()
+        self.notification_list.setMinimumHeight(300)
+        box_layout.addWidget(self.notification_list)
+
+        note = QLabel(
+            "Closing the PhoneHub window now hides it to the Windows system tray instead of stopping it. "
+            "New notifications can appear as Windows tray notifications. Feed history stays local in "
+            "C:\\PhoneHub\\runtime\\notifications."
+        )
+        note.setObjectName("big")
+        note.setWordWrap(True)
+        box_layout.addWidget(note)
+
+        layout.addWidget(box)
+        layout.addStretch()
+        QTimer.singleShot(100, self._refresh_notification_list)
+        return page
+
+    def _setup_system_tray(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+
+        icon = self.windowIcon()
+        if icon.isNull():
+            icon = QApplication.style().standardIcon(QStyle.SP_ComputerIcon)
+
+        tray = QSystemTrayIcon(icon, self)
+        tray.setToolTip(f"PhoneHub {APP_VERSION}")
+
+        menu = QMenu()
+        open_action = menu.addAction("Open PhoneHub")
+        open_action.triggered.connect(self.restore_from_tray)
+
+        notifications_action = menu.addAction("Open Notifications")
+        notifications_action.triggered.connect(self.open_notifications_page)
+
+        self.tray_pause_action = menu.addAction("Pause Notification Feed")
+        self.tray_pause_action.triggered.connect(self.toggle_notification_feed)
+
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit PhoneHub")
+        quit_action.triggered.connect(self.quit_phonehub)
+
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._tray_activated)
+        tray.show()
+        self.tray_icon = tray
+
+    def _tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self.restore_from_tray()
+
+    def restore_from_tray(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def open_notifications_page(self):
+        self.restore_from_tray()
+        names = [
+            "Home", "Setup", "Screen", "Camera", "Audio", "Files",
+            "Apps", "Control", "Device", "Notifications", "Settings"
+        ]
+        try:
+            self.show_page(names.index("Notifications"))
+        except Exception:
+            pass
+
+    def quit_phonehub(self):
+        self._force_exit = True
+        try:
+            self.stop_live_audio()
+        except Exception:
+            pass
+        if self.tray_icon:
+            self.tray_icon.hide()
+        QApplication.quit()
+
+    def toggle_notification_feed(self):
+        self.notification_feed_enabled = not self.notification_feed_enabled
+        text = "Pause Feed" if self.notification_feed_enabled else "Resume Feed"
+        if hasattr(self, "notification_pause_button"):
+            self.notification_pause_button.setText(text)
+        if hasattr(self, "tray_pause_action"):
+            self.tray_pause_action.setText(
+                "Pause Notification Feed" if self.notification_feed_enabled else "Resume Notification Feed"
+            )
+        if hasattr(self, "notification_status"):
+            self.notification_status.setText(
+                "Status: Background feed active"
+                if self.notification_feed_enabled else
+                "Status: Feed paused"
+            )
+        if self.notification_feed_enabled:
+            self.poll_notifications()
+
+    def _notification_target(self):
+        ip, port = get_saved_ip()
+        target = f"{ip}:{port}" if ip else ""
+        usb, remote, unauthorized, _ = parse_adb_devices()
+
+        if target and target in remote:
+            return target
+        if target:
+            run_quiet(["adb", "connect", target], timeout=6)
+            usb, remote, unauthorized, _ = parse_adb_devices()
+            if target in remote:
+                return target
+        if usb:
+            return usb[0]
+        return ""
+
+    def poll_notifications(self):
+        if not self.notification_feed_enabled or self.notification_poll_busy:
+            return
+
+        self.notification_poll_busy = True
+
+        def worker():
+            items = []
+            try:
+                target = self._notification_target()
+                if not target:
+                    items = [{"_status": "Phone not connected"}]
+                else:
+                    raw = run_quiet(
+                        ["adb", "-s", target, "shell", "dumpsys", "notification", "--noredact"],
+                        timeout=12,
+                    )
+                    items = self._parse_notification_dump(raw)
+                    if not items:
+                        items = [{"_status": "Connected — no readable notifications found"}]
+            except Exception as exc:
+                items = [{"_status": f"Notification check failed: {exc}"}]
+            self.auto_bridge.notifications.emit(items)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _parse_notification_dump(self, raw):
+        if not raw:
+            return []
+
+        blocks = re.split(r"(?=NotificationRecord\()", raw)
+        items = []
+
+        for block in blocks:
+            if not block.startswith("NotificationRecord("):
+                continue
+
+            pkg_match = re.search(r"pkg=([^\s]+)", block)
+            pkg = pkg_match.group(1).strip() if pkg_match else "Android"
+
+            title = self._notification_extra(block, "android.title")
+            text = self._notification_extra(block, "android.text")
+            big_text = self._notification_extra(block, "android.bigText")
+            sub_text = self._notification_extra(block, "android.subText")
+
+            body = big_text or text or sub_text
+            if not title and not body:
+                ticker = re.search(r"tickerText=([^\n]+)", block)
+                body = ticker.group(1).strip() if ticker else ""
+
+            title = self._clean_notification_value(title)
+            body = self._clean_notification_value(body)
+
+            if not title and not body:
+                continue
+
+            key = hashlib.sha1(f"{pkg}|{title}|{body}".encode("utf-8", errors="ignore")).hexdigest()
+            items.append({
+                "id": key,
+                "package": pkg,
+                "title": title or pkg,
+                "body": body,
+                "time": datetime.now().strftime("%H:%M:%S"),
+            })
+
+        # dumpsys may contain duplicates in ranking/history sections.
+        unique = []
+        seen = set()
+        for item in items:
+            if item["id"] in seen:
+                continue
+            seen.add(item["id"])
+            unique.append(item)
+        return unique[:80]
+
+    def _notification_extra(self, block, key):
+        patterns = [
+            rf"{re.escape(key)}=String \((.*?)\)",
+            rf"{re.escape(key)}=([^\n]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, block, flags=re.DOTALL if "\\(" in pattern else 0)
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    def _clean_notification_value(self, value):
+        value = str(value or "").replace("\\n", " ").replace("\n", " ").strip()
+        value = re.sub(r"\s+", " ", value)
+        if value in ("null", "None"):
+            return ""
+        return value[:500]
+
+    def _apply_notification_results(self, items):
+        self.notification_poll_busy = False
+
+        if items and "_status" in items[0]:
+            status = items[0]["_status"]
+            if hasattr(self, "notification_status"):
+                self.notification_status.setText(f"Status: {status}")
+            return
+
+        new_items = []
+        for item in items:
+            item_id = item.get("id")
+            if not item_id:
+                continue
+            if item_id not in self.notification_seen:
+                self.notification_seen.add(item_id)
+                new_items.append(item)
+
+        # First poll establishes a baseline so old phone notifications do not all toast at once.
+        if not self.notification_baseline_ready:
+            self.notification_baseline_ready = True
+            self.notification_items = items[:80]
+            self._refresh_notification_list()
+            if hasattr(self, "notification_status"):
+                self.notification_status.setText(
+                    f"Status: Background feed active · {len(items)} current notifications"
+                )
+            return
+
+        if new_items:
+            for item in reversed(new_items):
+                self.notification_items.insert(0, item)
+                self._append_notification_history(item)
+            self.notification_items = self.notification_items[:200]
+
+            newest = new_items[0]
+            if self.tray_icon and self.notification_feed_enabled:
+                self.tray_icon.showMessage(
+                    newest.get("title") or newest.get("package") or "Phone notification",
+                    newest.get("body") or newest.get("package") or "",
+                    QSystemTrayIcon.Information,
+                    7000,
+                )
+
+        self._refresh_notification_list()
+        if hasattr(self, "notification_status"):
+            self.notification_status.setText(
+                f"Status: Background feed active · {len(self.notification_items)} in feed"
+            )
+
+    def _append_notification_history(self, item):
+        try:
+            record = dict(item)
+            record["saved_at"] = datetime.now().isoformat(timespec="seconds")
+            with self.notification_store.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _refresh_notification_list(self):
+        if not hasattr(self, "notification_list"):
+            return
+        self.notification_list.clear()
+        for item in self.notification_items[:200]:
+            title = item.get("title") or item.get("package") or "Notification"
+            body = item.get("body") or ""
+            pkg = item.get("package") or ""
+            when = item.get("time") or ""
+            self.notification_list.addItem(f"{when}  {title}\n{body}\n{pkg}")
+
+    def clear_notification_view(self):
+        self.notification_items = []
+        self._refresh_notification_list()
+        if hasattr(self, "notification_status"):
+            self.notification_status.setText("Status: View cleared · background feed still active")
+
+    def enable_phonehub_startup(self):
+        try:
+            startup = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+            startup.mkdir(parents=True, exist_ok=True)
+            launcher = startup / "PhoneHub_Background.cmd"
+            launcher.write_text(
+                '@echo off\r\n'
+                'cd /d C:\\PhoneHub\r\n'
+                'start "" /min C:\\PhoneHub\\PhoneHub.bat\r\n',
+                encoding="utf-8",
+            )
+            self.set_footer("PhoneHub background startup enabled for Windows sign-in.")
+            if hasattr(self, "notification_status"):
+                self.notification_status.setText("Status: Background feed active · Windows startup enabled")
+        except Exception as exc:
+            self.set_footer(f"Could not enable Windows startup: {exc}")
+
     def page_settings(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1544,7 +1926,7 @@ class PhoneHubTailscale(PhoneHub):
             f"1. Keep Tailscale ON on PC\n"
             f"2. Keep Tailscale ON on phone\n"
             f"3. Open PhoneHub\n"
-            f"4. Use Home / Screen / Camera / Audio / Files / Apps / Control / Device\n\n"
+            f"4. Use Home / Screen / Camera / Audio / Files / Apps / Control / Device / Notifications\n\n"
             f"For a new phone or repairs, use Setup."
         )
 
@@ -1571,6 +1953,7 @@ class PhoneHubTailscale(PhoneHub):
             "Apps",
             "Control",
             "Device",
+            "Notifications",
             "Settings",
         ]
         if 0 <= index < len(names):
