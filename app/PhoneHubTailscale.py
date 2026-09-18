@@ -2,6 +2,7 @@ import sys
 import re
 import urllib.request
 import shutil
+import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
@@ -32,7 +33,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.3-integrated-system-check"
+APP_VERSION = "v3.4-live-audio"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -68,6 +69,7 @@ class PhoneHubTailscale(PhoneHub):
         self.wizard_remote_connected = False
         self._wizard_busy = False
         self._health_busy = False
+        self.audio_process = None
 
         # Detection now runs in a background thread. The old implementation ran
         # several adb commands on the UI thread every 3 seconds, which caused
@@ -125,6 +127,7 @@ class PhoneHubTailscale(PhoneHub):
             ("Setup", self.page_setup_new_phone),
             ("Screen", self.page_screen),
             ("Camera", self.page_camera),
+            ("Audio", self.page_audio),
             ("Files", self.page_files),
             ("Apps", self.page_apps),
             ("Control", self.page_control),
@@ -300,6 +303,152 @@ class PhoneHubTailscale(PhoneHub):
         lay.addWidget(lbl)
 
         return box, lay, lbl
+
+    def page_audio(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        box, box_layout, _ = self.card(
+            "Phone Microphone",
+            "Listen live to the microphone on your connected Android phone. "
+            "Audio is played on this PC and is not recorded by default.",
+        )
+
+        self.audio_status = QLabel("Status: Idle")
+        self.audio_status.setObjectName("sideStatus")
+        self.audio_status.setWordWrap(True)
+        box_layout.addWidget(self.audio_status)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+
+        start_btn = QPushButton("Start Listening")
+        start_btn.setObjectName("primary")
+        start_btn.setMinimumHeight(44)
+        start_btn.clicked.connect(self.start_live_audio)
+
+        stop_btn = QPushButton("Stop")
+        stop_btn.setMinimumHeight(44)
+        stop_btn.clicked.connect(self.stop_live_audio)
+
+        actions.addWidget(start_btn)
+        actions.addWidget(stop_btn)
+        box_layout.addLayout(actions)
+        layout.addWidget(box)
+
+        info, _, _ = self.card(
+            "How it works",
+            "PhoneHub uses scrcpy microphone audio forwarding over the current ADB connection. "
+            "The phone must remain reachable through USB or Tailscale remote ADB. "
+            "No audio file is saved unless a separate recording feature is added later.",
+        )
+        layout.addWidget(info)
+        layout.addStretch()
+        return page
+
+    def _audio_target(self):
+        ip, port = get_saved_ip()
+        target = f"{ip}:{port}" if ip else ""
+        usb, remote, unauthorized, _ = parse_adb_devices()
+
+        if target and target in remote:
+            return target
+        if usb:
+            return usb[0]
+        return ""
+
+    def start_live_audio(self):
+        existing = getattr(self, "audio_process", None)
+        if existing and existing.poll() is None:
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Listening")
+            self.set_footer("Phone microphone is already streaming.")
+            return
+
+        scrcpy = scrcpy_path()
+        if not scrcpy:
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Error — scrcpy not found")
+            self.set_footer("scrcpy is required for live microphone audio.")
+            return
+
+        help_text = run_quiet([scrcpy, "--help"], timeout=5)
+        if "--audio-source" not in help_text:
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Error — this scrcpy build does not support microphone audio")
+            self.set_footer("Update scrcpy to use PhoneHub live audio.")
+            return
+
+        target = self._audio_target()
+        if not target:
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Error — phone is not connected")
+            self.set_footer("Connect the phone through USB or Tailscale ADB first.")
+            return
+
+        args = [
+            scrcpy,
+            "--serial", target,
+            "--audio-source=mic",
+            "--no-video",
+            "--no-control",
+            "--audio-buffer=120",
+        ]
+
+        try:
+            self.audio_process = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform.startswith("win") else 0),
+            )
+        except Exception as exc:
+            self.audio_process = None
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText(f"Status: Error — {exc}")
+            self.set_footer("Could not start phone microphone audio.")
+            return
+
+        if hasattr(self, "audio_status"):
+            self.audio_status.setText(f"Status: Connecting — {target}")
+        self.set_footer("Starting live phone microphone audio...")
+        QTimer.singleShot(1500, self._verify_live_audio)
+
+    def _verify_live_audio(self):
+        proc = getattr(self, "audio_process", None)
+        if proc and proc.poll() is None:
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Listening")
+            self.set_footer("Live phone microphone audio is playing on this PC.")
+        else:
+            self.audio_process = None
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Error — microphone stream could not start")
+            self.set_footer("Live audio failed. Check phone connection and scrcpy audio support.")
+
+    def stop_live_audio(self):
+        proc = getattr(self, "audio_process", None)
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        self.audio_process = None
+        if hasattr(self, "audio_status"):
+            self.audio_status.setText("Status: Idle")
+        self.set_footer("Phone microphone audio stopped.")
+
+    def closeEvent(self, event):
+        self.stop_live_audio()
+        event.accept()
 
     def page_dashboard(self):
         page = QWidget()
