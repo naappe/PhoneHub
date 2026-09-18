@@ -43,13 +43,15 @@ if errorlevel 1 (
 echo [PhoneHub] Update check complete.
 
 :launch_phonehub
-REM Stop only the old PhoneHub Python process so a newly pulled version actually reloads.
-REM Do not kill unrelated python/pythonw applications.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process ^| Where-Object { ($_.Name -eq 'pythonw.exe' -or $_.Name -eq 'python.exe') -and $_.CommandLine -like '*PhoneHubTailscale.py*' } ^| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
-taskkill /IM PhoneHub.exe /F >nul 2>&1
+REM Stop only the old PhoneHub process so newly pulled code actually reloads.
+REM The PowerShell helper excludes itself and leaves unrelated Python apps alone.
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\PhoneHub\scripts\stop_phonehub.ps1" >nul 2>&1
+timeout /t 1 /nobreak >nul
 
 REM Start ADB for the Tailscale remote connection mode.
 adb start-server >nul 2>&1
+
+for /f "tokens=2 delims== " %%V in ('findstr /B /C:"APP_VERSION =" "C:\PhoneHub\app\PhoneHubTailscale.py" 2^>nul') do echo [PhoneHub] Launching %%~V
 
 REM Primary app: existing PhoneHub tools with the Tailscale IP box on Dashboard.
 where pythonw >nul 2>&1
