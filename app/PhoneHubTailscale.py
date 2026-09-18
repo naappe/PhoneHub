@@ -11,6 +11,8 @@ import signal
 import os
 import json
 import hashlib
+import secrets
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime
 from pathlib import Path
 
@@ -48,7 +50,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.22.1-notification-parser-fix"
+APP_VERSION = "v3.23-notification-listener"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -61,6 +63,7 @@ class AutoDetectBridge(QObject):
     wizard = Signal(dict)
     health = Signal(dict)
     notifications = Signal(list)
+    notification_push = Signal(dict)
 
 class PhoneHubTailscale(PhoneHub):
     def __init__(self):
@@ -79,6 +82,7 @@ class PhoneHubTailscale(PhoneHub):
         self.auto_bridge.wizard.connect(self._apply_wizard_result)
         self.auto_bridge.health.connect(self._apply_health_results)
         self.auto_bridge.notifications.connect(self._apply_notification_results)
+        self.auto_bridge.notification_push.connect(self._apply_companion_notification)
 
         self.wizard_step = 1
         self.wizard_serial = ""
@@ -112,6 +116,11 @@ class PhoneHubTailscale(PhoneHub):
         self.notification_filter = "all"
         self.notification_store = Path(r"C:\PhoneHub\runtime\notifications\feed.jsonl")
         self.notification_store.parent.mkdir(parents=True, exist_ok=True)
+        self.notification_token_file = self.notification_store.parent / "pairing_token.txt"
+        self.notification_pairing_token = self._load_or_create_notification_token()
+        self.notification_receiver_server = None
+        self.notification_receiver_thread = None
+        self.notification_receiver_url = ""
         self.screen_profile_name = "Balanced"
         self.screen_profile_args = ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"]
         self._force_exit = False
@@ -142,6 +151,7 @@ class PhoneHubTailscale(PhoneHub):
         QTimer.singleShot(1800, self.poll_notifications)
 
         self._setup_system_tray()
+        QTimer.singleShot(1200, self.start_notification_receiver)
 
         # Keep the window inside the visible desktop area on smaller laptops.
         screen = QApplication.primaryScreen()
@@ -1832,8 +1842,8 @@ class PhoneHubTailscale(PhoneHub):
         box, box_layout, _ = self.card(
             "Notification Feed",
             "RSS-style message feed for SMS, WhatsApp, calls and other Android notifications. "
-            "When a new SMS or WhatsApp notification arrives, PhoneHub adds it to the feed and can show a Windows tray alert. "
-            "PhoneHub can stay in the Windows tray; the main window does not need to remain open.",
+            "The PhoneHub Notifier companion uses Android Notification Access and sends new events directly to this PC over Tailscale. "
+            "ADB polling remains only as a fallback. PhoneHub can stay in the Windows tray.",
         )
 
         self.notification_status = QLabel("Status: Starting background feed...")
@@ -1865,6 +1875,29 @@ class PhoneHubTailscale(PhoneHub):
         actions.addWidget(startup)
         actions.addWidget(diagnose)
         box_layout.addLayout(actions)
+
+        companion_row = QHBoxLayout()
+
+        configure_companion = QPushButton("Configure Companion")
+        configure_companion.setObjectName("primary")
+        configure_companion.clicked.connect(self.configure_notification_companion)
+
+        notification_access = QPushButton("Open Notification Access")
+        notification_access.clicked.connect(self.open_notification_access_settings)
+
+        companion_test = QPushButton("Check Companion")
+        companion_test.clicked.connect(self.check_notification_companion)
+
+        companion_row.addWidget(configure_companion)
+        companion_row.addWidget(notification_access)
+        companion_row.addWidget(companion_test)
+        box_layout.addLayout(companion_row)
+
+        self.notification_receiver_label = QLabel("Companion receiver: starting...")
+        self.notification_receiver_label.setObjectName("big")
+        self.notification_receiver_label.setWordWrap(True)
+        self.notification_receiver_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box_layout.addWidget(self.notification_receiver_label)
 
         filters = QHBoxLayout()
 
@@ -1967,6 +2000,13 @@ class PhoneHubTailscale(PhoneHub):
             self.stop_live_audio()
         except Exception:
             pass
+        try:
+            if self.notification_receiver_server is not None:
+                self.notification_receiver_server.shutdown()
+                self.notification_receiver_server.server_close()
+                self.notification_receiver_server = None
+        except Exception:
+            pass
         if self.tray_icon:
             self.tray_icon.hide()
         QApplication.quit()
@@ -1988,6 +2028,214 @@ class PhoneHubTailscale(PhoneHub):
             )
         if self.notification_feed_enabled:
             self.poll_notifications()
+
+    def _load_or_create_notification_token(self):
+        try:
+            if self.notification_token_file.exists():
+                token = self.notification_token_file.read_text(encoding="utf-8").strip()
+                if token:
+                    return token
+            token = secrets.token_urlsafe(24)
+            self.notification_token_file.write_text(token, encoding="utf-8")
+            return token
+        except Exception:
+            return secrets.token_urlsafe(24)
+
+    def _pc_tailscale_ip(self):
+        output = run_quiet(["tailscale", "ip", "-4"], timeout=5)
+        for line in output.splitlines():
+            value = line.strip()
+            if re.match(r"^100\.(?:\d{1,3}\.){2}\d{1,3}$", value):
+                return value
+        return ""
+
+    def start_notification_receiver(self):
+        if self.notification_receiver_server is not None:
+            return
+
+        host = self._pc_tailscale_ip()
+        if not host:
+            self.notification_receiver_url = ""
+            if hasattr(self, "notification_receiver_label"):
+                self.notification_receiver_label.setText(
+                    "Companion receiver: waiting for PC Tailscale IP"
+                )
+            return
+
+        outer = self
+        token = self.notification_pairing_token
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                if self.path != "/notify":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+
+                if self.headers.get("X-PhoneHub-Token", "") != token:
+                    self.send_response(403)
+                    self.end_headers()
+                    return
+
+                try:
+                    length = min(int(self.headers.get("Content-Length", "0") or 0), 65536)
+                    raw = self.rfile.read(length)
+                    payload = json.loads(raw.decode("utf-8", errors="replace"))
+                    outer.auto_bridge.notification_push.emit(payload)
+                    self.send_response(204)
+                    self.end_headers()
+                except Exception:
+                    self.send_response(400)
+                    self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        try:
+            server = ThreadingHTTPServer((host, 8765), Handler)
+        except Exception as exc:
+            self.notification_receiver_url = ""
+            if hasattr(self, "notification_receiver_label"):
+                self.notification_receiver_label.setText(
+                    f"Companion receiver error: {exc}"
+                )
+            return
+
+        self.notification_receiver_server = server
+        self.notification_receiver_url = f"http://{host}:8765/notify"
+
+        import threading
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.notification_receiver_thread = thread
+
+        if hasattr(self, "notification_receiver_label"):
+            self.notification_receiver_label.setText(
+                f"Companion receiver: READY\n{self.notification_receiver_url}"
+            )
+
+    def _apply_companion_notification(self, payload):
+        if not self.notification_feed_enabled:
+            return
+
+        package = str(payload.get("package") or "Android")[:200]
+        title = self._clean_notification_value(payload.get("title") or "")
+        body = self._clean_notification_value(payload.get("text") or payload.get("body") or "")
+        if not title and not body:
+            return
+
+        kind = self._notification_kind(package, title, body)
+        raw_id = f"{package}|{title}|{body}|{payload.get('posted_at', '')}"
+        item = {
+            "id": hashlib.sha1(raw_id.encode("utf-8", errors="ignore")).hexdigest(),
+            "package": package,
+            "app": self._notification_app_label(package, kind),
+            "kind": kind,
+            "title": title or package,
+            "body": body,
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "source": "companion",
+        }
+
+        if item["id"] in self.notification_seen:
+            return
+        self.notification_seen.add(item["id"])
+        self.notification_items.insert(0, item)
+        self.notification_items = self.notification_items[:200]
+        self._append_notification_history(item)
+        self._refresh_notification_list()
+
+        if hasattr(self, "notification_status"):
+            self.notification_status.setText(
+                f"Status: Live companion feed · {item['app']} received"
+            )
+
+        if self.tray_icon:
+            self.tray_icon.showMessage(
+                f"{item['app']} · {item['title']}",
+                item["body"],
+                QSystemTrayIcon.Information,
+                7000,
+            )
+
+    def configure_notification_companion(self):
+        self.start_notification_receiver()
+        target = self._notification_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+        if not self.notification_receiver_url:
+            self.set_footer("PC Tailscale receiver is not ready.")
+            return
+
+        packages = run_quiet(
+            ["adb", "-s", target, "shell", "pm", "list", "packages", "com.phonehub.notifier"],
+            timeout=6,
+        )
+        if "com.phonehub.notifier" not in packages:
+            self.set_footer("PhoneHub Notifier is not installed on the phone yet.")
+            if hasattr(self, "notification_receiver_label"):
+                self.notification_receiver_label.setText(
+                    "Companion app not installed. Build/install PhoneHubNotifier.apk first."
+                )
+            return
+
+        result = run_quiet([
+            "adb", "-s", target, "shell", "am", "start",
+            "-n", "com.phonehub.notifier/.MainActivity",
+            "--es", "endpoint", self.notification_receiver_url,
+            "--es", "token", self.notification_pairing_token,
+        ], timeout=8)
+
+        if "Error" in result or "Exception" in result:
+            self.set_footer("Could not configure PhoneHub Notifier.")
+        else:
+            self.set_footer("Companion configured. Enable Notification Access on the phone.")
+            if hasattr(self, "notification_receiver_label"):
+                self.notification_receiver_label.setText(
+                    f"Companion configured for:\n{self.notification_receiver_url}"
+                )
+
+    def open_notification_access_settings(self):
+        target = self._notification_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+        run_background([
+            "adb", "-s", target, "shell", "am", "start",
+            "-a", "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS",
+        ])
+        self.set_footer("Opened Notification Access settings on the phone.")
+
+    def check_notification_companion(self):
+        target = self._notification_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+
+        packages = run_quiet(
+            ["adb", "-s", target, "shell", "pm", "list", "packages", "com.phonehub.notifier"],
+            timeout=6,
+        )
+        listeners = run_quiet(
+            ["adb", "-s", target, "shell", "settings", "get", "secure", "enabled_notification_listeners"],
+            timeout=6,
+        )
+
+        installed = "com.phonehub.notifier" in packages
+        enabled = "com.phonehub.notifier" in listeners
+        receiver = bool(self.notification_receiver_url)
+
+        text = (
+            "Companion diagnostics:\n"
+            f"Installed: {'YES' if installed else 'NO'}\n"
+            f"Notification Access: {'ENABLED' if enabled else 'NOT ENABLED'}\n"
+            f"PC receiver: {'READY' if receiver else 'NOT READY'}\n"
+            f"Receiver URL: {self.notification_receiver_url or 'unavailable'}"
+        )
+        if hasattr(self, "notification_diag"):
+            self.notification_diag.setText(text)
+        self.set_footer("Companion check complete.")
 
     def diagnose_notification_feed(self):
         target = self._notification_target()
