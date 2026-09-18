@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.24-engine-core"
+APP_VERSION = "v3.25-live-message-rss"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -1842,8 +1842,8 @@ class PhoneHubTailscale(PhoneHub):
 
         box, box_layout, _ = self.card(
             "Notification Feed",
-            "RSS-style message feed for SMS, WhatsApp, calls and other Android notifications. "
-            "The PhoneHub Notifier companion uses Android Notification Access and sends new events directly to this PC over Tailscale. "
+            "Live RSS-style notification feed. Notifications like the ones visible in your Android notification shade are forwarded to this PC over Tailscale by PhoneHub Notifier. "
+            "WhatsApp/SMS messaging-style notifications are decoded for conversation title, sender and latest message. "
             "ADB polling remains only as a fallback. PhoneHub can stay in the Windows tray.",
         )
 
@@ -2520,9 +2520,10 @@ class PhoneHubTailscale(PhoneHub):
             when = item.get("time") or ""
 
             self.notification_list.addItem(
-                f"{when}   {app}\n"
+                f"[{when}] {app}\n"
                 f"{title}\n"
-                f"{body}"
+                f"{body}\n"
+                f"────────────────────────"
             )
 
     def clear_notification_view(self):
