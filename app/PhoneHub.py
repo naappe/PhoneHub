@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 
-APP_VERSION = "v2.5-saved-tailscale-ip"
+APP_VERSION = "v2.6-independent-screen-camera"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -276,6 +276,9 @@ class PhoneHub(QWidget):
         self.setWindowTitle(f"PhoneHub {APP_VERSION}")
         self.resize(1080, 700)
         self.current_view = ""
+        self.screen_process = None
+        self.camera_process = None
+        self.camera_facing = ""
 
         self.bridge = Bridge()
         self.bridge.message.connect(self.set_footer)
@@ -621,7 +624,7 @@ class PhoneHub(QWidget):
 
         close = QPushButton("Close Camera")
         close.setObjectName("danger")
-        close.clicked.connect(self.disconnect_screen)
+        close.clicked.connect(self.close_camera_only)
 
         row.addWidget(back)
         row.addWidget(front)
@@ -954,13 +957,38 @@ class PhoneHub(QWidget):
 
         self.open_screen(READABLE_SCREEN, keep_alive=True)
 
-    def open_screen(self, profile, keep_alive=False):
-        if keep_alive and scrcpy_running():
-            self.set_footer("Screen already open. Keeping it alive.")
-            return
+    def _proc_alive(self, proc):
+        return proc is not None and proc.poll() is None
 
-        if not connect_remote_adb():
-            QMessageBox.warning(self, "PhoneHub", "Phone not connected. Check Tailscale and saved phone IP.")
+    def _start_scrcpy(self, args):
+        try:
+            return subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=no_window_flag()
+            )
+        except Exception:
+            return None
+
+    def _stop_proc(self, proc, wait_seconds=0.15):
+        if not self._proc_alive(proc):
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=wait_seconds)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def open_screen(self, profile, keep_alive=False):
+        # Screen and camera are independent processes. Opening the screen never
+        # closes the camera window, and an open camera never blocks the screen.
+        if self._proc_alive(self.screen_process):
+            self.set_footer("Screen already open.")
             return
 
         scrcpy = scrcpy_path()
@@ -968,44 +996,72 @@ class PhoneHub(QWidget):
             QMessageBox.critical(self, "PhoneHub", "scrcpy not found.")
             return
 
-        if not keep_alive:
-            close_scrcpy()
+        target = adb_target()
+        if not target:
+            QMessageBox.warning(self, "PhoneHub", "Phone IP is not configured.")
+            return
 
-        adb_shell(["input", "keyevent", "224"], timeout=3)
+        # Do not run the slower connect/check path here. scrcpy can attach
+        # directly to an already-online adb target, which makes opening faster.
+        run_background(["adb", "-s", target, "shell", "input", "keyevent", "224"])
 
-        ok = run_background([scrcpy, "-s", adb_target()] + profile)
-        self.current_view = "screen"
+        args = [scrcpy, "-s", target] + profile
+        self.screen_process = self._start_scrcpy(args)
 
-        self.set_footer("Opening screen..." if ok else "Could not open screen.")
+        if self.screen_process:
+            self.current_view = "screen"
+            self.set_footer("Opening screen...")
+        else:
+            self.set_footer("Could not open screen.")
 
     def open_camera_direct(self, facing):
-        if not connect_remote_adb():
-            self.set_footer("Phone not connected.")
-            return
-
         scrcpy = scrcpy_path()
         if not scrcpy:
             QMessageBox.critical(self, "PhoneHub", "scrcpy not found.")
             return
 
-        close_scrcpy()
+        target = adb_target()
+        if not target:
+            self.set_footer("Phone IP is not configured.")
+            return
+
+        # Clicking the same camera again does nothing if it is already open.
+        if self._proc_alive(self.camera_process) and self.camera_facing == facing:
+            self.set_footer(f"{facing.title()} camera already open.")
+            return
+
+        # Switching front/back replaces ONLY the camera stream. The separate
+        # phone screen window stays open.
+        if self._proc_alive(self.camera_process):
+            self._stop_proc(self.camera_process, wait_seconds=0.12)
 
         args = [
             scrcpy,
-            "-s", adb_target(),
+            "-s", target,
             "--video-source=camera",
             f"--camera-facing={facing}",
-            "--camera-size=320x240",
-            "--camera-fps=8",
-            "--video-bit-rate=180K",
+            "--camera-size=640x480",
+            "--camera-fps=15",
+            "--video-bit-rate=500K",
+            "--video-buffer=0",
             "--no-audio",
-            f"--window-title=PhoneHub {facing.title()} Camera"
+            f"--window-title=PhoneHub Camera"
         ]
 
-        ok = run_background(args)
-        self.current_view = f"{facing} camera"
+        self.camera_process = self._start_scrcpy(args)
+        self.camera_facing = facing if self.camera_process else ""
 
-        self.set_footer(f"Opening {facing} camera..." if ok else "Could not open camera.")
+        if self.camera_process:
+            self.current_view = f"{facing} camera"
+            self.set_footer(f"Switching to {facing} camera...")
+        else:
+            self.set_footer("Could not open camera.")
+
+    def close_camera_only(self):
+        self._stop_proc(self.camera_process)
+        self.camera_process = None
+        self.camera_facing = ""
+        self.set_footer("Camera closed.")
 
     def screenshot_async(self):
         self.set_footer("Taking screenshot...")
@@ -1039,9 +1095,11 @@ class PhoneHub(QWidget):
             self.set_footer("Reboot command sent.")
 
     def disconnect_screen(self):
-        close_scrcpy()
-        self.current_view = ""
-        self.set_footer("Screen/camera disconnected.")
+        self._stop_proc(self.screen_process)
+        self.screen_process = None
+        if self.current_view == "screen":
+            self.current_view = ""
+        self.set_footer("Screen disconnected. Camera stays open.")
 
     def open_screenshots(self):
         SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
