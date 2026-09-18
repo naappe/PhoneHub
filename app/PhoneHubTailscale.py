@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.25-live-message-rss"
+APP_VERSION = "v3.26-clean-message-feed"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2439,6 +2439,17 @@ class PhoneHubTailscale(PhoneHub):
 
     def _clean_notification_value(self, value):
         value = str(value or "").replace("\\n", " ").replace("\n", " ").strip()
+
+        # Repair common UTF-8 text that was accidentally decoded as Windows-1252,
+        # for example: donâ€™t -> don’t.
+        if any(marker in value for marker in ("â€™", "â€œ", "â€", "Ã", "Â")):
+            try:
+                repaired = value.encode("cp1252", errors="strict").decode("utf-8", errors="strict")
+                if repaired:
+                    value = repaired
+            except Exception:
+                pass
+
         value = re.sub(r"\s+", " ", value)
         if value in ("null", "None"):
             return ""
