@@ -38,7 +38,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.17-audio-monitor-reconnect"
+APP_VERSION = "v3.18-device-tools"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -142,6 +142,7 @@ class PhoneHubTailscale(PhoneHub):
             ("Files", self.page_files),
             ("Apps", self.page_apps),
             ("Control", self.page_control),
+            ("Device", self.page_device_tools),
             ("Settings", self.page_settings),
         ]
 
@@ -1110,6 +1111,227 @@ class PhoneHubTailscale(PhoneHub):
         self.stop_live_audio()
         event.accept()
 
+    def page_device_tools(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        mirror_box, mirror_layout, _ = self.card(
+            "Temporary scrcpy device controls",
+            "These options apply while that scrcpy session is running and are restored when it closes.",
+        )
+
+        row1 = QHBoxLayout()
+        keep_active = QPushButton("Keep Active")
+        keep_active.setObjectName("primary")
+        keep_active.clicked.connect(lambda: self.start_device_scrcpy(["--keep-active"], "Keep Active"))
+
+        screen_off = QPushButton("Mirror + Screen Off")
+        screen_off.clicked.connect(
+            lambda: self.start_device_scrcpy(["--turn-screen-off", "--keep-active"], "Mirror + Screen Off")
+        )
+
+        timeout5 = QPushButton("5 Min Screen Timeout")
+        timeout5.clicked.connect(
+            lambda: self.start_device_scrcpy(["--screen-off-timeout=300"], "5 Minute Timeout")
+        )
+
+        touches = QPushButton("Show Touches")
+        touches.clicked.connect(
+            lambda: self.start_device_scrcpy(["--show-touches"], "Show Touches")
+        )
+
+        row1.addWidget(keep_active)
+        row1.addWidget(screen_off)
+        row1.addWidget(timeout5)
+        row1.addWidget(touches)
+        mirror_layout.addLayout(row1)
+        layout.addWidget(mirror_box)
+
+        adb_box, adb_layout, _ = self.card(
+            "Android device settings",
+            "These are direct Android settings. Unlike the temporary scrcpy options above, they stay changed until you change them back.",
+        )
+
+        row2 = QHBoxLayout()
+
+        stay_on = QPushButton("Stay Awake ON")
+        stay_on.clicked.connect(lambda: self.device_setting(
+            ["settings", "put", "global", "stay_on_while_plugged_in", "7"],
+            "Stay awake while plugged in: ON"
+        ))
+
+        stay_off = QPushButton("Stay Awake OFF")
+        stay_off.clicked.connect(lambda: self.device_setting(
+            ["settings", "put", "global", "stay_on_while_plugged_in", "0"],
+            "Stay awake while plugged in: OFF"
+        ))
+
+        touch_on = QPushButton("Touches ON")
+        touch_on.clicked.connect(lambda: self.device_setting(
+            ["settings", "put", "system", "show_touches", "1"],
+            "Show touches: ON"
+        ))
+
+        touch_off = QPushButton("Touches OFF")
+        touch_off.clicked.connect(lambda: self.device_setting(
+            ["settings", "put", "system", "show_touches", "0"],
+            "Show touches: OFF"
+        ))
+
+        row2.addWidget(stay_on)
+        row2.addWidget(stay_off)
+        row2.addWidget(touch_on)
+        row2.addWidget(touch_off)
+        adb_layout.addLayout(row2)
+
+        row3 = QHBoxLayout()
+
+        timeout30 = QPushButton("Timeout 30 sec")
+        timeout30.clicked.connect(lambda: self.device_setting(
+            ["settings", "put", "system", "screen_off_timeout", "30000"],
+            "Screen timeout set to 30 seconds"
+        ))
+
+        timeout300 = QPushButton("Timeout 5 min")
+        timeout300.clicked.connect(lambda: self.device_setting(
+            ["settings", "put", "system", "screen_off_timeout", "300000"],
+            "Screen timeout set to 5 minutes"
+        ))
+
+        read_values = QPushButton("Read Current Settings")
+        read_values.setObjectName("primary")
+        read_values.clicked.connect(self.read_device_settings)
+
+        row3.addWidget(timeout30)
+        row3.addWidget(timeout300)
+        row3.addWidget(read_values)
+        adb_layout.addLayout(row3)
+
+        self.device_settings_status = QLabel("Status: Ready")
+        self.device_settings_status.setObjectName("big")
+        self.device_settings_status.setWordWrap(True)
+        adb_layout.addWidget(self.device_settings_status)
+
+        layout.addWidget(adb_box)
+
+        app_box, app_layout, _ = self.card(
+            "Start Android app",
+            "Enter an Android package name, for example org.mozilla.firefox.",
+        )
+
+        self.device_app_input = QLineEdit()
+        self.device_app_input.setPlaceholderText("com.example.app")
+        app_layout.addWidget(self.device_app_input)
+
+        launch = QPushButton("Start App")
+        launch.setObjectName("primary")
+        launch.clicked.connect(self.start_android_app_from_device_page)
+        app_layout.addWidget(launch)
+
+        layout.addWidget(app_box)
+        layout.addStretch()
+        return page
+
+    def _device_target(self):
+        ip, port = get_saved_ip()
+        target = f"{ip}:{port}" if ip else ""
+        usb, remote, unauthorized, _ = parse_adb_devices()
+
+        if target and target in remote:
+            return target
+        if usb:
+            return usb[0]
+        return ""
+
+    def start_device_scrcpy(self, extra_args, label):
+        scrcpy = scrcpy_path()
+        target = self._device_target()
+
+        if not scrcpy:
+            self.set_footer("scrcpy not found.")
+            return
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+
+        args = [scrcpy, "--serial", target] + list(extra_args)
+        try:
+            subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform.startswith("win") else 0),
+            )
+            self.set_footer(f"{label} started.")
+        except Exception as exc:
+            self.set_footer(f"{label} failed: {exc}")
+
+    def device_setting(self, shell_args, success_text):
+        target = self._device_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+
+        result = run_quiet(["adb", "-s", target, "shell"] + shell_args, timeout=6)
+        if hasattr(self, "device_settings_status"):
+            self.device_settings_status.setText(success_text if result == "" else f"{success_text}\n{result}")
+        self.set_footer(success_text)
+
+    def read_device_settings(self):
+        target = self._device_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+
+        stay = run_quiet(
+            ["adb", "-s", target, "shell", "settings", "get", "global", "stay_on_while_plugged_in"],
+            timeout=5,
+        )
+        timeout = run_quiet(
+            ["adb", "-s", target, "shell", "settings", "get", "system", "screen_off_timeout"],
+            timeout=5,
+        )
+        touches = run_quiet(
+            ["adb", "-s", target, "shell", "settings", "get", "system", "show_touches"],
+            timeout=5,
+        )
+
+        text = (
+            f"stay_on_while_plugged_in: {stay or 'unknown'}\n"
+            f"screen_off_timeout: {timeout or 'unknown'} ms\n"
+            f"show_touches: {touches or 'unknown'}"
+        )
+        if hasattr(self, "device_settings_status"):
+            self.device_settings_status.setText(text)
+        self.set_footer("Read current Android device settings.")
+
+    def start_android_app_from_device_page(self):
+        package = self.device_app_input.text().strip() if hasattr(self, "device_app_input") else ""
+        if not package:
+            self.set_footer("Enter an Android package name.")
+            return
+
+        scrcpy = scrcpy_path()
+        target = self._device_target()
+        if not scrcpy or not target:
+            self.set_footer("scrcpy or phone connection is unavailable.")
+            return
+
+        try:
+            subprocess.Popen(
+                [scrcpy, "--serial", target, f"--start-app={package}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform.startswith("win") else 0),
+            )
+            self.set_footer(f"Starting Android app: {package}")
+        except Exception as exc:
+            self.set_footer(f"Could not start app: {exc}")
+
     def page_settings(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1158,6 +1380,7 @@ class PhoneHubTailscale(PhoneHub):
             "Files",
             "Apps",
             "Control",
+            "Device",
             "Settings",
         ]
         if 0 <= index < len(names):
