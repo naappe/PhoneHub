@@ -1,6 +1,7 @@
 package com.phonehub.notifier;
 
 import android.app.Notification;
+import android.app.Person;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.service.notification.NotificationListenerService;
@@ -21,17 +22,69 @@ public class NotificationForwarderService extends NotificationListenerService {
         if (sbn == null || sbn.getNotification() == null) return;
 
         Notification n = sbn.getNotification();
-        CharSequence titleCs = n.extras.getCharSequence(Notification.EXTRA_TITLE);
-        CharSequence textCs = n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT);
-        if (TextUtils.isEmpty(textCs)) {
-            textCs = n.extras.getCharSequence(Notification.EXTRA_TEXT);
+
+        CharSequence titleCs = n.extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE);
+        if (TextUtils.isEmpty(titleCs)) {
+            titleCs = n.extras.getCharSequence(Notification.EXTRA_TITLE);
         }
 
         String title = titleCs == null ? "" : titleCs.toString();
-        String text = textCs == null ? "" : textCs.toString();
+        String text = extractBestText(n);
+
         if (title.isEmpty() && text.isEmpty()) return;
 
-        forward(getApplicationContext(), sbn.getPackageName(), title, text, sbn.getPostTime());
+        forward(
+                getApplicationContext(),
+                sbn.getPackageName(),
+                title,
+                text,
+                sbn.getPostTime()
+        );
+    }
+
+    private static String extractBestText(Notification n) {
+        // Messaging apps (WhatsApp, Telegram, SMS apps) commonly use MessagingStyle.
+        try {
+            android.os.Parcelable[] rawMessages = n.extras.getParcelableArray(Notification.EXTRA_MESSAGES);
+            if (rawMessages != null && rawMessages.length > 0) {
+                Notification.MessagingStyle.Message[] messages =
+                        Notification.MessagingStyle.Message.getMessagesFromBundleArray(rawMessages);
+
+                if (messages != null && messages.length > 0) {
+                    Notification.MessagingStyle.Message last = messages[messages.length - 1];
+
+                    String sender = "";
+                    try {
+                        Person person = last.getSenderPerson();
+                        if (person != null && person.getName() != null) {
+                            sender = person.getName().toString();
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    CharSequence bodyCs = last.getText();
+                    String body = bodyCs == null ? "" : bodyCs.toString();
+
+                    if (!sender.isEmpty() && !body.isEmpty()) {
+                        return sender + ": " + body;
+                    }
+                    if (!body.isEmpty()) return body;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        CharSequence big = n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT);
+        if (!TextUtils.isEmpty(big)) return big.toString();
+
+        CharSequence text = n.extras.getCharSequence(Notification.EXTRA_TEXT);
+        if (!TextUtils.isEmpty(text)) return text.toString();
+
+        CharSequence sub = n.extras.getCharSequence(Notification.EXTRA_SUB_TEXT);
+        if (!TextUtils.isEmpty(sub)) return sub.toString();
+
+        CharSequence ticker = n.tickerText;
+        return ticker == null ? "" : ticker.toString();
     }
 
     public static void sendTest(Context context) {
