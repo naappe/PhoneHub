@@ -1,0 +1,45 @@
+name: Build PhoneHub One APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "companion/PhoneHubOne/**"
+      - ".github/workflows/build-phonehub-one.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build PhoneHub One
+        run: gradle -p companion/PhoneHubOne clean assembleDebug
+
+      - name: Verify combined components
+        run: |
+          grep -R "PhoneHubDeviceAdminReceiver" companion/PhoneHubOne/app/build/intermediates/merged_manifests companion/PhoneHubOne/app/build/intermediates/merged_manifest
+          grep -R "GoBackend" companion/PhoneHubOne/app/build/intermediates/merged_manifests companion/PhoneHubOne/app/build/intermediates/merged_manifest
+          grep -R "NotificationForwarderService" companion/PhoneHubOne/app/build/intermediates/merged_manifests companion/PhoneHubOne/app/build/intermediates/merged_manifest
+
+      - name: Rename APK
+        run: cp companion/PhoneHubOne/app/build/outputs/apk/debug/app-debug.apk PhoneHub-One-v1.0.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhoneHub-One-v1.0
+          path: PhoneHub-One-v1.0.apk
+          if-no-files-found: error
