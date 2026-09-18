@@ -30,7 +30,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.0-simple-setup-wizard"
+APP_VERSION = "v3.1-clean-navigation-layout"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -93,16 +93,16 @@ class PhoneHubTailscale(PhoneHub):
         short laptop screens.
         """
         root = QHBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(8)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(12)
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(168)
+        sidebar.setFixedWidth(176)
 
         side = QVBoxLayout(sidebar)
-        side.setContentsMargins(10, 10, 10, 10)
-        side.setSpacing(5)
+        side.setContentsMargins(12, 12, 12, 12)
+        side.setSpacing(8)
 
         logo = QLabel("PhoneHub")
         logo.setObjectName("logo")
@@ -130,7 +130,7 @@ class PhoneHubTailscale(PhoneHub):
             btn = QPushButton(name)
             btn.setObjectName("nav")
             btn.clicked.connect(lambda checked=False, i=index: self.show_page(i))
-            btn.setMinimumHeight(34)
+            btn.setMinimumHeight(38)
             side.addWidget(btn)
             self.nav_buttons.append(btn)
 
@@ -152,13 +152,13 @@ class PhoneHubTailscale(PhoneHub):
 
         main_wrap = QVBoxLayout()
         main_wrap.setContentsMargins(0, 0, 0, 0)
-        main_wrap.setSpacing(5)
+        main_wrap.setSpacing(8)
         main_wrap.addWidget(self.stack, 1)
 
         self.footer = QLabel("Ready")
         self.footer.setObjectName("footer")
-        self.footer.setWordWrap(True)
-        self.footer.setMaximumHeight(38)
+        self.footer.setWordWrap(False)
+        self.footer.setMaximumHeight(24)
         main_wrap.addWidget(self.footer)
 
         root.addWidget(sidebar)
@@ -281,8 +281,8 @@ class PhoneHubTailscale(PhoneHub):
         box.setObjectName("card")
 
         lay = QVBoxLayout(box)
-        lay.setContentsMargins(11, 10, 11, 10)
-        lay.setSpacing(6)
+        lay.setContentsMargins(14, 14, 14, 14)
+        lay.setSpacing(8)
 
         t = QLabel(title)
         t.setObjectName("title")
@@ -299,8 +299,8 @@ class PhoneHubTailscale(PhoneHub):
     def page_dashboard(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(3, 3, 3, 3)
-        layout.setSpacing(7)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
 
         ip_box, ip_layout, _ = self.card(
             "Phone",
@@ -360,8 +360,8 @@ class PhoneHubTailscale(PhoneHub):
         """
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
 
         header, header_layout, _ = self.card(
             "PhoneHub Setup",
