@@ -38,7 +38,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.18-device-tools"
+APP_VERSION = "v3.18.1-startup-hotfix"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -80,6 +80,13 @@ class PhoneHubTailscale(PhoneHub):
         self.audio_source = "mic-voice-communication"
         self.audio_log_handle = None
         self.audio_log_path = ""
+        self.audio_buffer_ms = 30
+        self.audio_output_buffer_ms = 5
+        self.audio_no_playback = False
+        self.audio_listen_requested = False
+        self.audio_monitor_window = None
+        self.audio_monitor_status = None
+        self._call_was_active = False
         self.audio_level_text = "Level: No recording analyzed yet"
 
         # Detection now runs in a background thread. The old implementation ran
@@ -94,6 +101,11 @@ class PhoneHubTailscale(PhoneHub):
         self.unlock_timer = QTimer(self)
         self.unlock_timer.setInterval(2500)
         self.unlock_timer.timeout.connect(self._check_unlock_progress)
+
+        self.call_monitor_timer = QTimer(self)
+        self.call_monitor_timer.setInterval(2000)
+        self.call_monitor_timer.timeout.connect(self._monitor_call_audio_state)
+        self.call_monitor_timer.start()
 
         # Keep the window inside the visible desktop area on smaller laptops.
         screen = QApplication.primaryScreen()
@@ -559,15 +571,9 @@ class PhoneHubTailscale(PhoneHub):
         source = getattr(self, "audio_source", "")
         if not source.startswith("voice-call"):
             self._call_was_active = False
-        self.audio_listen_requested = False
-        self.audio_monitor_window = None
-        self.audio_monitor_status = None
             return
 
-        proc = getattr(self, "audio_process", None)
-        if not proc or proc.poll() is not None:
-            if hasattr(self, "audio_status") and self.audio_status.text().startswith("Status: Listening"):
-                self.audio_status.setText("Status: Idle")
+        if not getattr(self, "audio_listen_requested", False):
             return
 
         # Run the dumpsys checks away from the UI thread.
