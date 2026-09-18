@@ -18,8 +18,9 @@ from PySide6.QtWidgets import (
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 from state_engine import detect_device_state, state_summary
 from security_monitor import scan_device, summarize_findings, EVIDENCE_DIR
+from frida_runtime import FridaRuntimeSession, run_async
 
-APP_VERSION = "v3.5-unified-state-security"
+APP_VERSION = "v3.6-frida-runtime-analysis"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -276,6 +277,8 @@ class Bridge(QObject):
     apk_result = Signal(str)
     state_result = Signal(str)
     security_result = Signal(str)
+    runtime_result = Signal(str)
+    runtime_status = Signal(str)
 
 
 class PhoneHub(QWidget):
@@ -299,6 +302,7 @@ class PhoneHub(QWidget):
         self.last_device_state = None
         self._state_busy = False
         self._security_busy = False
+        self.runtime_session = None
 
         self.bridge = Bridge()
         self.bridge.message.connect(self.set_footer)
@@ -308,6 +312,8 @@ class PhoneHub(QWidget):
         self.bridge.apk_result.connect(self.set_apk_result)
         self.bridge.state_result.connect(self.set_state_result)
         self.bridge.security_result.connect(self.set_security_result)
+        self.bridge.runtime_result.connect(self.append_runtime_result)
+        self.bridge.runtime_status.connect(self.set_runtime_status)
 
         self.nav_buttons = []
         self.build_ui()
@@ -354,6 +360,7 @@ class PhoneHub(QWidget):
             ("Service Lab", self.page_service_lab),
             ("Device State", self.page_device_state),
             ("Security", self.page_security),
+            ("Runtime Analysis", self.page_runtime_analysis),
             ("APK Analysis", self.page_apk_analysis),
             ("Settings", self.page_settings),
         ]
@@ -1266,6 +1273,179 @@ class PhoneHub(QWidget):
         EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(str(EVIDENCE_DIR))
 
+
+    def page_runtime_analysis(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        info, _, _ = self.card(
+            "Frida Runtime Analysis",
+            "For applications you own or are authorized to test. "
+            "This diagnostic mode traces System.exit / Process.killProcess stack traces and watches "
+            "selected native file/proc reads associated with instrumentation detection. "
+            "It preserves the app's original exit behavior and does not bypass the checks."
+        )
+        layout.addWidget(info)
+
+        target_box, target_layout, _ = self.card(
+            "Target Process",
+            "Enter a PID or exact process/package name after checking the available USB processes."
+        )
+
+        self.runtime_target_input = QLineEdit()
+        self.runtime_target_input.setPlaceholderText("PID or process/package name")
+        target_layout.addWidget(self.runtime_target_input)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        check = QPushButton("Check Frida")
+        check.clicked.connect(self.runtime_check_frida)
+
+        processes = QPushButton("List USB Processes")
+        processes.setObjectName("primary")
+        processes.clicked.connect(self.runtime_list_processes)
+
+        attach = QPushButton("Attach Diagnostic Hooks")
+        attach.clicked.connect(self.runtime_attach)
+
+        detach = QPushButton("Detach")
+        detach.setObjectName("danger")
+        detach.clicked.connect(self.runtime_detach)
+
+        row.addWidget(check)
+        row.addWidget(processes)
+        row.addWidget(attach)
+        row.addWidget(detach)
+        target_layout.addLayout(row)
+        layout.addWidget(target_box)
+
+        status_box, _, self.runtime_status_label = self.card(
+            "Runtime Status",
+            "Not attached."
+        )
+        layout.addWidget(status_box)
+
+        log_box, log_layout, _ = self.card(
+            "Runtime Log",
+            "Observed events appear here. openat() is handled with pathname argument 1; other path APIs use argument 0."
+        )
+
+        self.runtime_log_box = QTextEdit()
+        self.runtime_log_box.setReadOnly(True)
+        self.runtime_log_box.setMinimumHeight(300)
+        self.runtime_log_box.setText("No runtime events yet.")
+        log_layout.addWidget(self.runtime_log_box)
+
+        clear = QPushButton("Clear Runtime Log")
+        clear.clicked.connect(lambda: self.runtime_log_box.setText(""))
+        log_layout.addWidget(clear)
+
+        layout.addWidget(log_box)
+        layout.addStretch()
+        return page
+
+    def _ensure_runtime_session(self):
+        if self.runtime_session is None:
+            self.runtime_session = FridaRuntimeSession(
+                on_line=lambda line: self.bridge.runtime_result.emit(line),
+                on_status=lambda status: self.bridge.runtime_status.emit(
+                    f"Connected: {'Yes' if status.connected else 'No'}\n"
+                    f"Device: {status.device or '-'}\n"
+                    f"Process: {status.process or '-'}\n"
+                    f"Detail: {status.detail}"
+                )
+            )
+        return self.runtime_session
+
+    def append_runtime_result(self, text):
+        if not hasattr(self, "runtime_log_box"):
+            return
+        current = self.runtime_log_box.toPlainText()
+        if current.strip() == "No runtime events yet.":
+            current = ""
+        stamp = datetime.now().strftime("%H:%M:%S")
+        combined = (current + f"\n[{stamp}] {text}").strip()
+        self.runtime_log_box.setText(combined)
+        self.runtime_log_box.moveCursor(self.runtime_log_box.textCursor().End)
+
+    def set_runtime_status(self, text):
+        if hasattr(self, "runtime_status_label"):
+            self.runtime_status_label.setText(text)
+
+    def runtime_check_frida(self):
+        session = self._ensure_runtime_session()
+        status = session.tool_status()
+        text = (
+            "FRIDA TOOL CHECK\n\n"
+            f"Installed: {'Yes' if status['installed'] else 'No'}\n"
+            f"Version: {status['version'] or '-'}\n"
+            f"Detail: {status['detail']}\n\n"
+            "Install on PC with: pip install frida frida-tools"
+        )
+        self.bridge.runtime_result.emit(text)
+        self.set_footer("Frida tool check complete.")
+
+    def runtime_list_processes(self):
+        session = self._ensure_runtime_session()
+        self.set_footer("Listing Frida USB processes...")
+
+        def done(result):
+            device_name, rows = result
+            lines = [f"USB DEVICE: {device_name}", "", "PID\tPROCESS"]
+            for pid, name in rows[:400]:
+                lines.append(f"{pid}\t{name}")
+            self.bridge.runtime_result.emit("\n".join(lines))
+            self.bridge.runtime_status.emit(
+                f"Connected: Yes\nDevice: {device_name}\nProcess: -\nDetail: Process list loaded."
+            )
+            self.bridge.message.emit("Frida process list loaded.")
+
+        def failed(error):
+            self.bridge.runtime_result.emit("Frida process listing failed:\n" + error)
+            self.bridge.message.emit("Frida process listing failed.")
+
+        run_async(session.list_usb_processes, done, failed)
+
+    def runtime_attach(self):
+        target = self.runtime_target_input.text().strip() if hasattr(self, "runtime_target_input") else ""
+        if not target:
+            QMessageBox.warning(self, "PhoneHub Runtime Analysis", "Enter a PID or exact process/package name first.")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Attach Frida Diagnostic Hooks",
+            "Attach read/trace diagnostic hooks to this authorized test process?\n\n"
+            "The hooks log exit stack traces and selected file/proc reads. "
+            "They preserve the original exit/kill behavior and do not bypass the checks."
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        session = self._ensure_runtime_session()
+        self.set_footer("Attaching Frida diagnostic hooks...")
+
+        def done(_):
+            self.bridge.runtime_result.emit("Diagnostic hooks attached to: " + target)
+            self.bridge.message.emit("Frida diagnostic hooks attached.")
+
+        def failed(error):
+            self.bridge.runtime_result.emit("Frida attach failed:\n" + error)
+            self.bridge.message.emit("Frida attach failed.")
+
+        run_async(lambda: session.attach(target), done, failed)
+
+    def runtime_detach(self):
+        if self.runtime_session is None:
+            self.set_footer("No Frida runtime session is active.")
+            return
+        self.runtime_session.detach()
+        self.bridge.runtime_result.emit("Detached from Frida target.")
+        self.set_footer("Frida runtime session detached.")
+
     def page_apk_analysis(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1651,7 +1831,7 @@ class PhoneHub(QWidget):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
-        names = ["Dashboard", "Setup New Phone", "Screen", "Camera", "Files", "Apps", "Control", "Service Lab", "Device State", "Security", "APK Analysis", "Settings"]
+        names = ["Dashboard", "Setup New Phone", "Screen", "Camera", "Files", "Apps", "Control", "Service Lab", "Device State", "Security", "Runtime Analysis", "APK Analysis", "Settings"]
         if index < len(names):
             self.set_footer(f"Opened {names[index]} page.")
 
