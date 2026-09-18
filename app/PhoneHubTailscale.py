@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QStackedWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -47,7 +48,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.20-notification-feed"
+APP_VERSION = "v3.21-screen-studio"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -110,6 +111,8 @@ class PhoneHubTailscale(PhoneHub):
         self.notification_items = []
         self.notification_store = Path(r"C:\PhoneHub\runtime\notifications\feed.jsonl")
         self.notification_store.parent.mkdir(parents=True, exist_ok=True)
+        self.screen_profile_name = "Balanced"
+        self.screen_profile_args = ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"]
         self._force_exit = False
         self.tray_icon = None
 
@@ -360,6 +363,258 @@ class PhoneHubTailscale(PhoneHub):
         lay.addWidget(lbl)
 
         return box, lay, lbl
+
+    def page_screen(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        main_box, main_layout, _ = self.card(
+            "Screen Studio",
+            "Choose a practical screen profile, then open the phone screen. "
+            "H.264 + zero video buffer is the default low-latency path.",
+        )
+
+        self.screen_profile_label = QLabel(
+            "Profile: Balanced · 1024 max · 4 Mbps · 30 FPS · H.264 · 0 ms buffer"
+        )
+        self.screen_profile_label.setObjectName("sideStatus")
+        self.screen_profile_label.setWordWrap(True)
+        main_layout.addWidget(self.screen_profile_label)
+
+        profile_row = QHBoxLayout()
+
+        fast = QPushButton("Fast")
+        fast.clicked.connect(lambda: self.set_screen_profile(
+            "Fast",
+            ["--max-size=720", "--video-bit-rate=2M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
+            "720 max · 2 Mbps · 30 FPS · H.264 · 0 ms buffer",
+        ))
+
+        balanced = QPushButton("Balanced")
+        balanced.setObjectName("primary")
+        balanced.clicked.connect(lambda: self.set_screen_profile(
+            "Balanced",
+            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
+            "1024 max · 4 Mbps · 30 FPS · H.264 · 0 ms buffer",
+        ))
+
+        quality = QPushButton("High Quality")
+        quality.clicked.connect(lambda: self.set_screen_profile(
+            "High Quality",
+            ["--max-size=1920", "--video-bit-rate=8M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
+            "1920 max · 8 Mbps · 30 FPS · H.264 · 0 ms buffer",
+        ))
+
+        smooth = QPushButton("Smooth")
+        smooth.clicked.connect(lambda: self.set_screen_profile(
+            "Smooth",
+            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=50"],
+            "1024 max · 4 Mbps · 30 FPS · H.264 · 50 ms buffer",
+        ))
+
+        profile_row.addWidget(fast)
+        profile_row.addWidget(balanced)
+        profile_row.addWidget(quality)
+        profile_row.addWidget(smooth)
+        main_layout.addLayout(profile_row)
+
+        open_row = QHBoxLayout()
+
+        open_btn = QPushButton("Open Screen")
+        open_btn.setObjectName("primary")
+        open_btn.setMinimumHeight(44)
+        open_btn.clicked.connect(self.open_selected_screen_profile)
+
+        screen_off = QPushButton("Open + Phone Screen Off")
+        screen_off.clicked.connect(self.open_screen_phone_off)
+
+        close_btn = QPushButton("Disconnect Screen")
+        close_btn.setObjectName("danger")
+        close_btn.clicked.connect(self.disconnect_screen)
+
+        open_row.addWidget(open_btn)
+        open_row.addWidget(screen_off)
+        open_row.addWidget(close_btn)
+        main_layout.addLayout(open_row)
+        layout.addWidget(main_box)
+
+        controls_box, controls_layout, _ = self.card(
+            "Quick Controls",
+            "Common controls without needing scrcpy keyboard shortcuts.",
+        )
+
+        controls_row = QHBoxLayout()
+
+        home = QPushButton("Home")
+        home.clicked.connect(lambda: self.screen_adb_key("3", "Home"))
+
+        back = QPushButton("Back")
+        back.clicked.connect(lambda: self.screen_adb_key("4", "Back"))
+
+        apps = QPushButton("Recent Apps")
+        apps.clicked.connect(lambda: self.screen_adb_key("187", "Recent Apps"))
+
+        notifications = QPushButton("Notifications")
+        notifications.clicked.connect(self.expand_android_notifications)
+
+        collapse = QPushButton("Collapse")
+        collapse.clicked.connect(self.collapse_android_notifications)
+
+        controls_row.addWidget(home)
+        controls_row.addWidget(back)
+        controls_row.addWidget(apps)
+        controls_row.addWidget(notifications)
+        controls_row.addWidget(collapse)
+        controls_layout.addLayout(controls_row)
+
+        second_row = QHBoxLayout()
+
+        shot = QPushButton("Screenshot")
+        shot.clicked.connect(self.screenshot_async)
+
+        wake = QPushButton("Wake")
+        wake.clicked.connect(self.wake_phone)
+
+        lock = QPushButton("Lock")
+        lock.clicked.connect(self.lock_phone)
+
+        second_row.addWidget(shot)
+        second_row.addWidget(wake)
+        second_row.addWidget(lock)
+        controls_layout.addLayout(second_row)
+        layout.addWidget(controls_box)
+
+        diag_box, diag_layout, _ = self.card(
+            "Screen Diagnostics",
+            "Use these when screen quality, lag, encoder compatibility or secondary displays need checking.",
+        )
+
+        diag_row = QHBoxLayout()
+
+        encoders = QPushButton("List Encoders")
+        encoders.clicked.connect(self.screen_list_encoders)
+
+        displays = QPushButton("List Displays")
+        displays.clicked.connect(self.screen_list_displays)
+
+        fps = QPushButton("FPS Test")
+        fps.clicked.connect(self.screen_fps_test)
+
+        diag_row.addWidget(encoders)
+        diag_row.addWidget(displays)
+        diag_row.addWidget(fps)
+        diag_layout.addLayout(diag_row)
+
+        self.screen_diagnostics = QTextEdit()
+        self.screen_diagnostics.setReadOnly(True)
+        self.screen_diagnostics.setMinimumHeight(150)
+        self.screen_diagnostics.setText("No screen diagnostic run yet.")
+        diag_layout.addWidget(self.screen_diagnostics)
+
+        layout.addWidget(diag_box)
+        layout.addStretch()
+        return page
+
+    def set_screen_profile(self, name, args, description):
+        self.screen_profile_name = name
+        self.screen_profile_args = list(args)
+        if hasattr(self, "screen_profile_label"):
+            self.screen_profile_label.setText(f"Profile: {name} · {description}")
+        self.set_footer(f"Screen profile set to {name}.")
+
+    def open_selected_screen_profile(self):
+        args = list(getattr(
+            self,
+            "screen_profile_args",
+            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
+        ))
+        self.open_screen(args, keep_alive=True)
+
+    def open_screen_phone_off(self):
+        args = list(getattr(
+            self,
+            "screen_profile_args",
+            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
+        ))
+        args.extend(["--turn-screen-off", "--keep-active"])
+        self.open_screen(args, keep_alive=True)
+
+    def _screen_target(self):
+        return self._device_target()
+
+    def screen_adb_key(self, keycode, label):
+        target = self._screen_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+        run_background(["adb", "-s", target, "shell", "input", "keyevent", str(keycode)])
+        self.set_footer(f"{label} sent.")
+
+    def expand_android_notifications(self):
+        target = self._screen_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+        run_background(["adb", "-s", target, "shell", "cmd", "statusbar", "expand-notifications"])
+        self.set_footer("Android notification shade opened.")
+
+    def collapse_android_notifications(self):
+        target = self._screen_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+        run_background(["adb", "-s", target, "shell", "cmd", "statusbar", "collapse"])
+        self.set_footer("Android notification shade collapsed.")
+
+    def screen_list_encoders(self):
+        scrcpy = scrcpy_path()
+        if not scrcpy:
+            self.set_footer("scrcpy not found.")
+            return
+        output = run_quiet([scrcpy, "--list-encoders"], timeout=15)
+        if hasattr(self, "screen_diagnostics"):
+            self.screen_diagnostics.setText(output or "No encoder information returned.")
+        self.set_footer("Encoder list refreshed.")
+
+    def screen_list_displays(self):
+        scrcpy = scrcpy_path()
+        if not scrcpy:
+            self.set_footer("scrcpy not found.")
+            return
+        output = run_quiet([scrcpy, "--list-displays"], timeout=12)
+        if hasattr(self, "screen_diagnostics"):
+            self.screen_diagnostics.setText(output or "No display information returned.")
+        self.set_footer("Display list refreshed.")
+
+    def screen_fps_test(self):
+        scrcpy = scrcpy_path()
+        target = self._screen_target()
+        if not scrcpy or not target:
+            self.set_footer("scrcpy or phone connection unavailable.")
+            return
+
+        args = [
+            scrcpy, "--serial", target,
+            "--max-size=720",
+            "--video-codec=h264",
+            "--video-bit-rate=2M",
+            "--max-fps=30",
+            "--video-buffer=0",
+            "--print-fps",
+            "--window-title=PhoneHub FPS Test",
+        ]
+        try:
+            subprocess.Popen(args)
+            if hasattr(self, "screen_diagnostics"):
+                self.screen_diagnostics.setText(
+                    "FPS Test opened in a separate scrcpy window.\n"
+                    "Close that test window when finished."
+                )
+            self.set_footer("FPS test started.")
+        except Exception as exc:
+            self.set_footer(f"FPS test failed: {exc}")
 
     def page_audio(self):
         page = QWidget()
