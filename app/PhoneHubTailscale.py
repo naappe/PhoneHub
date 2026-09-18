@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.29-managed-phone-ui"
+APP_VERSION = "v3.30-auto-app-status"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -126,6 +126,11 @@ class PhoneHubTailscale(PhoneHub):
         self.screen_profile_args = ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"]
         self._force_exit = False
         self.tray_icon = None
+
+        self.app_status_timer = QTimer(self)
+        self.app_status_timer.setSingleShot(True)
+        self.app_status_timer.setInterval(500)
+        self.app_status_timer.timeout.connect(self.check_selected_app_status)
 
         # Detection now runs in a background thread. The old implementation ran
         # several adb commands on the UI thread every 3 seconds, which caused
@@ -2660,7 +2665,13 @@ class PhoneHubTailscale(PhoneHub):
 
         self.app_control_package = QLineEdit()
         self.app_control_package.setPlaceholderText("Package name, e.g. com.android.settings")
+        self.app_control_package.textChanged.connect(self._schedule_app_status_check)
         box_layout.addWidget(self.app_control_package)
+
+        self.app_status_label = QLabel("App status: enter or select a package")
+        self.app_status_label.setObjectName("big")
+        self.app_status_label.setWordWrap(True)
+        box_layout.addWidget(self.app_status_label)
 
         presets = QHBoxLayout()
         settings_btn = QPushButton("Settings")
@@ -2740,6 +2751,7 @@ class PhoneHubTailscale(PhoneHub):
         )
         layout.addWidget(note)
         layout.addStretch()
+        QTimer.singleShot(350, self.check_device_owner_status)
         return page
 
     def toggle_new_phone_setup(self):
@@ -3148,6 +3160,58 @@ class PhoneHubTailscale(PhoneHub):
             self.app_control_packages.setText(text)
         self.set_footer("Package scan complete.")
 
+    def _schedule_app_status_check(self):
+        if hasattr(self, "app_status_timer"):
+            self.app_status_timer.start()
+
+    def check_selected_app_status(self):
+        target = self._app_control_target()
+        pkg = self.app_control_package.text().strip() if hasattr(self, "app_control_package") else ""
+
+        if not pkg:
+            if hasattr(self, "app_status_label"):
+                self.app_status_label.setText("App status: enter or select a package")
+            return
+
+        if not target:
+            if hasattr(self, "app_status_label"):
+                self.app_status_label.setText(f"{pkg}: PHONE NOT CONNECTED")
+            return
+
+        path_output = run_quiet(
+            ["adb", "-s", target, "shell", "pm", "path", pkg],
+            timeout=6,
+        )
+        installed = bool(path_output and "package:" in path_output)
+
+        if not installed:
+            status = "NOT INSTALLED"
+        else:
+            dump = run_quiet(
+                ["adb", "-s", target, "shell", "dumpsys", "package", pkg],
+                timeout=10,
+            )
+            suspended = bool(
+                re.search(r"\bsuspended\s*=\s*true\b", dump, flags=re.IGNORECASE)
+                or re.search(r"\bsuspended=true\b", dump, flags=re.IGNORECASE)
+            )
+            enabled_setting = ""
+            m = re.search(r"enabled=(\d+)", dump)
+            if m:
+                enabled_setting = m.group(1)
+
+            if suspended:
+                status = "SUSPENDED"
+            elif enabled_setting and enabled_setting != "0":
+                status = "DISABLED"
+            else:
+                status = "ACTIVE"
+
+        if hasattr(self, "app_status_label"):
+            self.app_status_label.setText(f"App status: {pkg} — {status}")
+
+        return status
+
     def send_app_policy(self, action, package_required=True):
         target = self._app_control_target()
         if not target:
@@ -3203,7 +3267,13 @@ class PhoneHubTailscale(PhoneHub):
         label = action.replace("_", " ").title()
         if hasattr(self, "app_control_status"):
             self.app_control_status.setText(f"Status: Sent {label} to companion")
-        self.set_footer(f"App Control: {label} sent.")
+
+        if package_required and pkg:
+            if hasattr(self, "app_status_label"):
+                self.app_status_label.setText(f"App status: {pkg} — VERIFYING...")
+            QTimer.singleShot(1400, self.check_selected_app_status)
+
+        self.set_footer(f"App Control: {label} sent. Auto-verification running.")
 
     def page_settings(self):
         page = QWidget()
