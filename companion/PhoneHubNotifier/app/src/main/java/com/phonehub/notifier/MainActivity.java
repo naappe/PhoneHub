@@ -169,6 +169,7 @@ public class MainActivity extends Activity {
         if (intent == null) return;
         String action = intent.getStringExtra("policy_action");
         String pkg = intent.getStringExtra("package");
+        String packages = intent.getStringExtra("packages");
         if (pkg != null && packageName != null) packageName.setText(pkg);
         if (action == null || action.isEmpty()) return;
 
@@ -178,6 +179,12 @@ public class MainActivity extends Activity {
                 break;
             case "unsuspend":
                 runPackagePolicy(false);
+                break;
+            case "suspend_many":
+                runMultiPackagePolicy(packages, true);
+                break;
+            case "unsuspend_many":
+                runMultiPackagePolicy(packages, false);
                 break;
             case "block_uninstall":
                 setUninstallBlocked(true);
@@ -221,6 +228,50 @@ public class MainActivity extends Activity {
             }
         } catch (Exception e) {
             status.setText("Policy failed: " + e.getMessage());
+        }
+    }
+
+    private void runMultiPackagePolicy(String csv, boolean suspend) {
+        if (!isDeviceOwner()) {
+            status.setText("Device Owner is required for app profiles.");
+            return;
+        }
+
+        if (csv == null || csv.trim().isEmpty()) {
+            status.setText("No profile packages were supplied.");
+            return;
+        }
+
+        String[] raw = csv.split(",");
+        java.util.ArrayList<String> clean = new java.util.ArrayList<>();
+        for (String value : raw) {
+            String pkg = value == null ? "" : value.trim();
+            if (!pkg.isEmpty() && !pkg.equals(getPackageName())) {
+                clean.add(pkg);
+            }
+        }
+
+        if (clean.isEmpty()) {
+            status.setText("No valid profile packages were supplied.");
+            return;
+        }
+
+        try {
+            String[] packages = clean.toArray(new String[0]);
+            String[] failures = dpm.setPackagesSuspended(admin, packages, suspend);
+            if (failures != null && failures.length > 0) {
+                status.setText(
+                        (suspend ? "Profile applied with refused package: " : "Profile restore had refused package: ")
+                                + failures[0]
+                );
+            } else {
+                status.setText(
+                        (suspend ? "Profile suspended " : "Profile restored ")
+                                + packages.length + " app(s)."
+                );
+            }
+        } catch (Exception e) {
+            status.setText("Profile policy failed: " + e.getMessage());
         }
     }
 
