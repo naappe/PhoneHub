@@ -38,7 +38,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.13-anti-echo-audio"
+APP_VERSION = "v3.14-echo-free-record"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -353,6 +353,21 @@ class PhoneHubTailscale(PhoneHub):
         actions.addWidget(stop_btn)
         box_layout.addLayout(actions)
 
+        echo_free_actions = QHBoxLayout()
+        echo_free_actions.setSpacing(8)
+
+        echo_free_record = QPushButton("Echo-Free Record")
+        echo_free_record.setObjectName("primary")
+        echo_free_record.clicked.connect(self.start_echo_free_recording)
+
+        monitor_note = QLabel("For clear speech without delayed feedback: record with PC playback OFF.")
+        monitor_note.setObjectName("big")
+        monitor_note.setWordWrap(True)
+
+        echo_free_actions.addWidget(echo_free_record)
+        box_layout.addLayout(echo_free_actions)
+        box_layout.addWidget(monitor_note)
+
         voice_actions = QHBoxLayout()
         voice_actions.setSpacing(8)
 
@@ -451,7 +466,9 @@ class PhoneHubTailscale(PhoneHub):
             "PhoneHub restarts the same selected microphone stream with scrcpy recording enabled and saves "
             "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
             "Press Record again to stop recording while continuing live listening. "
-            "Acoustic feedback cannot be removed completely if the phone microphone hears the PC speaker. For the cleanest result use headphones on the PC, or keep the PC speaker low and physically away from the phone. "
+            "Live listening always has some transport delay. If the phone microphone hears the PC speaker, that delayed sound returns as echo. "
+            "Echo-Free Record disables PC audio playback while recording, which removes that feedback path and gives the cleanest saved speech. "
+            "For live monitoring, use headphones on the PC. "
             "Recordings are saved as AAC audio in an M4A container for Windows playback. PhoneHub now stops scrcpy gracefully so the file is finalized correctly. Peak analysis uses FFmpeg when available.",
         )
         layout.addWidget(info)
@@ -555,6 +572,8 @@ class PhoneHubTailscale(PhoneHub):
                 "--require-audio",
                 f"--record={record_path}",
             ])
+            if getattr(self, "audio_no_playback", False):
+                args.append("--no-audio-playback")
 
         log_dir = Path(r"C:\PhoneHub\runtime\logs")
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -695,17 +714,54 @@ class PhoneHubTailscale(PhoneHub):
                 pass
             self.audio_log_handle = None
 
-    def toggle_audio_recording(self):
-        if getattr(self, "audio_recording", False):
-            self._stop_audio_process_only()
+    def start_echo_free_recording(self):
+        recordings = Path(r"C:\PhoneHub\runtime\audio")
+        recordings.mkdir(parents=True, exist_ok=True)
+
+        from datetime import datetime
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        record_path = recordings / f"phone_mic_{stamp}.m4a"
+
+        self._stop_audio_process_only()
+        self.audio_recording = True
+        self.audio_no_playback = True
+        self.audio_record_path = str(record_path)
+
+        if hasattr(self, "audio_record_button"):
+            self.audio_record_button.setText("Stop Recording")
+        if hasattr(self, "audio_record_file"):
+            self.audio_record_file.setText(f"Recording file: {record_path}")
+        if hasattr(self, "audio_status"):
+            self.audio_status.setText("Status: Echo-Free Recording — PC playback OFF")
+
+        if not self._launch_live_audio(str(record_path)):
             self.audio_recording = False
+            self.audio_no_playback = False
             if hasattr(self, "audio_record_button"):
                 self.audio_record_button.setText("Record")
-            if hasattr(self, "audio_status"):
-                self.audio_status.setText("Status: Restarting live listening...")
-            self.set_footer("Recording saved. Analyzing level, then continuing live listening...")
+            return
+
+        self.set_footer("Echo-Free Recording started. PC playback is disabled to prevent feedback.")
+
+    def toggle_audio_recording(self):
+        if getattr(self, "audio_recording", False):
+            was_echo_free = getattr(self, "audio_no_playback", False)
+            self._stop_audio_process_only()
+            self.audio_recording = False
+            self.audio_no_playback = False
+            if hasattr(self, "audio_record_button"):
+                self.audio_record_button.setText("Record")
             self.analyze_last_audio_recording()
-            self._launch_live_audio("")
+
+            if was_echo_free:
+                if hasattr(self, "audio_status"):
+                    self.audio_status.setText("Status: Idle — Echo-Free Recording saved")
+                self.set_footer("Echo-Free Recording saved. Playback stayed off, so no PC-speaker feedback was added.")
+            else:
+                if hasattr(self, "audio_status"):
+                    self.audio_status.setText("Status: Restarting live listening...")
+                self.set_footer("Recording saved. Analyzing level, then continuing live listening...")
+                self._launch_live_audio("")
             return
 
         recordings = Path(r"C:\PhoneHub\runtime\audio")
@@ -717,6 +773,7 @@ class PhoneHubTailscale(PhoneHub):
 
         self._stop_audio_process_only()
         self.audio_recording = True
+        self.audio_no_playback = False
         self.audio_record_path = str(record_path)
 
         if hasattr(self, "audio_record_button"):
@@ -840,6 +897,7 @@ class PhoneHubTailscale(PhoneHub):
         self._stop_audio_process_only()
         was_recording = getattr(self, "audio_recording", False)
         self.audio_recording = False
+        self.audio_no_playback = False
         if hasattr(self, "audio_record_button"):
             self.audio_record_button.setText("Record")
         if hasattr(self, "audio_status"):
