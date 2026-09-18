@@ -38,7 +38,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.11-recording-finalize-fix"
+APP_VERSION = "v3.12-call-audio-test"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -367,6 +367,31 @@ class PhoneHubTailscale(PhoneHub):
         voice_actions.addWidget(natural_voice)
         box_layout.addLayout(voice_actions)
 
+        call_actions = QHBoxLayout()
+        call_actions.setSpacing(8)
+
+        call_both = QPushButton("Call Both")
+        call_both.clicked.connect(lambda: self.set_audio_source("voice-call", "Call Both"))
+
+        call_other = QPushButton("Other Side")
+        call_other.clicked.connect(lambda: self.set_audio_source("voice-call-downlink", "Call Other Side"))
+
+        call_me = QPushButton("My Side")
+        call_me.clicked.connect(lambda: self.set_audio_source("voice-call-uplink", "Call My Side"))
+
+        call_actions.addWidget(call_both)
+        call_actions.addWidget(call_other)
+        call_actions.addWidget(call_me)
+        box_layout.addLayout(call_actions)
+
+        self.call_test_note = QLabel(
+            "Call test: use only on your own phone/calls. Android or the dialer may block call-audio capture. "
+            "If blocked, PhoneHub will show an error instead of pretending it worked."
+        )
+        self.call_test_note.setObjectName("big")
+        self.call_test_note.setWordWrap(True)
+        box_layout.addWidget(self.call_test_note)
+
         self.audio_mode_label = QLabel("Voice mode: Clear Voice + Low Echo (40 ms buffer; Android echo cancellation when supported)")
         self.audio_mode_label.setObjectName("big")
         self.audio_mode_label.setWordWrap(True)
@@ -413,6 +438,7 @@ class PhoneHubTailscale(PhoneHub):
         info, _, _ = self.card(
             "How it works",
             "Clear Voice uses Android's voice-communication microphone processing and a low-latency 40 ms buffer. "
+            "Call Both / Other Side / My Side use Android call-audio sources for testing an active call when the device permits it. "
             "This can reduce delayed echo and may use Android echo cancellation / automatic gain control when supported. "
             "Natural Mic uses the raw normal microphone path. When Record is enabled, "
             "PhoneHub restarts the same selected microphone stream with scrcpy recording enabled and saves "
@@ -428,12 +454,14 @@ class PhoneHubTailscale(PhoneHub):
     def set_audio_source(self, source, label):
         self.audio_source = source
         if hasattr(self, "audio_mode_label"):
-            if source == "mic-voice-communication":
-                self.audio_mode_label.setText(
-                    "Voice mode: Clear Voice (echo reduction / automatic gain when supported)"
-                )
-            else:
-                self.audio_mode_label.setText("Voice mode: Natural Mic")
+            labels = {
+                "mic-voice-communication": "Voice mode: Clear Voice + Low Echo",
+                "mic": "Voice mode: Natural Mic",
+                "voice-call": "Voice mode: Call Both Sides",
+                "voice-call-downlink": "Voice mode: Call Other Side (downlink)",
+                "voice-call-uplink": "Voice mode: Call My Side (uplink)",
+            }
+            self.audio_mode_label.setText(labels.get(source, f"Voice mode: {label}"))
 
         proc = getattr(self, "audio_process", None)
         if proc and proc.poll() is None:
