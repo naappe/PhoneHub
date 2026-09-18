@@ -30,7 +30,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v2.9.6-auto-wake-unlock-flow"
+APP_VERSION = "v2.9.7-auto-tailscale-detect"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -361,37 +361,136 @@ class PhoneHubTailscale(PhoneHub):
         layout.addWidget(tailscale_box)
         return page
 
+    def _detect_tailscale_ip(self, serial):
+        """Return the phone's active Tailscale IPv4 address, if visible."""
+        outputs = [
+            run_quiet(["adb", "-s", serial, "shell", "ip", "-4", "addr"], timeout=6),
+            run_quiet(["adb", "-s", serial, "shell", "ip", "addr"], timeout=6),
+            run_quiet(["adb", "-s", serial, "shell", "dumpsys", "connectivity"], timeout=8),
+        ]
+
+        for output in outputs:
+            for match in re.findall(r"\b100\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b", output or ""):
+                second, third, fourth = map(int, match)
+                # Tailscale IPv4 addresses are allocated from 100.64.0.0/10.
+                if 64 <= second <= 127 and 0 <= third <= 255 and 0 <= fourth <= 255:
+                    return f"100.{second}.{third}.{fourth}"
+        return ""
+
+    def setup_smart_check(self):
+        usb, remote, unauthorized, _ = parse_adb_devices()
+        lines = []
+
+        if unauthorized:
+            lines.append("USB Debugging: Not approved")
+            lines.append("Action: Approve 'Always allow from this computer' on the phone.")
+            self.setup_log.setText("\n".join(lines))
+            self.set_footer("USB authorization required.")
+            return
+
+        serial = usb[0] if usb else ""
+        if serial:
+            model = run_quiet(
+                ["adb", "-s", serial, "shell", "getprop", "ro.product.model"],
+                timeout=5,
+            ) or "Android Phone"
+            android = run_quiet(
+                ["adb", "-s", serial, "shell", "getprop", "ro.build.version.release"],
+                timeout=5,
+            ) or "-"
+
+            lines.append("USB Debugging: Connected")
+            lines.append(f"Device: {model}")
+            lines.append(f"Android: {android}")
+            lines.append(f"USB Serial: {serial}")
+
+            installed = self._tailscale_installed(serial)
+            detected_ip = self._detect_tailscale_ip(serial) if installed else ""
+
+            if installed and detected_ip:
+                lines.append("Tailscale: Connected")
+                lines.append(f"Tailscale IP: {detected_ip}")
+
+                # Keep PhoneHub synchronized with the IP reported by the phone.
+                save_phone_ip(detected_ip, 5555)
+                if hasattr(self, "setup_ip_input"):
+                    self.setup_ip_input.setText(detected_ip)
+                if hasattr(self, "dashboard_ip_input"):
+                    self.dashboard_ip_input.setText(detected_ip)
+
+                target = f"{detected_ip}:5555"
+                if target not in remote:
+                    run_quiet(["adb", "connect", target], timeout=5)
+                    _, remote, _, _ = parse_adb_devices()
+
+                if target in remote:
+                    lines.append(f"Remote Control: Connected {target}")
+                else:
+                    lines.append("Remote Control: Not connected")
+                    lines.append("Action: Click Enable Remote once while USB is connected.")
+            elif installed:
+                lines.append("Tailscale: Installed, waiting for VPN connection")
+                saved_ip, _ = get_saved_ip()
+                if saved_ip:
+                    lines.append(f"Saved Tailscale IP: {saved_ip}")
+                lines.append("Action: Open Tailscale on the phone and connect it.")
+            else:
+                lines.append("Tailscale: Not installed")
+                lines.append("Action: Click Install Tailscale.")
+        else:
+            lines.append("USB Debugging: Not connected")
+            saved_ip, port = get_saved_ip()
+            if saved_ip:
+                target = f"{saved_ip}:{port}"
+                if target in remote:
+                    lines.append(f"Tailscale IP: {saved_ip}")
+                    lines.append(f"Remote Control: Connected {target}")
+                else:
+                    lines.append(f"Saved Tailscale IP: {saved_ip}")
+                    lines.append("Remote Control: Not connected")
+            else:
+                lines.append("Tailscale IP: Not detected")
+
+        self.setup_log.setText("\n".join(lines))
+        self.set_footer("Smart check complete.")
+
     def auto_refresh_connection_state(self):
         try:
             usb, remote, unauthorized, _ = parse_adb_devices()
+
+            installed = False
+            detected_ip = ""
+            if usb and not unauthorized:
+                installed = self._tailscale_installed(usb[0])
+                if installed:
+                    detected_ip = self._detect_tailscale_ip(usb[0])
+
             signature = (
                 tuple(sorted(usb)),
                 tuple(sorted(remote)),
                 tuple(sorted(unauthorized)),
+                installed,
+                detected_ip,
             )
-            if signature == self._last_connection_signature:
-                return
 
-            self._last_connection_signature = signature
-
-            # Reuse the existing Smart Check output so the user sees the same
-            # detailed state immediately after plugging/unplugging the phone.
-            if hasattr(self, "setup_log"):
-                self.setup_smart_check()
+            if signature != self._last_connection_signature:
+                self._last_connection_signature = signature
+                if hasattr(self, "setup_log"):
+                    self.setup_smart_check()
 
             if unauthorized:
                 self.side_status.setText("USB authorization needed")
-            elif usb:
-                self.side_status.setText("USB connected")
-                # Start the safe one-time unlock flow when a USB phone appears.
-                if not self._auto_unlock_waiting:
-                    self._begin_unlock_flow(usb[0])
             elif remote:
                 self.side_status.setText("Phone online")
+            elif usb and detected_ip:
+                self.side_status.setText("Tailscale connected")
+            elif usb:
+                self.side_status.setText("USB connected")
+                if not self._auto_unlock_waiting:
+                    self._begin_unlock_flow(usb[0])
             else:
                 self.side_status.setText("Phone offline")
         except Exception:
-            # Never let background status polling interrupt PhoneHub.
             pass
 
     def _is_device_unlocked(self, serial):
