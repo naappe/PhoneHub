@@ -33,7 +33,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.5-audio-recording"
+APP_VERSION = "v3.6-clear-voice"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -72,6 +72,7 @@ class PhoneHubTailscale(PhoneHub):
         self.audio_process = None
         self.audio_recording = False
         self.audio_record_path = ""
+        self.audio_source = "mic-voice-communication"
 
         # Detection now runs in a background thread. The old implementation ran
         # several adb commands on the UI thread every 3 seconds, which caused
@@ -344,6 +345,25 @@ class PhoneHubTailscale(PhoneHub):
         actions.addWidget(stop_btn)
         box_layout.addLayout(actions)
 
+        voice_actions = QHBoxLayout()
+        voice_actions.setSpacing(8)
+
+        clear_voice = QPushButton("Clear Voice")
+        clear_voice.setObjectName("primary")
+        clear_voice.clicked.connect(lambda: self.set_audio_source("mic-voice-communication", "Clear Voice"))
+
+        natural_voice = QPushButton("Natural Mic")
+        natural_voice.clicked.connect(lambda: self.set_audio_source("mic", "Natural Mic"))
+
+        voice_actions.addWidget(clear_voice)
+        voice_actions.addWidget(natural_voice)
+        box_layout.addLayout(voice_actions)
+
+        self.audio_mode_label = QLabel("Voice mode: Clear Voice (echo reduction / automatic gain when supported)")
+        self.audio_mode_label.setObjectName("big")
+        self.audio_mode_label.setWordWrap(True)
+        box_layout.addWidget(self.audio_mode_label)
+
         self.audio_record_file = QLabel("Recording file: None")
         self.audio_record_file.setObjectName("big")
         self.audio_record_file.setWordWrap(True)
@@ -358,14 +378,36 @@ class PhoneHubTailscale(PhoneHub):
 
         info, _, _ = self.card(
             "How it works",
-            "Live listening uses scrcpy microphone forwarding. When Record is enabled, "
-            "PhoneHub restarts the same microphone stream with scrcpy recording enabled and saves "
+            "Clear Voice uses Android's voice-communication microphone processing, which can apply "
+            "echo cancellation and automatic gain control when the phone supports them. "
+            "Natural Mic uses the raw normal microphone path. When Record is enabled, "
+            "PhoneHub restarts the same selected microphone stream with scrcpy recording enabled and saves "
             "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
             "Press Record again to stop recording while continuing live listening.",
         )
         layout.addWidget(info)
         layout.addStretch()
         return page
+
+    def set_audio_source(self, source, label):
+        self.audio_source = source
+        if hasattr(self, "audio_mode_label"):
+            if source == "mic-voice-communication":
+                self.audio_mode_label.setText(
+                    "Voice mode: Clear Voice (echo reduction / automatic gain when supported)"
+                )
+            else:
+                self.audio_mode_label.setText("Voice mode: Natural Mic")
+
+        proc = getattr(self, "audio_process", None)
+        if proc and proc.poll() is None:
+            was_recording = getattr(self, "audio_recording", False)
+            record_path = self.audio_record_path if was_recording else ""
+            self._stop_audio_process_only()
+            self.set_footer(f"Switching audio mode to {label}...")
+            self._launch_live_audio(record_path)
+        else:
+            self.set_footer(f"Audio mode set to {label}.")
 
     def _audio_target(self):
         ip, port = get_saved_ip()
@@ -403,7 +445,7 @@ class PhoneHubTailscale(PhoneHub):
         args = [
             scrcpy,
             "--serial", target,
-            "--audio-source=mic",
+            f"--audio-source={getattr(self, 'audio_source', 'mic-voice-communication')}",
             "--no-video",
             "--no-control",
             "--audio-buffer=120",
