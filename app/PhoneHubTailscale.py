@@ -30,11 +30,12 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v2.9.3-smart-tailscale-button"
+APP_VERSION = "v2.9.4-local-apk-first"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_APK_DIR = Path(r"C:\\PhoneHub\\runtime\\downloads")
+LOCAL_APK_DIR = Path(r"C:\\PhoneHub\\apps")
 
 
 class PhoneHubTailscale(PhoneHub):
@@ -463,24 +464,45 @@ class PhoneHubTailscale(PhoneHub):
         if answer != QMessageBox.Yes:
             return
 
-        self._set_tailscale_status("Downloading official Tailscale APK...")
+        self._set_tailscale_status("Preparing Tailscale installation...")
 
         def worker():
             try:
-                TAILSCALE_APK_DIR.mkdir(parents=True, exist_ok=True)
-                url, filename = self._latest_tailscale_apk_url()
-                apk_path = TAILSCALE_APK_DIR / filename
+                # Prefer a bundled/local APK first. Older PhoneHub setup scripts
+                # already use C:\\PhoneHub\\apps\\*.apk, so this also works
+                # when the PC has an APK saved locally but it is not in GitHub.
+                apk_path = None
+                if LOCAL_APK_DIR.exists():
+                    candidates = sorted(
+                        LOCAL_APK_DIR.glob("*.apk"),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                    if candidates:
+                        apk_path = candidates[0]
+                        self.bridge.message.emit(
+                            f"Using local APK: {apk_path.name}"
+                        )
 
-                req = urllib.request.Request(url, headers={"User-Agent": "PhoneHub/2.9"})
-                with urllib.request.urlopen(req, timeout=90) as response:
-                    data = response.read()
+                if apk_path is None:
+                    self.bridge.message.emit(
+                        "No local APK found. Downloading official Tailscale APK..."
+                    )
+                    TAILSCALE_APK_DIR.mkdir(parents=True, exist_ok=True)
+                    url, filename = self._latest_tailscale_apk_url()
+                    apk_path = TAILSCALE_APK_DIR / filename
 
-                if len(data) < 1_000_000:
-                    raise RuntimeError("Downloaded APK looks incomplete.")
+                    req = urllib.request.Request(url, headers={"User-Agent": "PhoneHub/2.9"})
+                    with urllib.request.urlopen(req, timeout=90) as response:
+                        data = response.read()
 
-                apk_path.write_bytes(data)
+                    if len(data) < 1_000_000:
+                        raise RuntimeError("Downloaded APK looks incomplete.")
+
+                    apk_path.write_bytes(data)
+
                 result = run_quiet(
-                    ["adb", "-s", serial, "install", "-r", str(apk_path)],
+                    ["adb", "-s", serial, "install", "-r", "-g", str(apk_path)],
                     timeout=120,
                 )
 
