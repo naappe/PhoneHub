@@ -33,7 +33,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.6-clear-voice"
+APP_VERSION = "v3.7-low-echo-audio"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -359,7 +359,7 @@ class PhoneHubTailscale(PhoneHub):
         voice_actions.addWidget(natural_voice)
         box_layout.addLayout(voice_actions)
 
-        self.audio_mode_label = QLabel("Voice mode: Clear Voice (echo reduction / automatic gain when supported)")
+        self.audio_mode_label = QLabel("Voice mode: Clear Voice + Low Echo (40 ms buffer; Android echo cancellation when supported)")
         self.audio_mode_label.setObjectName("big")
         self.audio_mode_label.setWordWrap(True)
         box_layout.addWidget(self.audio_mode_label)
@@ -378,12 +378,13 @@ class PhoneHubTailscale(PhoneHub):
 
         info, _, _ = self.card(
             "How it works",
-            "Clear Voice uses Android's voice-communication microphone processing, which can apply "
-            "echo cancellation and automatic gain control when the phone supports them. "
+            "Clear Voice uses Android's voice-communication microphone processing and a low-latency 40 ms buffer. "
+            "This can reduce delayed echo and may use Android echo cancellation / automatic gain control when supported. "
             "Natural Mic uses the raw normal microphone path. When Record is enabled, "
             "PhoneHub restarts the same selected microphone stream with scrcpy recording enabled and saves "
             "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
-            "Press Record again to stop recording while continuing live listening.",
+            "Press Record again to stop recording while continuing live listening. "
+            "For the strongest echo reduction, use headphones on the PC or keep PC speaker volume low so the phone microphone does not hear the delayed PC playback.",
         )
         layout.addWidget(info)
         layout.addStretch()
@@ -448,7 +449,7 @@ class PhoneHubTailscale(PhoneHub):
             f"--audio-source={getattr(self, 'audio_source', 'mic-voice-communication')}",
             "--no-video",
             "--no-control",
-            "--audio-buffer=120",
+            "--audio-buffer=40",
         ]
         if record_path:
             args.append(f"--record={record_path}")
