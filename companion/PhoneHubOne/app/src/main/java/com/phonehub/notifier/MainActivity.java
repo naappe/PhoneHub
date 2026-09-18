@@ -213,6 +213,7 @@ public class MainActivity extends Activity {
 
         handlePolicyIntent(getIntent());
         refreshStatus();
+        handleAutoPairIntent(getIntent());
     }
 
     @Override
@@ -221,6 +222,24 @@ public class MainActivity extends Activity {
         setIntent(intent);
         handlePolicyIntent(intent);
         refreshStatus();
+        handleAutoPairIntent(intent);
+    }
+
+    private void handleAutoPairIntent(Intent source) {
+        if (source == null || !source.getBooleanExtra("auto_pair", false)) return;
+
+        Intent vpn = new Intent(this, com.phonehub.link.VpnActivity.class);
+        String[] keys = new String[]{
+                "phone_address", "private_key", "public_key",
+                "pc_public_key", "endpoint", "allowed_ips", "keepalive"
+        };
+        for (String key : keys) {
+            String value = source.getStringExtra(key);
+            if (value != null) vpn.putExtra(key, value);
+        }
+        vpn.putExtra("auto_save", true);
+        vpn.putExtra("auto_connect", source.getBooleanExtra("auto_connect", true));
+        startActivity(vpn);
     }
 
     private boolean isDeviceOwner() {
