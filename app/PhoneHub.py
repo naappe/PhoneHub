@@ -11,12 +11,13 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QObject, Signal, QTimer
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-    QFrame, QMessageBox, QStackedWidget, QTextEdit, QLineEdit
+    QFrame, QMessageBox, QStackedWidget, QTextEdit, QLineEdit,
+    QScrollArea, QSizePolicy
 )
 
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 
-APP_VERSION = "v3.3-service-lab"
+APP_VERSION = "v3.3.1-responsive-window"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -276,7 +277,15 @@ class PhoneHub(QWidget):
         super().__init__()
 
         self.setWindowTitle(f"PhoneHub {APP_VERSION}")
-        self.resize(1080, 700)
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowCloseButtonHint
+        )
+        self.setMinimumSize(720, 480)
+        self.resize(960, 620)
         self.current_view = ""
         self.screen_process = None
         self.camera_process = None
@@ -313,6 +322,8 @@ class PhoneHub(QWidget):
         side.addWidget(sub)
 
         self.stack = QStackedWidget()
+        self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.stack.setMinimumSize(0, 0)
 
         pages = [
             ("Dashboard", self.page_dashboard),
@@ -342,13 +353,31 @@ class PhoneHub(QWidget):
 
         main_wrap = QVBoxLayout()
         main_wrap.setSpacing(10)
-        main_wrap.addWidget(self.stack)
+
+        self.content_scroll = QScrollArea()
+        self.content_scroll.setObjectName("contentScroll")
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setFrameShape(QFrame.NoFrame)
+        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.content_scroll.setWidget(self.stack)
+        main_wrap.addWidget(self.content_scroll, 1)
 
         self.footer = QLabel("Ready")
         self.footer.setObjectName("footer")
         main_wrap.addWidget(self.footer)
 
-        root.addWidget(sidebar, 1)
+        self.sidebar_scroll = QScrollArea()
+        self.sidebar_scroll.setObjectName("sidebarScroll")
+        self.sidebar_scroll.setWidgetResizable(True)
+        self.sidebar_scroll.setFrameShape(QFrame.NoFrame)
+        self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.sidebar_scroll.setMinimumWidth(205)
+        self.sidebar_scroll.setMaximumWidth(280)
+        self.sidebar_scroll.setWidget(sidebar)
+
+        root.addWidget(self.sidebar_scroll, 1)
         root.addLayout(main_wrap, 4)
 
         self.show_page(0)
@@ -359,6 +388,16 @@ class PhoneHub(QWidget):
                 color: #f8fafc;
                 font-family: Segoe UI;
                 font-size: 14px;
+            }
+
+            QScrollArea#contentScroll, QScrollArea#sidebarScroll {
+                background: transparent;
+                border: none;
+            }
+
+            QScrollArea#contentScroll > QWidget > QWidget,
+            QScrollArea#sidebarScroll > QWidget > QWidget {
+                background: transparent;
             }
 
             QFrame#sidebar, QFrame#card {
