@@ -38,7 +38,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.14-echo-free-record"
+APP_VERSION = "v3.15-call-lifecycle-fix"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -405,8 +405,8 @@ class PhoneHubTailscale(PhoneHub):
         box_layout.addLayout(call_actions)
 
         self.call_test_note = QLabel(
-            "Call test: use only on your own phone/calls. Android or the dialer may block call-audio capture. "
-            "If blocked, PhoneHub will show an error instead of pretending it worked."
+            "Call test: use only on your own phone/calls. PhoneHub now watches the Android call state and stops "
+            "Call Both / Other Side / My Side automatically after the call ends. Android or the dialer may still block call-audio capture."
         )
         self.call_test_note.setObjectName("big")
         self.call_test_note.setWordWrap(True)
@@ -495,8 +495,79 @@ class PhoneHubTailscale(PhoneHub):
         else:
             self.set_footer("Anti Echo mode selected.")
 
+    def _android_call_state(self):
+        source = getattr(self, "audio_source", "")
+        if not source.startswith("voice-call"):
+            return "not-call-mode"
+
+        target = self._audio_target()
+        if not target:
+            return "unknown"
+
+        text = run_quiet(
+            ["adb", "-s", target, "shell", "dumpsys", "telephony.registry"],
+            timeout=5,
+        )
+
+        # Android TelephonyManager: 0=IDLE, 1=RINGING, 2=OFFHOOK.
+        matches = re.findall(r"mCallState\s*=\s*(\d+)", text)
+        if matches:
+            states = {int(v) for v in matches}
+            if 2 in states or 1 in states:
+                return "active"
+            if states == {0}:
+                return "idle"
+
+        telecom = run_quiet(
+            ["adb", "-s", target, "shell", "dumpsys", "telecom"],
+            timeout=5,
+        ).lower()
+        if "isincall: true" in telecom or "mcallstate=2" in telecom or "state=active" in telecom:
+            return "active"
+        if "isincall: false" in telecom:
+            return "idle"
+        return "unknown"
+
+    def _monitor_call_audio_state(self):
+        source = getattr(self, "audio_source", "")
+        if not source.startswith("voice-call"):
+            self._call_was_active = False
+            return
+
+        proc = getattr(self, "audio_process", None)
+        if not proc or proc.poll() is not None:
+            if hasattr(self, "audio_status") and self.audio_status.text().startswith("Status: Listening"):
+                self.audio_status.setText("Status: Idle")
+            return
+
+        # Run the dumpsys checks away from the UI thread.
+        def worker():
+            state = self._android_call_state()
+            QTimer.singleShot(0, lambda s=state: self._apply_call_state(s))
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_call_state(self, state):
+        if state == "active":
+            self._call_was_active = True
+            return
+
+        if state == "idle" and self._call_was_active:
+            self._call_was_active = False
+            self._stop_audio_process_only()
+            self.audio_recording = False
+            self.audio_no_playback = False
+            if hasattr(self, "audio_record_button"):
+                self.audio_record_button.setText("Record")
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Idle — call ended")
+            self.set_footer("Call ended. Call audio stopped automatically.")
+
     def set_audio_source(self, source, label):
         self.audio_source = source
+        if not source.startswith("voice-call"):
+            self._call_was_active = False
         if source == "mic-voice-communication":
             self.audio_buffer_ms = 30
             self.audio_output_buffer_ms = 5
