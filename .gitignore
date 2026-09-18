@@ -7,8 +7,7 @@ android/
 *.exe
 __pycache__/
 *.pyc
-runtime/screenshots/
-runtime/data/
+runtime/
 screenshots/
 create_phonehub_location_companion.ps1
 PhoneHub_Final/
