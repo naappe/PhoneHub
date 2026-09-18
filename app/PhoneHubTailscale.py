@@ -30,7 +30,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v2.9.8-fast-background-detect"
+APP_VERSION = "v3.0-simple-setup-wizard"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -40,6 +40,7 @@ LOCAL_APK_DIR = Path(r"C:\\PhoneHub\\apps")
 
 class AutoDetectBridge(QObject):
     state = Signal(dict)
+    wizard = Signal(dict)
 
 class PhoneHubTailscale(PhoneHub):
     def __init__(self):
@@ -55,6 +56,13 @@ class PhoneHubTailscale(PhoneHub):
 
         self.auto_bridge = AutoDetectBridge()
         self.auto_bridge.state.connect(self._apply_auto_detect_state)
+        self.auto_bridge.wizard.connect(self._apply_wizard_result)
+
+        self.wizard_step = 1
+        self.wizard_serial = ""
+        self.wizard_detected_ip = ""
+        self.wizard_remote_connected = False
+        self._wizard_busy = False
 
         # Detection now runs in a background thread. The old implementation ran
         # several adb commands on the UI thread every 3 seconds, which caused
@@ -345,32 +353,305 @@ class PhoneHubTailscale(PhoneHub):
         return page
 
     def page_setup_new_phone(self):
-        page = super().page_setup_new_phone()
-        layout = page.layout()
+        """Simple one-path setup wizard.
 
-        tailscale_box, tailscale_layout, self.tailscale_setup_status = self.card(
-            "Tailscale on phone",
-            "PhoneHub checks the connected USB phone. If Tailscale is missing, you can install the official stable APK directly from PhoneHub without Google Play.",
+        Only the action needed for the current step is shown. The wizard
+        advances automatically whenever PhoneHub detects that a step is done.
+        """
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(10)
+
+        header, header_layout, _ = self.card(
+            "PhoneHub Setup",
+            "Follow one step at a time. PhoneHub checks each step before moving forward.",
         )
 
-        row = QHBoxLayout()
-        check_btn = QPushButton("Check Tailscale")
-        check_btn.clicked.connect(self.check_tailscale_clicked)
+        self.wizard_progress = QLabel("Step 1 of 6")
+        self.wizard_progress.setObjectName("title")
+        header_layout.addWidget(self.wizard_progress)
+        layout.addWidget(header)
 
-        install_btn = QPushButton("Install Tailscale")
-        install_btn.setObjectName("primary")
-        install_btn.clicked.connect(self.install_tailscale_clicked)
+        step_box, step_layout, _ = self.card("Current step", "")
+        self.wizard_title = QLabel("Connect phone by USB")
+        self.wizard_title.setObjectName("title")
+        self.wizard_title.setWordWrap(True)
 
-        open_btn = QPushButton("Open Tailscale")
-        open_btn.clicked.connect(self.open_tailscale_clicked)
+        self.wizard_instruction = QLabel("")
+        self.wizard_instruction.setObjectName("big")
+        self.wizard_instruction.setWordWrap(True)
 
-        row.addWidget(check_btn)
-        row.addWidget(install_btn)
-        row.addWidget(open_btn)
-        tailscale_layout.addLayout(row)
+        self.wizard_status = QLabel("")
+        self.wizard_status.setObjectName("sideStatus")
+        self.wizard_status.setWordWrap(True)
 
-        layout.addWidget(tailscale_box)
+        self.wizard_action_button = QPushButton("Check Again")
+        self.wizard_action_button.setObjectName("primary")
+        self.wizard_action_button.setMinimumHeight(48)
+        self.wizard_action_button.clicked.connect(self.wizard_action)
+
+        step_layout.addWidget(self.wizard_title)
+        step_layout.addWidget(self.wizard_instruction)
+        step_layout.addWidget(self.wizard_status)
+        step_layout.addWidget(self.wizard_action_button)
+        layout.addWidget(step_box)
+
+        overview, overview_layout, _ = self.card("Setup path", "")
+        self.wizard_steps_label = QLabel(
+            "1  USB connection\n"
+            "2  Unlock phone once\n"
+            "3  Tailscale installed\n"
+            "4  Tailscale connected + IP detected\n"
+            "5  Remote control enabled\n"
+            "6  Ready"
+        )
+        self.wizard_steps_label.setObjectName("big")
+        self.wizard_steps_label.setWordWrap(True)
+        overview_layout.addWidget(self.wizard_steps_label)
+        layout.addWidget(overview)
+
+        layout.addStretch()
+        QTimer.singleShot(200, self._render_wizard_step)
         return page
+
+    def _set_wizard_step(self, step, status=""):
+        step = max(1, min(6, int(step)))
+        changed = step != self.wizard_step
+        self.wizard_step = step
+        if hasattr(self, "wizard_status") and status:
+            self.wizard_status.setText(status)
+        if changed or hasattr(self, "wizard_title"):
+            self._render_wizard_step()
+
+    def _render_wizard_step(self):
+        if not hasattr(self, "wizard_title"):
+            return
+
+        step = self.wizard_step
+        self.wizard_progress.setText(f"Step {step} of 6")
+
+        if step == 1:
+            self.wizard_title.setText("Connect phone by USB")
+            self.wizard_instruction.setText(
+                "Connect the phone with the USB cable. Keep USB debugging ON. "
+                "If Android asks 'Allow USB debugging?', tap Always allow from this computer, then OK."
+            )
+            self.wizard_action_button.setText("Check Again")
+        elif step == 2:
+            self.wizard_title.setText("Unlock phone once")
+            self.wizard_instruction.setText(
+                "PhoneHub will wake the phone. Unlock it normally using fingerprint, face, PIN, pattern, or password. "
+                "Then PhoneHub checks that it is unlocked."
+            )
+            self.wizard_action_button.setText("I Unlocked It - Check")
+        elif step == 3:
+            self.wizard_title.setText("Install Tailscale")
+            self.wizard_instruction.setText(
+                "PhoneHub checks whether Tailscale is installed. If it is missing, the local Tailscale APK in "
+                "C:\\PhoneHub\\apps is installed automatically."
+            )
+            self.wizard_action_button.setText("Install / Check Tailscale")
+        elif step == 4:
+            self.wizard_title.setText("Connect Tailscale")
+            self.wizard_instruction.setText(
+                "Open Tailscale on the phone, sign in if needed, and turn it ON. "
+                "PhoneHub will automatically detect the phone's 100.x.x.x Tailscale IP."
+            )
+            self.wizard_action_button.setText("Open Tailscale")
+        elif step == 5:
+            self.wizard_title.setText("Enable remote control")
+            self.wizard_instruction.setText(
+                "Keep USB connected for this one step. PhoneHub will enable ADB on port 5555 and test the Tailscale connection."
+            )
+            self.wizard_action_button.setText("Enable Remote + Test")
+        else:
+            self.wizard_title.setText("Setup complete")
+            self.wizard_instruction.setText(
+                "PhoneHub can reach the phone through Tailscale. You can now disconnect the USB cable and use Open Screen."
+            )
+            self.wizard_action_button.setText("Finish Setup")
+
+        self.wizard_action_button.setEnabled(not self._wizard_busy)
+
+    def _wizard_update_from_state(self, state):
+        if not hasattr(self, "wizard_status"):
+            return
+
+        usb = state.get("usb", [])
+        unauthorized = state.get("unauthorized", [])
+        installed = state.get("installed", False)
+        detected_ip = state.get("detected_ip", "")
+        remote = state.get("remote", [])
+
+        if unauthorized:
+            self._set_wizard_step(
+                1,
+                "USB found, but debugging is not approved. Approve the popup on the phone, then press Check Again."
+            )
+            return
+
+        if not usb:
+            if self.wizard_step < 6:
+                self._set_wizard_step(
+                    1,
+                    "Phone not detected by USB. Connect the cable, unlock the phone if needed, then press Check Again."
+                )
+            return
+
+        self.wizard_serial = usb[0]
+
+        if self.wizard_step == 1:
+            self._set_wizard_step(2, f"USB connected: {self.wizard_serial}. Next: unlock the phone once.")
+
+        if installed and self.wizard_step == 3:
+            self._set_wizard_step(4, "Tailscale is installed. Next: connect Tailscale on the phone.")
+
+        if detected_ip:
+            self.wizard_detected_ip = detected_ip
+            save_phone_ip(detected_ip, 5555)
+            if self.wizard_step <= 4:
+                self._set_wizard_step(5, f"Tailscale connected. IP detected automatically: {detected_ip}")
+
+        if detected_ip:
+            target = f"{detected_ip}:5555"
+            self.wizard_remote_connected = target in remote
+            if self.wizard_remote_connected and self.wizard_step <= 5:
+                self._set_wizard_step(6, f"Remote control connected: {target}")
+
+    def wizard_action(self):
+        if self._wizard_busy:
+            return
+
+        if self.wizard_step == 1:
+            self.wizard_status.setText("Checking USB connection...")
+            self.auto_refresh_connection_state()
+            return
+
+        if self.wizard_step == 2:
+            if not self.wizard_serial:
+                self._set_wizard_step(1, "USB connection was lost. Connect the phone again.")
+                return
+            self._wizard_busy = True
+            self._render_wizard_step()
+            self.wizard_status.setText("Checking whether the phone is unlocked...")
+
+            def worker():
+                unlocked = self._is_device_unlocked(self.wizard_serial)
+                self.auto_bridge.wizard.emit({"type": "unlock", "ok": unlocked})
+
+            import threading
+            threading.Thread(target=worker, daemon=True).start()
+            return
+
+        if self.wizard_step == 3:
+            serial, error = self._usb_serial()
+            if error:
+                self._set_wizard_step(1, error)
+                return
+            if self._tailscale_installed(serial):
+                self._set_wizard_step(4, "Tailscale is already installed.")
+            else:
+                self.install_tailscale_clicked()
+                self.wizard_status.setText("Installing Tailscale. Wait for PhoneHub to detect it, then it will move to the next step.")
+            return
+
+        if self.wizard_step == 4:
+            serial, error = self._usb_serial()
+            if error:
+                self._set_wizard_step(1, error)
+                return
+            if not self._tailscale_installed(serial):
+                self._set_wizard_step(3, "Tailscale is not installed yet.")
+                return
+            run_background([
+                "adb", "-s", serial, "shell", "monkey",
+                "-p", TAILSCALE_PACKAGE,
+                "-c", "android.intent.category.LAUNCHER",
+                "1",
+            ])
+            self.wizard_status.setText(
+                "Tailscale opened on the phone. Connect it there. PhoneHub will detect the IP automatically."
+            )
+            return
+
+        if self.wizard_step == 5:
+            if not self.wizard_serial:
+                self._set_wizard_step(1, "USB connection was lost. Connect the phone again.")
+                return
+            if not self.wizard_detected_ip:
+                self._set_wizard_step(4, "Tailscale IP is not detected yet. Connect Tailscale first.")
+                return
+
+            self._wizard_busy = True
+            self._render_wizard_step()
+            self.wizard_status.setText("Enabling remote ADB and testing connection...")
+
+            serial = self.wizard_serial
+            ip = self.wizard_detected_ip
+
+            def worker():
+                result = run_quiet(["adb", "-s", serial, "tcpip", "5555"], timeout=12)
+                if "restarting in TCP mode" not in result.lower() and "5555" not in result:
+                    self.auto_bridge.wizard.emit({
+                        "type": "remote",
+                        "ok": False,
+                        "message": result or "Could not enable remote ADB."
+                    })
+                    return
+
+                import time
+                time.sleep(1.2)
+                target = f"{ip}:5555"
+                connect_text = run_quiet(["adb", "connect", target], timeout=10)
+                devices = run_quiet(["adb", "devices"], timeout=5)
+                ok = f"{target}\tdevice" in devices
+
+                self.auto_bridge.wizard.emit({
+                    "type": "remote",
+                    "ok": ok,
+                    "target": target,
+                    "message": connect_text,
+                })
+
+            import threading
+            threading.Thread(target=worker, daemon=True).start()
+            return
+
+        if self.wizard_step == 6:
+            if self.wizard_detected_ip:
+                save_phone_ip(self.wizard_detected_ip, 5555)
+            self.wizard_status.setText("Setup saved. USB can now be disconnected.")
+            self.set_footer("PhoneHub setup complete.")
+            self.show_page(0)
+
+    def _apply_wizard_result(self, result):
+        self._wizard_busy = False
+        kind = result.get("type")
+
+        if kind == "unlock":
+            if result.get("ok"):
+                self._set_wizard_step(3, "Phone unlocked successfully. Checking Tailscale next.")
+                self.auto_refresh_connection_state()
+            else:
+                self._set_wizard_step(
+                    2,
+                    "Phone still appears locked. Unlock it on the phone, then press 'I Unlocked It - Check' again."
+                )
+        elif kind == "remote":
+            if result.get("ok"):
+                target = result.get("target", "")
+                self.wizard_remote_connected = True
+                self._set_wizard_step(6, f"Remote control connected successfully: {target}")
+                self.auto_refresh_connection_state()
+            else:
+                message = result.get("message", "Remote connection failed.")
+                self._set_wizard_step(
+                    5,
+                    f"Remote control did not connect. Keep USB connected and press Enable Remote + Test again. Details: {message}"
+                )
+
+        self._render_wizard_step()
 
     def _detect_tailscale_ip(self, serial):
         """Return the phone's active Tailscale IPv4 address, if visible."""
@@ -527,6 +808,8 @@ class PhoneHubTailscale(PhoneHub):
             detected_ip,
         )
 
+        self._wizard_update_from_state(state)
+
         changed = signature != self._last_connection_signature
         if changed:
             self._last_connection_signature = signature
@@ -583,8 +866,6 @@ class PhoneHubTailscale(PhoneHub):
             self.side_status.setText("Tailscale connected")
         elif usb:
             self.side_status.setText("USB connected")
-            if not self._auto_unlock_waiting:
-                self._begin_unlock_flow(usb[0])
         else:
             self.side_status.setText("Phone offline")
 
