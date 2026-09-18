@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.30-auto-app-status"
+APP_VERSION = "v3.31-policy-profiles"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2663,6 +2663,41 @@ class PhoneHubTailscale(PhoneHub):
         setup_toggle_row.addStretch()
         box_layout.addLayout(setup_toggle_row)
 
+        profile_box, profile_layout, _ = self.card(
+            "Policy Profiles",
+            "One-click groups for a managed phone. Profiles only use Android Device Owner policies and can always be reversed with Full Access.",
+        )
+
+        profile_buttons = QHBoxLayout()
+
+        focus_btn = QPushButton("Focus Mode")
+        focus_btn.setObjectName("primary")
+        focus_btn.clicked.connect(lambda: self.apply_policy_profile("focus"))
+
+        guest_btn = QPushButton("Guest Mode")
+        guest_btn.clicked.connect(lambda: self.apply_policy_profile("guest"))
+
+        repair_btn = QPushButton("Repair Mode")
+        repair_btn.clicked.connect(lambda: self.apply_policy_profile("repair"))
+
+        full_btn = QPushButton("Full Access")
+        full_btn.clicked.connect(lambda: self.apply_policy_profile("full"))
+
+        profile_buttons.addWidget(focus_btn)
+        profile_buttons.addWidget(guest_btn)
+        profile_buttons.addWidget(repair_btn)
+        profile_buttons.addWidget(full_btn)
+        profile_layout.addLayout(profile_buttons)
+
+        self.profile_status_label = QLabel(
+            "Profile: none applied. Focus blocks entertainment/social; Guest and Repair protect sensitive apps; Full Access restores them."
+        )
+        self.profile_status_label.setObjectName("sideStatus")
+        self.profile_status_label.setWordWrap(True)
+        profile_layout.addWidget(self.profile_status_label)
+
+        box_layout.addWidget(profile_box)
+
         self.app_control_package = QLineEdit()
         self.app_control_package.setPlaceholderText("Package name, e.g. com.android.settings")
         self.app_control_package.textChanged.connect(self._schedule_app_status_check)
@@ -3159,6 +3194,121 @@ class PhoneHubTailscale(PhoneHub):
         if hasattr(self, "app_control_packages"):
             self.app_control_packages.setText(text)
         self.set_footer("Package scan complete.")
+
+    def _policy_profile_packages(self, name):
+        profiles = {
+            "focus": [
+                "com.google.android.youtube",
+                "com.spotify.music",
+                "com.twitter.android",
+                "com.google.android.apps.youtube.music",
+                "com.google.android.videos",
+                "com.oplus.games",
+                "com.wondershare.filmorago",
+            ],
+            "guest": [
+                "mv.com.bml.mib",
+                "mv.com.mib.faisamobile",
+                "mv.fahipay",
+                "com.azure.authenticator",
+                "com.google.android.gm",
+                "com.whatsapp",
+                "com.viber.voip",
+                "com.google.android.apps.photos",
+            ],
+            "repair": [
+                "mv.com.bml.mib",
+                "mv.com.mib.faisamobile",
+                "mv.fahipay",
+                "com.azure.authenticator",
+                "com.google.android.gm",
+                "com.whatsapp",
+                "com.viber.voip",
+                "com.google.android.apps.photos",
+                "com.microsoft.office.excel",
+            ],
+        }
+        return profiles.get(name, [])
+
+    def _installed_packages(self, target):
+        output = run_quiet(["adb", "-s", target, "shell", "pm", "list", "packages"], timeout=15)
+        return {
+            line.replace("package:", "").strip()
+            for line in output.splitlines()
+            if line.startswith("package:")
+        }
+
+    def apply_policy_profile(self, name):
+        target = self._app_control_target()
+        if not target:
+            self.set_footer("Phone is not connected.")
+            return
+
+        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list-owners"], timeout=8)
+        if "com.phonehub.notifier/.PhoneHubDeviceAdminReceiver" not in owners or "DeviceOwner" not in owners:
+            self.set_footer("Device Owner is required for policy profiles.")
+            return
+
+        installed = self._installed_packages(target)
+
+        if name == "full":
+            packages = sorted({
+                pkg
+                for profile in ("focus", "guest", "repair")
+                for pkg in self._policy_profile_packages(profile)
+                if pkg in installed
+            })
+            action = "unsuspend_many"
+            block_installs = False
+            label = "Full Access"
+        else:
+            packages = [pkg for pkg in self._policy_profile_packages(name) if pkg in installed]
+            action = "suspend_many"
+            block_installs = name in ("guest", "repair")
+            label = {
+                "focus": "Focus Mode",
+                "guest": "Guest Mode",
+                "repair": "Repair Mode",
+            }.get(name, name.title())
+
+        if not packages and name != "full":
+            if hasattr(self, "profile_status_label"):
+                self.profile_status_label.setText(f"{label}: no matching apps are installed.")
+            return
+
+        package_arg = ",".join(packages)
+
+        cmd = [
+            "adb", "-s", target, "shell", "am", "start",
+            "-n", "com.phonehub.notifier/.MainActivity",
+            "--es", "policy_action", action,
+            "--es", "packages", package_arg,
+        ]
+        result = run_quiet(cmd, timeout=12)
+        if "Error" in result or "Exception" in result:
+            self.set_footer(f"{label} could not be sent.")
+            return
+
+        install_action = "block_installs" if block_installs else "allow_installs"
+        run_quiet([
+            "adb", "-s", target, "shell", "am", "start",
+            "-n", "com.phonehub.notifier/.MainActivity",
+            "--es", "policy_action", install_action,
+        ], timeout=10)
+
+        if hasattr(self, "profile_status_label"):
+            if name == "full":
+                self.profile_status_label.setText(
+                    f"Profile: Full Access — restored {len(packages)} managed apps and allowed app installation."
+                )
+            else:
+                install_text = " App installation blocked." if block_installs else ""
+                self.profile_status_label.setText(
+                    f"Profile: {label} — suspended {len(packages)} installed apps.{install_text}"
+                )
+
+        self.set_footer(f"{label} applied.")
+        QTimer.singleShot(1200, self.check_device_owner_status)
 
     def _schedule_app_status_check(self):
         if hasattr(self, "app_status_timer"):
