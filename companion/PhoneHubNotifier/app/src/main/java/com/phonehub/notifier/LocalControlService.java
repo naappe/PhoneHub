@@ -218,6 +218,18 @@ public class LocalControlService extends Service {
             return out.put("ok", true).put("action", action).put("package", pkg);
         }
 
+        if ("block_installs".equals(action)) {
+            dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_APPS);
+            dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES);
+            return out.put("ok", true).put("action", action);
+        }
+
+        if ("allow_installs".equals(action)) {
+            dpm.clearUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_APPS);
+            dpm.clearUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES);
+            return out.put("ok", true).put("action", action);
+        }
+
         return out.put("ok", false).put("error", "Unsupported action");
     }
 
