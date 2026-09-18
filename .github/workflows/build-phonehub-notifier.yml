@@ -26,14 +26,18 @@ jobs:
           gradle-version: "8.9"
 
       - name: Build debug APK
-        run: gradle -p companion/PhoneHubNotifier assembleDebug
+        run: gradle -p companion/PhoneHubNotifier clean assembleDebug
+
+      - name: Verify Device Admin receiver is in merged manifest
+        run: |
+          grep -R "PhoneHubDeviceAdminReceiver" companion/PhoneHubNotifier/app/build/intermediates/merged_manifests companion/PhoneHubNotifier/app/build/intermediates/merged_manifest
 
       - name: Rename APK
-        run: cp companion/PhoneHubNotifier/app/build/outputs/apk/debug/app-debug.apk PhoneHubNotifier.apk
+        run: cp companion/PhoneHubNotifier/app/build/outputs/apk/debug/app-debug.apk PhoneHubNotifier-v1.1.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: PhoneHubNotifier
-          path: PhoneHubNotifier.apk
+          name: PhoneHubNotifier-v1.1
+          path: PhoneHubNotifier-v1.1.apk
           if-no-files-found: error
