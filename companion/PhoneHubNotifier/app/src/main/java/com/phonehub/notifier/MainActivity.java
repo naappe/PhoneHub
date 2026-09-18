@@ -90,6 +90,42 @@ public class MainActivity extends Activity {
         test.setOnClickListener(v -> NotificationForwarderService.sendTest(this));
         root.addView(test);
 
+        TextView lanTitle = new TextView(this);
+        lanTitle.setText("\nLocal LAN Control (No Tailscale)");
+        lanTitle.setTextColor(Color.WHITE);
+        lanTitle.setTextSize(20);
+        root.addView(lanTitle);
+
+        TextView lanInfo = new TextView(this);
+        SharedPreferences lanPrefs = getSharedPreferences("phonehub", MODE_PRIVATE);
+        String lanToken = lanPrefs.getString("lan_token", "");
+        if (lanToken.isEmpty()) {
+            lanToken = java.util.UUID.randomUUID().toString().replace("-", "");
+            lanPrefs.edit().putString("lan_token", lanToken).apply();
+        }
+        lanInfo.setText("IP: " + LocalControlService.getLanIp() + ":8766\nPairing token: " + lanToken);
+        lanInfo.setTextColor(Color.LTGRAY);
+        lanInfo.setTextIsSelectable(true);
+        root.addView(lanInfo);
+
+        Button startLan = new Button(this);
+        startLan.setText("Start Local Control");
+        startLan.setOnClickListener(v -> {
+            Intent svc = new Intent(this, LocalControlService.class);
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(svc);
+            else startService(svc);
+            status.setText("Local control started on port 8766.");
+        });
+        root.addView(startLan);
+
+        Button stopLan = new Button(this);
+        stopLan.setText("Stop Local Control");
+        stopLan.setOnClickListener(v -> {
+            stopService(new Intent(this, LocalControlService.class));
+            status.setText("Local control stopped.");
+        });
+        root.addView(stopLan);
+
         TextView policyTitle = new TextView(this);
         policyTitle.setText("\nApp Control");
         policyTitle.setTextColor(Color.WHITE);
