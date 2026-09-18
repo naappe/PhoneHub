@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.28-new-phone-provisioning"
+APP_VERSION = "v3.28.1-admin-receiver-status-fix"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2768,10 +2768,7 @@ class PhoneHubTailscale(PhoneHub):
             timeout=10,
         )
         installed = "versionName=" in package_dump
-        receiver_ready = (
-            "PhoneHubDeviceAdminReceiver" in package_dump
-            and "android.permission.BIND_DEVICE_ADMIN" in package_dump
-        )
+        receiver_ready = "PhoneHubDeviceAdminReceiver" in package_dump
 
         version_match = re.search(r"versionName=([^\s]+)", package_dump)
         version_name = version_match.group(1) if version_match else "not installed"
@@ -2978,7 +2975,10 @@ class PhoneHubTailscale(PhoneHub):
         )
         admin_receiver_present = (
             "PhoneHubDeviceAdminReceiver" in receiver_dump
-            and "android.permission.BIND_DEVICE_ADMIN" in receiver_dump
+            or (
+                "com.phonehub.notifier/.PhoneHubDeviceAdminReceiver" in owners
+                and "DeviceOwner" in owners
+            )
         )
 
         combined = (owners + "\n" + policy)
