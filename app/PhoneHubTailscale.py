@@ -38,7 +38,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.12-call-audio-test"
+APP_VERSION = "v3.13-anti-echo-audio"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -356,6 +356,10 @@ class PhoneHubTailscale(PhoneHub):
         voice_actions = QHBoxLayout()
         voice_actions.setSpacing(8)
 
+        anti_echo = QPushButton("Anti Echo")
+        anti_echo.setObjectName("primary")
+        anti_echo.clicked.connect(self.set_anti_echo_mode)
+
         clear_voice = QPushButton("Clear Voice")
         clear_voice.setObjectName("primary")
         clear_voice.clicked.connect(lambda: self.set_audio_source("mic-voice-communication", "Clear Voice"))
@@ -363,6 +367,7 @@ class PhoneHubTailscale(PhoneHub):
         natural_voice = QPushButton("Natural Mic")
         natural_voice.clicked.connect(lambda: self.set_audio_source("mic", "Natural Mic"))
 
+        voice_actions.addWidget(anti_echo)
         voice_actions.addWidget(clear_voice)
         voice_actions.addWidget(natural_voice)
         box_layout.addLayout(voice_actions)
@@ -392,7 +397,7 @@ class PhoneHubTailscale(PhoneHub):
         self.call_test_note.setWordWrap(True)
         box_layout.addWidget(self.call_test_note)
 
-        self.audio_mode_label = QLabel("Voice mode: Clear Voice + Low Echo (40 ms buffer; Android echo cancellation when supported)")
+        self.audio_mode_label = QLabel("Voice mode: Anti Echo (30 ms stream buffer + 5 ms output buffer + Android voice processing)")
         self.audio_mode_label.setObjectName("big")
         self.audio_mode_label.setWordWrap(True)
         box_layout.addWidget(self.audio_mode_label)
@@ -437,22 +442,50 @@ class PhoneHubTailscale(PhoneHub):
 
         info, _, _ = self.card(
             "How it works",
-            "Clear Voice uses Android's voice-communication microphone processing and a low-latency 40 ms buffer. "
-            "Call Both / Other Side / My Side use Android call-audio sources for testing an active call when the device permits it. "
+            "Anti Echo is the recommended mode for live listening: Android voice-communication processing, 30 ms stream buffering and 5 ms PC output buffering. "
+            "Clear Voice uses the same Android voice-processing source with conservative defaults. "
+            "For active calls, try Other Side first. Call Both may sound doubled or echo-like on some phones because it includes both uplink and downlink paths. "
+            "Call Both / Other Side / My Side use Android call-audio sources when the device permits it. "
             "This can reduce delayed echo and may use Android echo cancellation / automatic gain control when supported. "
             "Natural Mic uses the raw normal microphone path. When Record is enabled, "
             "PhoneHub restarts the same selected microphone stream with scrcpy recording enabled and saves "
             "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
             "Press Record again to stop recording while continuing live listening. "
-            "For the strongest echo reduction, use headphones on the PC or keep PC speaker volume low so the phone microphone does not hear the delayed PC playback. "
+            "Acoustic feedback cannot be removed completely if the phone microphone hears the PC speaker. For the cleanest result use headphones on the PC, or keep the PC speaker low and physically away from the phone. "
             "Recordings are saved as AAC audio in an M4A container for Windows playback. PhoneHub now stops scrcpy gracefully so the file is finalized correctly. Peak analysis uses FFmpeg when available.",
         )
         layout.addWidget(info)
         layout.addStretch()
         return page
 
+    def set_anti_echo_mode(self):
+        self.audio_source = "mic-voice-communication"
+        self.audio_buffer_ms = 30
+        self.audio_output_buffer_ms = 5
+
+        if hasattr(self, "audio_mode_label"):
+            self.audio_mode_label.setText(
+                "Voice mode: Anti Echo (30 ms stream buffer + 5 ms output buffer + Android voice processing)"
+            )
+
+        proc = getattr(self, "audio_process", None)
+        if proc and proc.poll() is None:
+            was_recording = getattr(self, "audio_recording", False)
+            record_path = self.audio_record_path if was_recording else ""
+            self._stop_audio_process_only()
+            self.set_footer("Applying Anti Echo mode...")
+            self._launch_live_audio(record_path)
+        else:
+            self.set_footer("Anti Echo mode selected.")
+
     def set_audio_source(self, source, label):
         self.audio_source = source
+        if source == "mic-voice-communication":
+            self.audio_buffer_ms = 30
+            self.audio_output_buffer_ms = 5
+        else:
+            self.audio_buffer_ms = 40
+            self.audio_output_buffer_ms = 10
         if hasattr(self, "audio_mode_label"):
             labels = {
                 "mic-voice-communication": "Voice mode: Clear Voice + Low Echo",
@@ -512,7 +545,8 @@ class PhoneHubTailscale(PhoneHub):
             f"--audio-source={getattr(self, 'audio_source', 'mic-voice-communication')}",
             "--no-video",
             "--no-control",
-            "--audio-buffer=40",
+            f"--audio-buffer={getattr(self, 'audio_buffer_ms', 30)}",
+            f"--audio-output-buffer={getattr(self, 'audio_output_buffer_ms', 5)}",
         ]
         if record_path:
             args.extend([
