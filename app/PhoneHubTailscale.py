@@ -8,6 +8,7 @@ import math
 import wave
 import struct
 import signal
+import socket
 import os
 import json
 import hashlib
@@ -51,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.32-phonehub-apk-installer"
+APP_VERSION = "v3.33-one-click-private-link"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -3521,6 +3522,27 @@ class PhoneHubTailscale(PhoneHub):
         info, _, _ = self.card("Settings", text)
         layout.addWidget(info)
 
+        link_box, link_layout, _ = self.card(
+            "PhoneHub One Private Link",
+            "One-click pairing over USB. PhoneHub generates the keys, detects the PC LAN address, configures both WireGuard peers, starts the PC tunnel, and opens Android's VPN permission screen.",
+        )
+
+        pair_link = QPushButton("One-Click Pair PhoneHub One")
+        pair_link.setObjectName("primary")
+        pair_link.setMinimumHeight(44)
+        pair_link.clicked.connect(self.pair_phonehub_one_private_link)
+        link_layout.addWidget(pair_link)
+
+        self.private_link_status = QLabel(
+            "Status: Connect the phone by USB and install PhoneHub One."
+        )
+        self.private_link_status.setObjectName("sideStatus")
+        self.private_link_status.setWordWrap(True)
+        self.private_link_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        link_layout.addWidget(self.private_link_status)
+
+        layout.addWidget(link_box)
+
         engine_box, engine_layout, _ = self.card(
             "PhoneHub Engine",
             "PhoneHub now prefers its own portable scrcpy/ADB runtime under C:\\PhoneHub\\runtime\\scrcpy instead of depending only on Windows PATH.",
@@ -3547,6 +3569,165 @@ class PhoneHubTailscale(PhoneHub):
         layout.addWidget(engine_box)
         layout.addStretch()
         return page
+
+    def _wireguard_tools(self):
+        candidates = [
+            (Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "WireGuard" / "wg.exe",
+             Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "WireGuard" / "wireguard.exe"),
+        ]
+        for wg, wireguard in candidates:
+            if wg.exists() and wireguard.exists():
+                return str(wg), str(wireguard)
+        wg = shutil.which("wg")
+        wireguard = shutil.which("wireguard")
+        return wg, wireguard
+
+    def _detect_lan_ipv4(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            ip = sock.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                return ip
+        except Exception:
+            pass
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return ""
+
+    def pair_phonehub_one_private_link(self):
+        target = self._app_control_target()
+        if not target:
+            if hasattr(self, "private_link_status"):
+                self.private_link_status.setText("Status: No USB phone detected.")
+            self.set_footer("Connect the phone by USB first.")
+            return
+
+        packages = run_quiet(
+            ["adb", "-s", target, "shell", "pm", "list", "packages", "com.phonehub.one"],
+            timeout=8,
+        )
+        if "com.phonehub.one" not in packages:
+            if hasattr(self, "private_link_status"):
+                self.private_link_status.setText("Status: PhoneHub One is not installed on the phone.")
+            self.set_footer("Install PhoneHub One first.")
+            return
+
+        wg, wireguard = self._wireguard_tools()
+        if not wg or not wireguard:
+            if hasattr(self, "private_link_status"):
+                self.private_link_status.setText("Status: WireGuard for Windows is not installed.")
+            self.set_footer("Install WireGuard for Windows first.")
+            return
+
+        lan_ip = self._detect_lan_ipv4()
+        if not lan_ip:
+            if hasattr(self, "private_link_status"):
+                self.private_link_status.setText("Status: Could not detect the PC LAN IPv4 address.")
+            self.set_footer("Could not detect PC LAN address.")
+            return
+
+        vpn_dir = Path(r"C:\PhoneHub\runtime\vpn")
+        vpn_dir.mkdir(parents=True, exist_ok=True)
+        pc_private_path = vpn_dir / "pc_private.key"
+        pc_public_path = vpn_dir / "pc_public.key"
+        config_path = vpn_dir / "PhoneHubVPN.conf"
+
+        if pc_private_path.exists():
+            pc_private = pc_private_path.read_text(encoding="utf-8").strip()
+        else:
+            pc_private = run_quiet([wg, "genkey"], timeout=8).strip()
+            if not pc_private:
+                self.set_footer("Could not generate PC WireGuard key.")
+                return
+            pc_private_path.write_text(pc_private, encoding="utf-8")
+
+        pc_public = run_quiet(
+            ["powershell", "-NoProfile", "-Command",
+             f"$k='{pc_private.replace("'", "''")}'; $k | & '{wg}' pubkey"],
+            timeout=8,
+        ).strip()
+        if not pc_public:
+            self.set_footer("Could not derive PC WireGuard public key.")
+            return
+        pc_public_path.write_text(pc_public, encoding="utf-8")
+
+        phone_private = run_quiet([wg, "genkey"], timeout=8).strip()
+        if not phone_private:
+            self.set_footer("Could not generate phone WireGuard key.")
+            return
+
+        phone_public = run_quiet(
+            ["powershell", "-NoProfile", "-Command",
+             f"$k='{phone_private.replace("'", "''")}'; $k | & '{wg}' pubkey"],
+            timeout=8,
+        ).strip()
+        if not phone_public:
+            self.set_footer("Could not derive phone WireGuard public key.")
+            return
+
+        config = (
+            "[Interface]\n"
+            f"PrivateKey = {pc_private}\n"
+            "Address = 10.77.0.1/24\n"
+            "ListenPort = 51820\n\n"
+            "[Peer]\n"
+            f"PublicKey = {phone_public}\n"
+            "AllowedIPs = 10.77.0.2/32\n"
+        )
+        config_path.write_text(config, encoding="ascii")
+
+        try:
+            subprocess.run(
+                [wireguard, "/uninstalltunnelservice", "PhoneHubVPN"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except Exception:
+            pass
+
+        install = subprocess.run(
+            [wireguard, "/installtunnelservice", str(config_path)],
+            capture_output=True, text=True, timeout=20,
+        )
+        if install.returncode != 0:
+            detail = (install.stdout or "") + "\n" + (install.stderr or "")
+            if hasattr(self, "private_link_status"):
+                self.private_link_status.setText(
+                    "Status: PC VPN could not start. " + detail.strip()[:300]
+                )
+            self.set_footer("PC WireGuard tunnel failed to start.")
+            return
+
+        cmd = [
+            "adb", "-s", target, "shell", "am", "start",
+            "-n", "com.phonehub.one/com.phonehub.notifier.MainActivity",
+            "--ez", "auto_pair", "true",
+            "--ez", "auto_connect", "true",
+            "--es", "phone_address", "10.77.0.2/32",
+            "--es", "private_key", phone_private,
+            "--es", "public_key", phone_public,
+            "--es", "pc_public_key", pc_public,
+            "--es", "endpoint", f"{lan_ip}:51820",
+            "--es", "allowed_ips", "10.77.0.1/32",
+            "--es", "keepalive", "25",
+        ]
+        result = run_quiet(cmd, timeout=12)
+
+        if "Error" in result or "Exception" in result:
+            if hasattr(self, "private_link_status"):
+                self.private_link_status.setText("Status: Phone pairing command failed.")
+            self.set_footer("Could not open PhoneHub One pairing.")
+            return
+
+        if hasattr(self, "private_link_status"):
+            self.private_link_status.setText(
+                "Status: Paired. On the phone, approve the Android VPN permission once. "
+                f"PC tunnel 10.77.0.1 ↔ Phone 10.77.0.2 · endpoint {lan_ip}:51820"
+            )
+        self.set_footer("Private link paired. Approve the VPN permission on the phone.")
 
     def check_engine_runtime(self):
         scrcpy = scrcpy_path()
