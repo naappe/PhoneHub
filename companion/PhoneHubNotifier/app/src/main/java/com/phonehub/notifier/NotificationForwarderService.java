@@ -1,9 +1,10 @@
 package com.phonehub.notifier;
 
 import android.app.Notification;
-import android.app.Person;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Bundle;
+import android.os.Parcelable;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import android.text.TextUtils;
@@ -43,27 +44,23 @@ public class NotificationForwarderService extends NotificationListenerService {
     }
 
     private static String extractBestText(Notification n) {
-        // Messaging apps (WhatsApp, Telegram, SMS apps) commonly use MessagingStyle.
+        // MessagingStyle stores message entries as Bundles in EXTRA_MESSAGES.
+        // Read the bundles directly so the companion stays compatible across Android versions/OEMs.
         try {
-            android.os.Parcelable[] rawMessages = n.extras.getParcelableArray(Notification.EXTRA_MESSAGES);
+            Parcelable[] rawMessages = n.extras.getParcelableArray(Notification.EXTRA_MESSAGES);
             if (rawMessages != null && rawMessages.length > 0) {
-                Notification.MessagingStyle.Message[] messages =
-                        Notification.MessagingStyle.Message.getMessagesFromBundleArray(rawMessages);
+                Parcelable lastRaw = rawMessages[rawMessages.length - 1];
+                if (lastRaw instanceof Bundle) {
+                    Bundle last = (Bundle) lastRaw;
 
-                if (messages != null && messages.length > 0) {
-                    Notification.MessagingStyle.Message last = messages[messages.length - 1];
+                    CharSequence bodyCs = last.getCharSequence("text");
+                    String body = bodyCs == null ? "" : bodyCs.toString();
 
                     String sender = "";
-                    try {
-                        Person person = last.getSenderPerson();
-                        if (person != null && person.getName() != null) {
-                            sender = person.getName().toString();
-                        }
-                    } catch (Exception ignored) {
+                    CharSequence senderCs = last.getCharSequence("sender");
+                    if (senderCs != null) {
+                        sender = senderCs.toString();
                     }
-
-                    CharSequence bodyCs = last.getText();
-                    String body = bodyCs == null ? "" : bodyCs.toString();
 
                     if (!sender.isEmpty() && !body.isEmpty()) {
                         return sender + ": " + body;
