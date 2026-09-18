@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.27.2-device-owner-detection-fix"
+APP_VERSION = "v3.27.3-app-control-readonly"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2626,6 +2626,10 @@ class PhoneHubTailscale(PhoneHub):
         allow_uninstall = QPushButton("Allow Uninstall")
         allow_uninstall.clicked.connect(lambda: self.send_app_policy("allow_uninstall"))
 
+        self.app_policy_buttons = [suspend, unsuspend, block_uninstall, allow_uninstall]
+        for button in self.app_policy_buttons:
+            button.setEnabled(False)
+
         rules.addWidget(suspend)
         rules.addWidget(unsuspend)
         rules.addWidget(block_uninstall)
@@ -2641,9 +2645,18 @@ class PhoneHubTailscale(PhoneHub):
         allow_installs = QPushButton("Allow App Installs")
         allow_installs.clicked.connect(lambda: self.send_app_policy("allow_installs", package_required=False))
 
+        self.app_policy_buttons.extend([block_installs, allow_installs])
+        for button in (block_installs, allow_installs):
+            button.setEnabled(False)
+
         installs.addWidget(block_installs)
         installs.addWidget(allow_installs)
         box_layout.addLayout(installs)
+
+        self.app_control_mode_label = QLabel("Mode: READ-ONLY until Device Owner is configured")
+        self.app_control_mode_label.setObjectName("big")
+        self.app_control_mode_label.setWordWrap(True)
+        box_layout.addWidget(self.app_control_mode_label)
 
         self.app_control_packages = QTextEdit()
         self.app_control_packages.setReadOnly(True)
@@ -2748,6 +2761,17 @@ class PhoneHubTailscale(PhoneHub):
 
         if hasattr(self, "app_control_status"):
             self.app_control_status.setText(summary)
+
+        if hasattr(self, "app_policy_buttons"):
+            for button in self.app_policy_buttons:
+                button.setEnabled(is_owner)
+
+        if hasattr(self, "app_control_mode_label"):
+            self.app_control_mode_label.setText(
+                "Mode: ACTIVE POLICY CONTROL"
+                if is_owner else
+                "Mode: READ-ONLY — this phone is already provisioned and PhoneHub is not Device Owner"
+            )
 
         if hasattr(self, "app_control_packages"):
             report = [
