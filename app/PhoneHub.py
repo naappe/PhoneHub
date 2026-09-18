@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 
-APP_VERSION = "v3.0-lock-state-test-v2"
+APP_VERSION = "v3.1-clean-navigation-layout"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -267,6 +267,7 @@ def read_last_location_text():
 class Bridge(QObject):
     message = Signal(str)
     status = Signal(dict)
+    screen_result = Signal(str)
 
 
 class PhoneHub(QWidget):
@@ -283,6 +284,7 @@ class PhoneHub(QWidget):
         self.bridge = Bridge()
         self.bridge.message.connect(self.set_footer)
         self.bridge.status.connect(self.apply_status)
+        self.bridge.screen_result.connect(self.set_screen_result)
 
         self.nav_buttons = []
         self.build_ui()
@@ -558,57 +560,84 @@ class PhoneHub(QWidget):
     def page_screen(self):
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
 
-        info, _, _ = self.card("Screen", "Wake + Open Screen is the safe daily method.\n\nPhoneHub can wake the phone and open the screen on PC.\nFor security, unlock once on the phone if it is locked.\nAfter unlocking once, you can control the phone from PC.\n\nReadable is clearer. Fast and Ultra are lower resolution.")
+        info, _, _ = self.card(
+            "Screen",
+            "Wake + Open Screen is the normal daily method. "
+            "Readable gives the clearest view; Fast and Ultra use less bandwidth."
+        )
         layout.addWidget(info)
 
+        main_box, main_layout, _ = self.card("Open screen", "Choose one view mode.")
         row1 = QHBoxLayout()
+        row1.setSpacing(10)
 
         readable = QPushButton("Wake + Open Screen")
         readable.setObjectName("primary")
+        readable.setMinimumHeight(44)
         readable.clicked.connect(self.wake_and_open_screen)
 
-        fast = QPushButton("Open Fast Screen")
+        fast = QPushButton("Fast Screen")
+        fast.setMinimumHeight(44)
         fast.clicked.connect(lambda: self.open_screen(FAST_SCREEN, keep_alive=False))
 
-        ultra = QPushButton("Open Ultra Screen")
+        ultra = QPushButton("Ultra Screen")
+        ultra.setMinimumHeight(44)
         ultra.clicked.connect(lambda: self.open_screen(ULTRA_SCREEN, keep_alive=False))
 
-        row1.addWidget(readable)
-        row1.addWidget(fast)
-        row1.addWidget(ultra)
-        layout.addLayout(row1)
+        row1.addWidget(readable, 2)
+        row1.addWidget(fast, 1)
+        row1.addWidget(ultra, 1)
+        main_layout.addLayout(row1)
+        layout.addWidget(main_box)
 
+        tools_box, tools_layout, _ = self.card("Quick controls", "Common screen actions.")
         row2 = QHBoxLayout()
+        row2.setSpacing(10)
 
         shot = QPushButton("Screenshot")
+        shot.setMinimumHeight(42)
         shot.clicked.connect(self.screenshot_async)
 
         wake = QPushButton("Wake")
+        wake.setMinimumHeight(42)
         wake.clicked.connect(self.wake_phone)
 
         lock = QPushButton("Lock")
+        lock.setMinimumHeight(42)
         lock.clicked.connect(self.lock_phone)
 
         close = QPushButton("Disconnect Screen")
         close.setObjectName("danger")
+        close.setMinimumHeight(42)
         close.clicked.connect(self.disconnect_screen)
 
         row2.addWidget(shot)
         row2.addWidget(wake)
         row2.addWidget(lock)
         row2.addWidget(close)
-        layout.addLayout(row2)
+        tools_layout.addLayout(row2)
+        layout.addWidget(tools_box)
 
-        row3 = QHBoxLayout()
+        diag_box, diag_layout, _ = self.card(
+            "Diagnostics",
+            "Use this only when checking Android lock-state behavior."
+        )
 
-        lock_test = QPushButton("Lock State Test")
-        lock_test.setObjectName("primary")
+        lock_test = QPushButton("Run Lock State Test")
+        lock_test.setMinimumHeight(42)
         lock_test.clicked.connect(self.lock_state_test)
+        diag_layout.addWidget(lock_test)
 
-        row3.addWidget(lock_test)
-        layout.addLayout(row3)
+        self.screen_result_label = QLabel("No diagnostic result yet.")
+        self.screen_result_label.setObjectName("big")
+        self.screen_result_label.setWordWrap(True)
+        self.screen_result_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        diag_layout.addWidget(self.screen_result_label)
 
+        layout.addWidget(diag_box)
         layout.addStretch()
         return page
 
@@ -766,6 +795,10 @@ class PhoneHub(QWidget):
 
     def set_footer(self, text):
         self.footer.setText(text)
+
+    def set_screen_result(self, text):
+        if hasattr(self, "screen_result_label"):
+            self.screen_result_label.setText(text)
 
     def refresh_status(self):
         ip, _ = get_saved_ip()
@@ -1096,7 +1129,8 @@ class PhoneHub(QWidget):
                     + "\n\nThis phone does not expose a reliable single lock flag through standard ADB dumpsys output."
                 )
 
-            self.bridge.message.emit(message)
+            self.bridge.screen_result.emit(message)
+            self.bridge.message.emit("Lock-state test complete.")
 
         threading.Thread(target=worker, daemon=True).start()
 
