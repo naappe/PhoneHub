@@ -48,7 +48,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.21-screen-studio"
+APP_VERSION = "v3.22-message-feed"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -109,6 +109,7 @@ class PhoneHubTailscale(PhoneHub):
         self.notification_seen = set()
         self.notification_baseline_ready = False
         self.notification_items = []
+        self.notification_filter = "all"
         self.notification_store = Path(r"C:\PhoneHub\runtime\notifications\feed.jsonl")
         self.notification_store.parent.mkdir(parents=True, exist_ok=True)
         self.screen_profile_name = "Balanced"
@@ -1830,7 +1831,8 @@ class PhoneHubTailscale(PhoneHub):
 
         box, box_layout, _ = self.card(
             "Notification Feed",
-            "RSS-style feed from notifications currently exposed by your Android phone over ADB. "
+            "RSS-style message feed for SMS, WhatsApp, calls and other Android notifications. "
+            "When a new SMS or WhatsApp notification arrives, PhoneHub adds it to the feed and can show a Windows tray alert. "
             "PhoneHub can stay in the Windows tray; the main window does not need to remain open.",
         )
 
@@ -1859,6 +1861,27 @@ class PhoneHubTailscale(PhoneHub):
         actions.addWidget(clear)
         actions.addWidget(startup)
         box_layout.addLayout(actions)
+
+        filters = QHBoxLayout()
+
+        all_btn = QPushButton("All")
+        all_btn.setObjectName("primary")
+        all_btn.clicked.connect(lambda: self.set_notification_filter("all"))
+
+        sms_btn = QPushButton("SMS")
+        sms_btn.clicked.connect(lambda: self.set_notification_filter("sms"))
+
+        wa_btn = QPushButton("WhatsApp")
+        wa_btn.clicked.connect(lambda: self.set_notification_filter("whatsapp"))
+
+        calls_btn = QPushButton("Calls")
+        calls_btn.clicked.connect(lambda: self.set_notification_filter("calls"))
+
+        filters.addWidget(all_btn)
+        filters.addWidget(sms_btn)
+        filters.addWidget(wa_btn)
+        filters.addWidget(calls_btn)
+        box_layout.addLayout(filters)
 
         self.notification_list = QListWidget()
         self.notification_list.setMinimumHeight(300)
@@ -1956,6 +1979,50 @@ class PhoneHubTailscale(PhoneHub):
         if self.notification_feed_enabled:
             self.poll_notifications()
 
+    def set_notification_filter(self, mode):
+        self.notification_filter = mode
+        self._refresh_notification_list()
+        if hasattr(self, "notification_status"):
+            self.notification_status.setText(f"Status: Showing {mode.upper()} feed")
+
+    def _notification_kind(self, package, title, body):
+        p = (package or "").lower()
+        t = (title or "").lower()
+        b = (body or "").lower()
+
+        if "whatsapp" in p:
+            return "whatsapp"
+
+        sms_packages = (
+            "com.google.android.apps.messaging",
+            "com.android.mms",
+            "com.samsung.android.messaging",
+            "com.oneplus.mms",
+            "com.coloros.mms",
+        )
+        if any(x in p for x in sms_packages) or "sms" in p or "message" in p:
+            return "sms"
+
+        call_packages = (
+            "com.google.android.dialer",
+            "com.android.dialer",
+            "com.samsung.android.dialer",
+            "com.android.server.telecom",
+        )
+        if any(x in p for x in call_packages) or "missed call" in t or "missed call" in b:
+            return "calls"
+
+        return "other"
+
+    def _notification_app_label(self, package, kind):
+        if kind == "whatsapp":
+            return "WhatsApp"
+        if kind == "sms":
+            return "SMS"
+        if kind == "calls":
+            return "Calls"
+        return package or "Android"
+
     def _notification_target(self):
         ip, port = get_saved_ip()
         target = f"{ip}:{port}" if ip else ""
@@ -2030,9 +2097,12 @@ class PhoneHubTailscale(PhoneHub):
                 continue
 
             key = hashlib.sha1(f"{pkg}|{title}|{body}".encode("utf-8", errors="ignore")).hexdigest()
+            kind = self._notification_kind(pkg, title, body)
             items.append({
                 "id": key,
                 "package": pkg,
+                "app": self._notification_app_label(pkg, kind),
+                "kind": kind,
                 "title": title or pkg,
                 "body": body,
                 "time": datetime.now().strftime("%H:%M:%S"),
@@ -2104,8 +2174,8 @@ class PhoneHubTailscale(PhoneHub):
             newest = new_items[0]
             if self.tray_icon and self.notification_feed_enabled:
                 self.tray_icon.showMessage(
-                    newest.get("title") or newest.get("package") or "Phone notification",
-                    newest.get("body") or newest.get("package") or "",
+                    f"{newest.get('app') or 'Phone'} · {newest.get('title') or 'Notification'}",
+                    newest.get("body") or "",
                     QSystemTrayIcon.Information,
                     7000,
                 )
@@ -2129,12 +2199,23 @@ class PhoneHubTailscale(PhoneHub):
         if not hasattr(self, "notification_list"):
             return
         self.notification_list.clear()
+        mode = getattr(self, "notification_filter", "all")
+
         for item in self.notification_items[:200]:
-            title = item.get("title") or item.get("package") or "Notification"
+            kind = item.get("kind") or "other"
+            if mode != "all" and kind != mode:
+                continue
+
+            app = item.get("app") or item.get("package") or "Android"
+            title = item.get("title") or "Notification"
             body = item.get("body") or ""
-            pkg = item.get("package") or ""
             when = item.get("time") or ""
-            self.notification_list.addItem(f"{when}  {title}\n{body}\n{pkg}")
+
+            self.notification_list.addItem(
+                f"{when}   {app}\n"
+                f"{title}\n"
+                f"{body}"
+            )
 
     def clear_notification_view(self):
         self.notification_items = []
