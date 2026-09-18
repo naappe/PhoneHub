@@ -37,7 +37,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.8-audio-meter-volume"
+APP_VERSION = "v3.9-compatible-audio-recording"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -416,7 +416,7 @@ class PhoneHubTailscale(PhoneHub):
             "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
             "Press Record again to stop recording while continuing live listening. "
             "For the strongest echo reduction, use headphones on the PC or keep PC speaker volume low so the phone microphone does not hear the delayed PC playback. "
-            "The level/peak check analyzes the saved WAV recording after recording stops; it does not fake a live meter.",
+            "Recordings are saved as AAC/M4A for Windows Media Player compatibility. Peak analysis uses FFmpeg when available.",
         )
         layout.addWidget(info)
         layout.addStretch()
@@ -485,7 +485,8 @@ class PhoneHubTailscale(PhoneHub):
         ]
         if record_path:
             args.extend([
-                "--audio-codec=raw",
+                "--audio-codec=aac",
+                "--audio-bit-rate=128K",
                 f"--record={record_path}",
             ])
 
@@ -584,7 +585,7 @@ class PhoneHubTailscale(PhoneHub):
 
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        record_path = recordings / f"phone_mic_{stamp}.wav"
+        record_path = recordings / f"phone_mic_{stamp}.m4a"
 
         self._stop_audio_process_only()
         self.audio_recording = True
@@ -641,30 +642,39 @@ class PhoneHubTailscale(PhoneHub):
             self.set_footer("The last recording file could not be found.")
             return
 
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            text = "Level: Recording saved as Windows-compatible AAC/M4A. Install FFmpeg for peak analysis."
+            if hasattr(self, "audio_level_label"):
+                self.audio_level_label.setText(text)
+            self.set_footer(text)
+            return
+
         try:
-            with wave.open(str(path), "rb") as wav:
-                channels = wav.getnchannels()
-                sampwidth = wav.getsampwidth()
-                frames = wav.getnframes()
-                rate = wav.getframerate()
+            result = subprocess.run(
+                [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-i", str(path),
+                    "-af", "volumedetect",
+                    "-f", "null",
+                    "NUL" if sys.platform.startswith("win") else "/dev/null",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+                creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform.startswith("win") else 0),
+            )
+            report = (result.stdout or "") + "\n" + (result.stderr or "")
+            mean_match = re.search(r"mean_volume:\s*(-?[0-9.]+)\s*dB", report)
+            max_match = re.search(r"max_volume:\s*(-?[0-9.]+)\s*dB", report)
 
-                if sampwidth != 2 or frames <= 0:
-                    raise ValueError("Expected 16-bit PCM WAV audio.")
+            if not max_match:
+                raise ValueError("FFmpeg did not return a peak level.")
 
-                raw = wav.readframes(frames)
-
-            sample_count = len(raw) // 2
-            if sample_count <= 0:
-                raise ValueError("Recording contains no PCM samples.")
-
-            samples = struct.unpack("<" + ("h" * sample_count), raw)
-            peak = max(abs(v) for v in samples)
-            rms = math.sqrt(sum(v * v for v in samples) / sample_count)
-
-            full_scale = 32767.0
-            peak_db = 20.0 * math.log10(max(peak, 1) / full_scale)
-            rms_db = 20.0 * math.log10(max(rms, 1.0) / full_scale)
-            duration = frames / float(rate) if rate else 0.0
+            peak_db = float(max_match.group(1))
+            mean_db = float(mean_match.group(1)) if mean_match else None
 
             if peak_db >= -0.5:
                 state = "PEAKING / clipping risk"
@@ -677,18 +687,18 @@ class PhoneHubTailscale(PhoneHub):
             else:
                 state = "Too low"
 
-            text = (
-                f"Level: {state} | Peak {peak_db:.1f} dBFS | "
-                f"Average {rms_db:.1f} dBFS | {duration:.1f}s"
-            )
+            text = f"Level: {state} | Peak {peak_db:.1f} dBFS"
+            if mean_db is not None:
+                text += f" | Average {mean_db:.1f} dBFS"
 
             if hasattr(self, "audio_level_label"):
                 self.audio_level_label.setText(text)
             self.set_footer(text)
         except Exception as exc:
+            text = f"Level: Recording plays normally; analysis unavailable — {exc}"
             if hasattr(self, "audio_level_label"):
-                self.audio_level_label.setText(f"Level: Could not analyze — {exc}")
-            self.set_footer("Audio level analysis failed.")
+                self.audio_level_label.setText(text)
+            self.set_footer(text)
 
     def open_audio_recordings_folder(self):
         folder = Path(r"C:\PhoneHub\runtime\audio")
