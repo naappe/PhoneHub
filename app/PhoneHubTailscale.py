@@ -48,7 +48,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.22-message-feed"
+APP_VERSION = "v3.22.1-notification-parser-fix"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -1856,10 +1856,14 @@ class PhoneHubTailscale(PhoneHub):
         startup = QPushButton("Enable Windows Startup")
         startup.clicked.connect(self.enable_phonehub_startup)
 
+        diagnose = QPushButton("Diagnose Feed")
+        diagnose.clicked.connect(self.diagnose_notification_feed)
+
         actions.addWidget(refresh)
         actions.addWidget(self.notification_pause_button)
         actions.addWidget(clear)
         actions.addWidget(startup)
+        actions.addWidget(diagnose)
         box_layout.addLayout(actions)
 
         filters = QHBoxLayout()
@@ -1886,6 +1890,12 @@ class PhoneHubTailscale(PhoneHub):
         self.notification_list = QListWidget()
         self.notification_list.setMinimumHeight(300)
         box_layout.addWidget(self.notification_list)
+
+        self.notification_diag = QLabel("Diagnostics: not run yet")
+        self.notification_diag.setObjectName("big")
+        self.notification_diag.setWordWrap(True)
+        self.notification_diag.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box_layout.addWidget(self.notification_diag)
 
         note = QLabel(
             "Closing the PhoneHub window now hides it to the Windows system tray instead of stopping it. "
@@ -1979,6 +1989,36 @@ class PhoneHubTailscale(PhoneHub):
         if self.notification_feed_enabled:
             self.poll_notifications()
 
+    def diagnose_notification_feed(self):
+        target = self._notification_target()
+        if not target:
+            text = "Diagnostics: phone is not connected over ADB/Tailscale."
+            if hasattr(self, "notification_diag"):
+                self.notification_diag.setText(text)
+            self.set_footer("Notification diagnostics: phone not connected.")
+            return
+
+        raw = run_quiet(
+            ["adb", "-s", target, "shell", "dumpsys", "notification", "--noredact"],
+            timeout=12,
+        )
+        parsed = self._parse_notification_dump(raw)
+        packages = sorted({item.get("package", "") for item in parsed if item.get("package")})
+        wa = [item for item in parsed if item.get("kind") == "whatsapp"]
+        sms = [item for item in parsed if item.get("kind") == "sms"]
+
+        if hasattr(self, "notification_diag"):
+            self.notification_diag.setText(
+                "Diagnostics:\n"
+                f"ADB target: {target}\n"
+                f"Parsed notifications: {len(parsed)}\n"
+                f"WhatsApp: {len(wa)}\n"
+                f"SMS: {len(sms)}\n"
+                f"Packages: {', '.join(packages[:12]) if packages else 'none'}"
+            )
+
+        self.set_footer("Notification diagnostics complete.")
+
     def set_notification_filter(self, mode):
         self.notification_filter = mode
         self._refresh_notification_list()
@@ -2058,7 +2098,10 @@ class PhoneHubTailscale(PhoneHub):
                     )
                     items = self._parse_notification_dump(raw)
                     if not items:
-                        items = [{"_status": "Connected — no readable notifications found"}]
+                        if raw.strip():
+                            items = [{"_status": "Connected — Android returned notification data, but no readable title/text was parsed. Press Diagnose Feed."}]
+                        else:
+                            items = [{"_status": "Connected — no notification data returned"}]
             except Exception as exc:
                 items = [{"_status": f"Notification check failed: {exc}"}]
             self.auto_bridge.notifications.emit(items)
@@ -2070,14 +2113,14 @@ class PhoneHubTailscale(PhoneHub):
         if not raw:
             return []
 
-        blocks = re.split(r"(?=NotificationRecord\()", raw)
+        blocks = re.split(r"(?=NotificationRecord\(|\n\s*NotificationRecord\{)", raw)
         items = []
 
         for block in blocks:
-            if not block.startswith("NotificationRecord("):
+            if "NotificationRecord" not in block:
                 continue
 
-            pkg_match = re.search(r"pkg=([^\s]+)", block)
+            pkg_match = re.search(r"(?:pkg=|package=)([^\s,}]+)", block)
             pkg = pkg_match.group(1).strip() if pkg_match else "Android"
 
             title = self._notification_extra(block, "android.title")
@@ -2086,6 +2129,18 @@ class PhoneHubTailscale(PhoneHub):
             sub_text = self._notification_extra(block, "android.subText")
 
             body = big_text or text or sub_text
+
+            # Some Android/OEM builds serialize extras differently.
+            if not title:
+                m = re.search(r"(?:android\.title|android\.conversationTitle)[^=]*=([^\n,}]+)", block)
+                if m:
+                    title = m.group(1).strip(" ()\"'")
+
+            if not body:
+                m = re.search(r"(?:android\.text|android\.bigText|android\.messages)[^=]*=([^\n}]+)", block)
+                if m:
+                    body = m.group(1).strip(" ()\"'")
+
             if not title and not body:
                 ticker = re.search(r"tickerText=([^\n]+)", block)
                 body = ticker.group(1).strip() if ticker else ""
@@ -2121,10 +2176,14 @@ class PhoneHubTailscale(PhoneHub):
     def _notification_extra(self, block, key):
         patterns = [
             rf"{re.escape(key)}=String \((.*?)\)",
-            rf"{re.escape(key)}=([^\n]+)",
+            rf"{re.escape(key)}=SpannableString \((.*?)\)",
+            rf"{re.escape(key)}=CharSequence \((.*?)\)",
+            rf"{re.escape(key)}=\"([^\"]*)\"",
+            rf"{re.escape(key)}='([^']*)'",
+            rf"{re.escape(key)}=([^\n,}}]+)",
         ]
         for pattern in patterns:
-            match = re.search(pattern, block, flags=re.DOTALL if "\\(" in pattern else 0)
+            match = re.search(pattern, block, flags=re.DOTALL)
             if match:
                 return match.group(1).strip()
         return ""
