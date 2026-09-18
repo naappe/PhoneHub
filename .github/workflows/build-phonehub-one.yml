@@ -34,12 +34,12 @@ jobs:
           grep -R "GoBackend" companion/PhoneHubOne/app/build/intermediates/merged_manifests companion/PhoneHubOne/app/build/intermediates/merged_manifest
           grep -R "NotificationForwarderService" companion/PhoneHubOne/app/build/intermediates/merged_manifests companion/PhoneHubOne/app/build/intermediates/merged_manifest
 
-      - name: Rename APK
-        run: cp companion/PhoneHubOne/app/build/outputs/apk/debug/app-debug.apk PhoneHub-One-v1.0.apk
+      - name: Create stable APK filename
+        run: cp companion/PhoneHubOne/app/build/outputs/apk/debug/app-debug.apk PhoneHub-One.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: PhoneHub-One-v1.0
-          path: PhoneHub-One-v1.0.apk
+          name: PhoneHub-One
+          path: PhoneHub-One.apk
           if-no-files-found: error
