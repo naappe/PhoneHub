@@ -15,9 +15,9 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QFileDialog
 )
 
-from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
+from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4\nfrom state_engine import detect_device_state, state_summary\nfrom security_monitor import scan_device, summarize_findings, EVIDENCE_DIR
 
-APP_VERSION = "v3.4-apk-analysis-lab"
+APP_VERSION = "v3.5-unified-state-security"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -271,7 +271,7 @@ class Bridge(QObject):
     status = Signal(dict)
     screen_result = Signal(str)
     service_result = Signal(str)
-    apk_result = Signal(str)
+    apk_result = Signal(str)\n    state_result = Signal(str)\n    security_result = Signal(str)
 
 
 class PhoneHub(QWidget):
@@ -291,14 +291,14 @@ class PhoneHub(QWidget):
         self.current_view = ""
         self.screen_process = None
         self.camera_process = None
-        self.camera_facing = ""
+        self.camera_facing = ""\n        self.last_device_state = None\n        self._state_busy = False\n        self._security_busy = False
 
         self.bridge = Bridge()
         self.bridge.message.connect(self.set_footer)
         self.bridge.status.connect(self.apply_status)
         self.bridge.screen_result.connect(self.set_screen_result)
         self.bridge.service_result.connect(self.set_service_result)
-        self.bridge.apk_result.connect(self.set_apk_result)
+        self.bridge.apk_result.connect(self.set_apk_result)\n        self.bridge.state_result.connect(self.set_state_result)\n        self.bridge.security_result.connect(self.set_security_result)
 
         self.nav_buttons = []
         self.build_ui()
@@ -1498,7 +1498,7 @@ class PhoneHub(QWidget):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
-        names = ["Dashboard", "Setup New Phone", "Screen", "Camera", "Files", "Apps", "Control", "Service Lab", "APK Analysis", "Settings"]
+        names = ["Dashboard", "Setup New Phone", "Screen", "Camera", "Files", "Apps", "Control", "Service Lab", "Device State", "Security", "APK Analysis", "Settings"]
         if index < len(names):
             self.set_footer(f"Opened {names[index]} page.")
 
