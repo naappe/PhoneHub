@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 
-APP_VERSION = "v2.6-independent-screen-camera"
+APP_VERSION = "v2.7-dual-camera-test"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -279,6 +279,8 @@ class PhoneHub(QWidget):
         self.screen_process = None
         self.camera_process = None
         self.camera_facing = ""
+        self.front_camera_process = None
+        self.back_camera_process = None
 
         self.bridge = Bridge()
         self.bridge.message.connect(self.set_footer)
@@ -631,6 +633,27 @@ class PhoneHub(QWidget):
         row.addWidget(close)
 
         layout.addLayout(row)
+
+        dual_row = QHBoxLayout()
+        dual_test = QPushButton("Dual Camera Test")
+        dual_test.setObjectName("primary")
+        dual_test.clicked.connect(self.dual_camera_test)
+
+        stop_dual = QPushButton("Stop Dual Test")
+        stop_dual.clicked.connect(self.stop_dual_camera_test)
+
+        dual_row.addWidget(dual_test)
+        dual_row.addWidget(stop_dual)
+        layout.addLayout(dual_row)
+
+        dual_info = QLabel(
+            "Dual Camera Test opens Front + Back at the same time. "
+            "If both windows stay open, this phone supports concurrent camera streaming for PhoneHub."
+        )
+        dual_info.setObjectName("muted")
+        dual_info.setWordWrap(True)
+        layout.addWidget(dual_info)
+
         layout.addStretch()
         return page
 
@@ -1062,6 +1085,81 @@ class PhoneHub(QWidget):
         self.camera_process = None
         self.camera_facing = ""
         self.set_footer("Camera closed.")
+
+    def stop_dual_camera_test(self):
+        self._stop_proc(self.front_camera_process)
+        self._stop_proc(self.back_camera_process)
+        self.front_camera_process = None
+        self.back_camera_process = None
+        self.set_footer("Dual camera test stopped.")
+
+    def dual_camera_test(self):
+        scrcpy = scrcpy_path()
+        if not scrcpy:
+            QMessageBox.critical(self, "PhoneHub", "scrcpy not found.")
+            return
+
+        target = adb_target()
+        if not target:
+            QMessageBox.warning(self, "PhoneHub", "Phone IP is not configured.")
+            return
+
+        # Stop only previous dual-test windows. Normal Screen stays open.
+        self.stop_dual_camera_test()
+
+        common = [
+            scrcpy,
+            "-s", target,
+            "--video-source=camera",
+            "--camera-size=320x240",
+            "--camera-fps=8",
+            "--video-bit-rate=180K",
+            "--video-buffer=0",
+            "--no-audio",
+        ]
+
+        self.front_camera_process = self._start_scrcpy(
+            common + [
+                "--camera-facing=front",
+                "--window-title=PhoneHub Dual Front Camera",
+                "--window-x=20",
+                "--window-y=80",
+            ]
+        )
+
+        # Small launch stagger avoids both processes competing during adb startup.
+        time.sleep(0.20)
+
+        self.back_camera_process = self._start_scrcpy(
+            common + [
+                "--camera-facing=back",
+                "--window-title=PhoneHub Dual Back Camera",
+                "--window-x=380",
+                "--window-y=80",
+            ]
+        )
+
+        self.set_footer("Testing Front + Back cameras together...")
+
+        def verify():
+            time.sleep(3.0)
+            front_ok = self._proc_alive(self.front_camera_process)
+            back_ok = self._proc_alive(self.back_camera_process)
+
+            if front_ok and back_ok:
+                self.bridge.message.emit(
+                    "DUAL CAMERA SUPPORTED: Front and Back camera streams are both running."
+                )
+            elif front_ok or back_ok:
+                self.bridge.message.emit(
+                    "DUAL CAMERA NOT SUPPORTED: only one camera stream stayed open. Fast switching will be used instead."
+                )
+            else:
+                self.bridge.message.emit(
+                    "Dual camera test failed: neither camera stream stayed open."
+                )
+
+        threading.Thread(target=verify, daemon=True).start()
 
     def screenshot_async(self):
         self.set_footer("Taking screenshot...")
