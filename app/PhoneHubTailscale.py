@@ -51,7 +51,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.31.2-copy-profile-status"
+APP_VERSION = "v3.32-phonehub-apk-installer"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -2629,7 +2629,7 @@ class PhoneHubTailscale(PhoneHub):
         provision_layout.addLayout(provision_actions)
 
         repair_actions = QHBoxLayout()
-        install_companion = QPushButton("Install / Update Companion")
+        install_companion = QPushButton("Install APK from PhoneHub")
         install_companion.clicked.connect(self.install_latest_companion)
 
         stale_session = QPushButton("Clear Stale Account Session + Reboot")
@@ -2813,15 +2813,20 @@ class PhoneHubTailscale(PhoneHub):
         self.set_footer(lines[-1] if lines else "Provisioning check complete.")
 
     def _companion_apk_path(self):
-        candidates = [
-            Path(r"C:\PhoneHub\app\PhoneHubNotifier-v1.1.apk"),
-            Path(r"C:\PhoneHub\app\PhoneHubNotifier.apk"),
-        ]
-        candidates.extend(sorted(Path(r"C:\PhoneHub\app").glob("PhoneHubNotifier-v*.apk"), reverse=True))
-        for path in candidates:
-            if path.exists():
-                return path
-        return None
+        app_dir = Path(r"C:\PhoneHub\app")
+
+        def version_key(path):
+            match = re.search(r"-v(\d+(?:\.\d+)*)\.apk$", path.name, flags=re.IGNORECASE)
+            if not match:
+                return ()
+            return tuple(int(part) for part in match.group(1).split("."))
+
+        versioned = [p for p in app_dir.glob("PhoneHubNotifier-v*.apk") if p.exists()]
+        if versioned:
+            return max(versioned, key=version_key)
+
+        fallback = app_dir / "PhoneHubNotifier.apk"
+        return fallback if fallback.exists() else None
 
     def _account_count(self, target):
         output = run_quiet(["adb", "-s", target, "shell", "dumpsys", "account"], timeout=12)
@@ -2888,9 +2893,51 @@ class PhoneHubTailscale(PhoneHub):
             ])
             return
 
-        result = run_quiet(["adb", "-s", target, "install", "-r", str(apk)], timeout=90)
+        package_dump = run_quiet(
+            ["adb", "-s", target, "shell", "dumpsys", "package", "com.phonehub.notifier"],
+            timeout=10,
+        )
+        installed = "versionName=" in package_dump
+        version_match = re.search(r"versionName=([^\s]+)", package_dump)
+        installed_version = version_match.group(1) if version_match else "not installed"
+
+        owners = run_quiet(["adb", "-s", target, "shell", "dpm", "list-owners"], timeout=8)
+        is_owner = (
+            "com.phonehub.notifier/.PhoneHubDeviceAdminReceiver" in owners
+            and "DeviceOwner" in owners
+        )
+
+        if installed and is_owner:
+            self._set_provision_status([
+                f"PROTECTED: PhoneHub Notifier {installed_version} is already Device Owner.",
+                f"Selected APK: {apk.name}",
+                "PhoneHub will not replace or uninstall the Device Owner APK automatically.",
+                "Use a separate test phone for a differently signed APK.",
+            ])
+            return
+
+        self._set_provision_status([
+            f"Installing from PhoneHub: {apk.name}",
+            f"Target phone: {target}",
+        ])
+
+        install_args = ["adb", "-s", target, "install"]
+        if installed:
+            install_args.append("-r")
+        install_args.append(str(apk))
+
+        result = run_quiet(install_args, timeout=90)
         if "Success" not in result:
-            self._set_provision_status(["APK install failed:", result or "No output returned."])
+            detail = result or "No output returned."
+            if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in detail:
+                self._set_provision_status([
+                    "APK install blocked: signing key does not match the installed app.",
+                    f"Installed version: {installed_version}",
+                    f"Selected APK: {apk.name}",
+                    "Do not uninstall a Device Owner app to work around this.",
+                ])
+            else:
+                self._set_provision_status(["APK install failed:", detail])
             return
 
         self._set_provision_status([
