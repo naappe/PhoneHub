@@ -30,7 +30,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v2.9.2-auto-connect-status"
+APP_VERSION = "v2.9.3-smart-tailscale-button"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -502,6 +502,33 @@ class PhoneHubTailscale(PhoneHub):
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
+
+    def setup_open_tailscale(self):
+        """Override the original Setup button.
+
+        If Tailscale is installed, open it. If it is missing, offer to install
+        it immediately instead of sending a silent monkey command that appears
+        to do nothing.
+        """
+        serial, error = self._usb_serial()
+        if error:
+            QMessageBox.warning(self, "PhoneHub", error)
+            return
+
+        if self._tailscale_installed(serial):
+            self.open_tailscale_clicked()
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Tailscale not installed",
+            "PhoneHub cannot open Tailscale because it is not installed on this phone.\n\nInstall the official Tailscale APK now?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if answer == QMessageBox.Yes:
+            self.install_tailscale_clicked()
+        else:
+            self._set_tailscale_status("Tailscale is not installed on the phone.")
 
     def open_tailscale_clicked(self):
         serial, error = self._usb_serial()
