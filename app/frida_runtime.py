@@ -134,9 +134,12 @@ class FridaRuntimeSession:
         script = session.create_script(DIAGNOSTIC_SCRIPT)
 
         def on_message(message, data):
-            if message.get("type") == "send":
+            msg_type = message.get("type")
+            if msg_type == "send":
                 self.on_line(str(message.get("payload")))
-            elif message.get("type") == "error":
+            elif msg_type == "log":
+                self.on_line(str(message.get("payload") or message.get("message") or ""))
+            elif msg_type == "error":
                 desc = message.get("description") or "Frida script error"
                 stack = message.get("stack")
                 self.on_line("[frida-error] " + desc)
