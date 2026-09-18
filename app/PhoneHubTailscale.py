@@ -3,6 +3,10 @@ import re
 import urllib.request
 import shutil
 import subprocess
+import ctypes
+import math
+import wave
+import struct
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
@@ -33,7 +37,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.7-low-echo-audio"
+APP_VERSION = "v3.8-audio-meter-volume"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -73,6 +77,7 @@ class PhoneHubTailscale(PhoneHub):
         self.audio_recording = False
         self.audio_record_path = ""
         self.audio_source = "mic-voice-communication"
+        self.audio_level_text = "Level: No recording analyzed yet"
 
         # Detection now runs in a background thread. The old implementation ran
         # several adb commands on the UI thread every 3 seconds, which caused
@@ -370,6 +375,32 @@ class PhoneHubTailscale(PhoneHub):
         self.audio_record_file.setTextInteractionFlags(Qt.TextSelectableByMouse)
         box_layout.addWidget(self.audio_record_file)
 
+        self.audio_level_label = QLabel("Level: No recording analyzed yet")
+        self.audio_level_label.setObjectName("big")
+        self.audio_level_label.setWordWrap(True)
+        box_layout.addWidget(self.audio_level_label)
+
+        level_actions = QHBoxLayout()
+        level_actions.setSpacing(8)
+
+        analyze_btn = QPushButton("Analyze Last Recording")
+        analyze_btn.clicked.connect(self.analyze_last_audio_recording)
+
+        vol_down = QPushButton("Volume -")
+        vol_down.clicked.connect(lambda: self.adjust_windows_volume(-3))
+
+        vol_up = QPushButton("Volume +")
+        vol_up.clicked.connect(lambda: self.adjust_windows_volume(3))
+
+        mixer = QPushButton("Volume Mixer")
+        mixer.clicked.connect(self.open_windows_volume_mixer)
+
+        level_actions.addWidget(analyze_btn)
+        level_actions.addWidget(vol_down)
+        level_actions.addWidget(vol_up)
+        level_actions.addWidget(mixer)
+        box_layout.addLayout(level_actions)
+
         open_folder = QPushButton("Open Recordings Folder")
         open_folder.clicked.connect(self.open_audio_recordings_folder)
         box_layout.addWidget(open_folder)
@@ -384,7 +415,8 @@ class PhoneHubTailscale(PhoneHub):
             "PhoneHub restarts the same selected microphone stream with scrcpy recording enabled and saves "
             "an Opus audio file under C:\\PhoneHub\\runtime\\audio. "
             "Press Record again to stop recording while continuing live listening. "
-            "For the strongest echo reduction, use headphones on the PC or keep PC speaker volume low so the phone microphone does not hear the delayed PC playback.",
+            "For the strongest echo reduction, use headphones on the PC or keep PC speaker volume low so the phone microphone does not hear the delayed PC playback. "
+            "The level/peak check analyzes the saved WAV recording after recording stops; it does not fake a live meter.",
         )
         layout.addWidget(info)
         layout.addStretch()
@@ -452,7 +484,10 @@ class PhoneHubTailscale(PhoneHub):
             "--audio-buffer=40",
         ]
         if record_path:
-            args.append(f"--record={record_path}")
+            args.extend([
+                "--audio-codec=raw",
+                f"--record={record_path}",
+            ])
 
         try:
             self.audio_process = subprocess.Popen(
@@ -539,7 +574,8 @@ class PhoneHubTailscale(PhoneHub):
                 self.audio_record_button.setText("Record")
             if hasattr(self, "audio_status"):
                 self.audio_status.setText("Status: Restarting live listening...")
-            self.set_footer("Recording saved. Continuing live listening...")
+            self.set_footer("Recording saved. Analyzing level, then continuing live listening...")
+            self.analyze_last_audio_recording()
             self._launch_live_audio("")
             return
 
@@ -548,7 +584,7 @@ class PhoneHubTailscale(PhoneHub):
 
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        record_path = recordings / f"phone_mic_{stamp}.opus"
+        record_path = recordings / f"phone_mic_{stamp}.wav"
 
         self._stop_audio_process_only()
         self.audio_recording = True
@@ -563,6 +599,96 @@ class PhoneHubTailscale(PhoneHub):
             self.audio_recording = False
             if hasattr(self, "audio_record_button"):
                 self.audio_record_button.setText("Record")
+
+    def adjust_windows_volume(self, steps):
+        if not sys.platform.startswith("win"):
+            self.set_footer("Volume buttons are available on Windows.")
+            return
+
+        vk = 0xAF if steps > 0 else 0xAE  # VK_VOLUME_UP / VK_VOLUME_DOWN
+        count = max(1, abs(int(steps)))
+        try:
+            for _ in range(count):
+                ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
+            self.set_footer(
+                "Windows output volume increased."
+                if steps > 0 else
+                "Windows output volume decreased."
+            )
+        except Exception as exc:
+            self.set_footer(f"Could not change Windows volume: {exc}")
+
+    def open_windows_volume_mixer(self):
+        try:
+            subprocess.Popen(["sndvol.exe"])
+            self.set_footer("Opened Windows Volume Mixer.")
+        except Exception as exc:
+            self.set_footer(f"Could not open Volume Mixer: {exc}")
+
+    def analyze_last_audio_recording(self):
+        path_text = getattr(self, "audio_record_path", "")
+        if not path_text:
+            if hasattr(self, "audio_level_label"):
+                self.audio_level_label.setText("Level: No recording available")
+            self.set_footer("No PhoneHub audio recording is available to analyze.")
+            return
+
+        path = Path(path_text)
+        if not path.exists():
+            if hasattr(self, "audio_level_label"):
+                self.audio_level_label.setText("Level: Recording file not found")
+            self.set_footer("The last recording file could not be found.")
+            return
+
+        try:
+            with wave.open(str(path), "rb") as wav:
+                channels = wav.getnchannels()
+                sampwidth = wav.getsampwidth()
+                frames = wav.getnframes()
+                rate = wav.getframerate()
+
+                if sampwidth != 2 or frames <= 0:
+                    raise ValueError("Expected 16-bit PCM WAV audio.")
+
+                raw = wav.readframes(frames)
+
+            sample_count = len(raw) // 2
+            if sample_count <= 0:
+                raise ValueError("Recording contains no PCM samples.")
+
+            samples = struct.unpack("<" + ("h" * sample_count), raw)
+            peak = max(abs(v) for v in samples)
+            rms = math.sqrt(sum(v * v for v in samples) / sample_count)
+
+            full_scale = 32767.0
+            peak_db = 20.0 * math.log10(max(peak, 1) / full_scale)
+            rms_db = 20.0 * math.log10(max(rms, 1.0) / full_scale)
+            duration = frames / float(rate) if rate else 0.0
+
+            if peak_db >= -0.5:
+                state = "PEAKING / clipping risk"
+            elif peak_db >= -3.0:
+                state = "Very loud / close to peak"
+            elif peak_db >= -12.0:
+                state = "Good voice level"
+            elif peak_db >= -20.0:
+                state = "A little low"
+            else:
+                state = "Too low"
+
+            text = (
+                f"Level: {state} | Peak {peak_db:.1f} dBFS | "
+                f"Average {rms_db:.1f} dBFS | {duration:.1f}s"
+            )
+
+            if hasattr(self, "audio_level_label"):
+                self.audio_level_label.setText(text)
+            self.set_footer(text)
+        except Exception as exc:
+            if hasattr(self, "audio_level_label"):
+                self.audio_level_label.setText(f"Level: Could not analyze — {exc}")
+            self.set_footer("Audio level analysis failed.")
 
     def open_audio_recordings_folder(self):
         folder = Path(r"C:\PhoneHub\runtime\audio")
@@ -585,6 +711,8 @@ class PhoneHubTailscale(PhoneHub):
             if was_recording else
             "Phone microphone audio stopped."
         )
+        if was_recording:
+            self.analyze_last_audio_recording()
 
     def closeEvent(self, event):
         self.stop_live_audio()
