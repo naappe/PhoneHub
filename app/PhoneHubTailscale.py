@@ -38,7 +38,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.15-call-lifecycle-fix"
+APP_VERSION = "v3.16-call-dialer-flow"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -390,6 +390,10 @@ class PhoneHubTailscale(PhoneHub):
         call_actions = QHBoxLayout()
         call_actions.setSpacing(8)
 
+        open_dialer = QPushButton("Open Dialer")
+        open_dialer.setObjectName("primary")
+        open_dialer.clicked.connect(self.open_phone_dialer)
+
         call_both = QPushButton("Call Both")
         call_both.clicked.connect(lambda: self.set_audio_source("voice-call", "Call Both"))
 
@@ -399,14 +403,15 @@ class PhoneHubTailscale(PhoneHub):
         call_me = QPushButton("My Side")
         call_me.clicked.connect(lambda: self.set_audio_source("voice-call-uplink", "Call My Side"))
 
+        call_actions.addWidget(open_dialer)
         call_actions.addWidget(call_both)
         call_actions.addWidget(call_other)
         call_actions.addWidget(call_me)
         box_layout.addLayout(call_actions)
 
         self.call_test_note = QLabel(
-            "Call test: use only on your own phone/calls. PhoneHub now watches the Android call state and stops "
-            "Call Both / Other Side / My Side automatically after the call ends. Android or the dialer may still block call-audio capture."
+            "Call test: first press Open Dialer, place or answer the call on the phone, then choose Call Both / Other Side / My Side and press Start Listening. "
+            "These buttons select the audio source; they do not place the call themselves. PhoneHub stops call audio automatically when the call ends."
         )
         self.call_test_note.setObjectName("big")
         self.call_test_note.setWordWrap(True)
@@ -494,6 +499,27 @@ class PhoneHubTailscale(PhoneHub):
             self._launch_live_audio(record_path)
         else:
             self.set_footer("Anti Echo mode selected.")
+
+    def open_phone_dialer(self):
+        target = self._audio_target()
+        if not target:
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Error — phone is not connected")
+            self.set_footer("Connect the phone first, then open the dialer.")
+            return
+
+        result = run_quiet(
+            ["adb", "-s", target, "shell", "am", "start", "-a", "android.intent.action.DIAL"],
+            timeout=6,
+        )
+        if "error" in result.lower() or "exception" in result.lower():
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Dialer could not open")
+            self.set_footer("Android did not allow PhoneHub to open the dialer.")
+        else:
+            if hasattr(self, "audio_status"):
+                self.audio_status.setText("Status: Dialer opened — start/answer the call on the phone")
+            self.set_footer("Dialer opened. Place or answer the call, then select a call audio source.")
 
     def _android_call_state(self):
         source = getattr(self, "audio_source", "")
