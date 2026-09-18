@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 
-APP_VERSION = "v3.2-control-status-card"
+APP_VERSION = "v3.3-service-lab"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -268,6 +268,7 @@ class Bridge(QObject):
     message = Signal(str)
     status = Signal(dict)
     screen_result = Signal(str)
+    service_result = Signal(str)
 
 
 class PhoneHub(QWidget):
@@ -285,6 +286,7 @@ class PhoneHub(QWidget):
         self.bridge.message.connect(self.set_footer)
         self.bridge.status.connect(self.apply_status)
         self.bridge.screen_result.connect(self.set_screen_result)
+        self.bridge.service_result.connect(self.set_service_result)
 
         self.nav_buttons = []
         self.build_ui()
@@ -320,6 +322,7 @@ class PhoneHub(QWidget):
             ("Files", self.page_files),
             ("Apps", self.page_apps),
             ("Control", self.page_control),
+            ("Service Lab", self.page_service_lab),
             ("Settings", self.page_settings),
         ]
 
@@ -800,6 +803,272 @@ class PhoneHub(QWidget):
         self.reboot_phone()
         QTimer.singleShot(300, lambda: self.update_control_status("Reboot Phone"))
 
+
+    def page_service_lab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        info, _, _ = self.card(
+            "Service Lab",
+            "Owner-authorized Android diagnostics and recovery controls. "
+            "PhoneHub can identify the device, inspect verified-boot / bootloader state, "
+            "open reset settings, and reboot into standard Android service modes. "
+            "It does not bypass FRP, Google account verification, screen locks, or vendor authentication."
+        )
+        layout.addWidget(info)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(10)
+
+        scan = QPushButton("Scan Device")
+        scan.setObjectName("primary")
+        scan.setMinimumHeight(42)
+        scan.clicked.connect(self.service_scan_async)
+
+        boot = QPushButton("Boot / Security State")
+        boot.setMinimumHeight(42)
+        boot.clicked.connect(self.service_boot_state_async)
+
+        reset_settings = QPushButton("Open Reset Settings")
+        reset_settings.setMinimumHeight(42)
+        reset_settings.clicked.connect(self.service_open_reset_settings)
+
+        row1.addWidget(scan)
+        row1.addWidget(boot)
+        row1.addWidget(reset_settings)
+        layout.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(10)
+
+        recovery = QPushButton("Reboot Recovery")
+        recovery.setMinimumHeight(42)
+        recovery.clicked.connect(self.service_reboot_recovery)
+
+        bootloader = QPushButton("Reboot Bootloader")
+        bootloader.setMinimumHeight(42)
+        bootloader.clicked.connect(self.service_reboot_bootloader)
+
+        system = QPushButton("Reboot System")
+        system.setMinimumHeight(42)
+        system.clicked.connect(self.service_reboot_system)
+
+        row2.addWidget(recovery)
+        row2.addWidget(bootloader)
+        row2.addWidget(system)
+        layout.addLayout(row2)
+
+        result_box, result_layout, _ = self.card(
+            "Service Report",
+            "Run Scan Device first. PhoneHub will show only data exposed by standard ADB / Fastboot interfaces."
+        )
+
+        self.service_result_box = QTextEdit()
+        self.service_result_box.setReadOnly(True)
+        self.service_result_box.setMinimumHeight(230)
+        self.service_result_box.setText("No service scan yet.")
+        result_layout.addWidget(self.service_result_box)
+
+        layout.addWidget(result_box)
+        layout.addStretch()
+        return page
+
+    def set_service_result(self, text):
+        if hasattr(self, "service_result_box"):
+            self.service_result_box.setText(text)
+
+    def _service_adb_target(self):
+        usb, remote, unauthorized, _ = parse_adb_devices()
+        if unauthorized:
+            return "", "ADB authorization is waiting on the phone. Approve the USB debugging prompt first."
+        if usb:
+            return usb[0], ""
+        saved = adb_target()
+        if saved and saved in remote:
+            return saved, ""
+        return "", "No authorized ADB device is connected."
+
+    def _service_prop(self, target, prop):
+        return run_quiet(["adb", "-s", target, "shell", "getprop", prop], timeout=5) or "-"
+
+    def _fastboot_devices(self):
+        if not shutil.which("fastboot"):
+            return []
+        out = run_quiet(["fastboot", "devices"], timeout=5)
+        devices = []
+        for line in out.splitlines():
+            parts = line.split()
+            if parts:
+                devices.append(parts[0])
+        return devices
+
+    def service_scan_async(self):
+        self.set_footer("Scanning Android service information...")
+        threading.Thread(target=self.service_scan_worker, daemon=True).start()
+
+    def service_scan_worker(self):
+        target, error = self._service_adb_target()
+        fastboot = self._fastboot_devices()
+
+        if not target:
+            fb_text = ", ".join(fastboot) if fastboot else "none"
+            self.bridge.service_result.emit(
+                "ADB device: not available\n"
+                f"Fastboot device(s): {fb_text}\n\n"
+                f"{error}"
+            )
+            self.bridge.message.emit("Service scan finished.")
+            return
+
+        fields = [
+            ("Manufacturer", "ro.product.manufacturer"),
+            ("Brand", "ro.product.brand"),
+            ("Model", "ro.product.model"),
+            ("Product", "ro.product.name"),
+            ("Device", "ro.product.device"),
+            ("Hardware", "ro.hardware"),
+            ("Android", "ro.build.version.release"),
+            ("SDK", "ro.build.version.sdk"),
+            ("Security patch", "ro.build.version.security_patch"),
+            ("Build fingerprint", "ro.build.fingerprint"),
+            ("Bootloader", "ro.bootloader"),
+            ("Verified boot", "ro.boot.verifiedbootstate"),
+            ("Flash locked", "ro.boot.flash.locked"),
+            ("VBMeta state", "ro.boot.vbmeta.device_state"),
+            ("Boot device state", "ro.boot.veritymode"),
+            ("Crypto state", "ro.crypto.state"),
+            ("Crypto type", "ro.crypto.type"),
+        ]
+
+        lines = [
+            "PHONEHUB SERVICE REPORT",
+            "",
+            f"ADB target: {target}",
+            f"Fastboot detected: {'yes - ' + ', '.join(fastboot) if fastboot else 'no'}",
+            "",
+        ]
+
+        for label, prop in fields:
+            lines.append(f"{label}: {self._service_prop(target, prop)}")
+
+        serial = run_quiet(["adb", "-s", target, "get-serialno"], timeout=5) or "-"
+        lines.append(f"ADB serial: {serial}")
+        lines.extend([
+            "",
+            "FRP / account verification:",
+            "Standard ADB does not provide a reliable FRP bypass/status interface.",
+            "PhoneHub intentionally does not bypass Google account verification, screen locks, or vendor authorization."
+        ])
+
+        self.bridge.service_result.emit("\n".join(lines))
+        self.bridge.message.emit("Service scan complete.")
+
+    def service_boot_state_async(self):
+        self.set_footer("Checking boot and security state...")
+        threading.Thread(target=self.service_boot_state_worker, daemon=True).start()
+
+    def service_boot_state_worker(self):
+        target, error = self._service_adb_target()
+        fastboot = self._fastboot_devices()
+
+        lines = ["BOOT / SECURITY STATE", ""]
+
+        if target:
+            verified = self._service_prop(target, "ro.boot.verifiedbootstate")
+            flash_locked = self._service_prop(target, "ro.boot.flash.locked")
+            vbmeta = self._service_prop(target, "ro.boot.vbmeta.device_state")
+            bootloader = self._service_prop(target, "ro.bootloader")
+
+            lines.extend([
+                f"ADB target: {target}",
+                f"Verified boot state: {verified}",
+                f"Flash locked flag: {flash_locked}",
+                f"VBMeta device state: {vbmeta}",
+                f"Bootloader version: {bootloader}",
+            ])
+        else:
+            lines.append(f"ADB: unavailable - {error}")
+
+        if fastboot:
+            lines.append("")
+            lines.append("Fastboot device(s): " + ", ".join(fastboot))
+            for serial in fastboot:
+                unlocked = run_quiet(["fastboot", "-s", serial, "getvar", "unlocked"], timeout=6)
+                secure = run_quiet(["fastboot", "-s", serial, "getvar", "secure"], timeout=6)
+                if unlocked:
+                    lines.append(f"{serial} unlocked query: {unlocked}")
+                if secure:
+                    lines.append(f"{serial} secure query: {secure}")
+        else:
+            lines.extend(["", "Fastboot device: none detected"])
+
+        lines.extend([
+            "",
+            "This page reads state only. It does not issue bootloader-unlock, FRP-bypass, or authentication-bypass commands."
+        ])
+
+        self.bridge.service_result.emit("\n".join(lines))
+        self.bridge.message.emit("Boot/security-state check complete.")
+
+    def service_open_reset_settings(self):
+        target, error = self._service_adb_target()
+        if not target:
+            QMessageBox.warning(self, "PhoneHub Service Lab", error)
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Open Reset Settings",
+            "Open Android reset/privacy settings on the connected phone?\n\n"
+            "PhoneHub will not confirm or execute a factory reset automatically."
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        out = run_quiet([
+            "adb", "-s", target, "shell", "am", "start",
+            "-a", "android.settings.PRIVACY_SETTINGS"
+        ], timeout=8)
+
+        if not out:
+            run_background([
+                "adb", "-s", target, "shell", "am", "start",
+                "-a", "android.settings.SETTINGS"
+            ])
+
+        self.set_footer("Reset/settings page requested on phone.")
+
+    def _service_reboot(self, mode, label):
+        target, error = self._service_adb_target()
+        if not target:
+            QMessageBox.warning(self, "PhoneHub Service Lab", error)
+            return
+
+        answer = QMessageBox.question(
+            self,
+            label,
+            f"Reboot the connected phone into {label.lower()}?"
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        cmd = ["adb", "-s", target, "reboot"]
+        if mode:
+            cmd.append(mode)
+        run_background(cmd)
+        self.set_footer(f"{label} command sent.")
+
+    def service_reboot_recovery(self):
+        self._service_reboot("recovery", "Recovery")
+
+    def service_reboot_bootloader(self):
+        self._service_reboot("bootloader", "Bootloader")
+
+    def service_reboot_system(self):
+        self._service_reboot("", "System")
+
     def page_settings(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -841,7 +1110,7 @@ class PhoneHub(QWidget):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
-        names = ["Dashboard", "Setup New Phone", "Screen", "Camera", "Files", "Apps", "Control", "Settings"]
+        names = ["Dashboard", "Setup New Phone", "Screen", "Camera", "Files", "Apps", "Control", "Service Lab", "Settings"]
         if index < len(names):
             self.set_footer(f"Opened {names[index]} page.")
 
