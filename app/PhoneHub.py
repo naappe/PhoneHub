@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from phone_config import normalize_tailscale_ipv4, is_valid_tailscale_ipv4
 
-APP_VERSION = "v2.8-clean-camera-mode"
+APP_VERSION = "v2.9-lock-state-test"
 
 DEFAULT_ADB_PORT = 5555
 PC_IP = "100.125.11.48"
@@ -600,6 +600,15 @@ class PhoneHub(QWidget):
         row2.addWidget(close)
         layout.addLayout(row2)
 
+        row3 = QHBoxLayout()
+
+        lock_test = QPushButton("Lock State Test")
+        lock_test.setObjectName("primary")
+        lock_test.clicked.connect(self.lock_state_test)
+
+        row3.addWidget(lock_test)
+        layout.addLayout(row3)
+
         layout.addStretch()
         return page
 
@@ -984,6 +993,74 @@ class PhoneHub(QWidget):
                 proc.kill()
             except Exception:
                 pass
+
+    def _android_lock_state(self):
+        target = adb_target()
+        if not target:
+            return "unknown", "Phone IP is not configured."
+
+        window = run_quiet(
+            ["adb", "-s", target, "shell", "dumpsys", "window", "policy"],
+            timeout=4,
+        ).lower()
+        power = run_quiet(
+            ["adb", "-s", target, "shell", "dumpsys", "power"],
+            timeout=4,
+        ).lower()
+
+        locked_markers = (
+            "mshowinglockscreen=true",
+            "iskeyguardshowing=true",
+            "keyguard showing=true",
+            "mkeyguardshowing=true",
+        )
+
+        unlocked_markers = (
+            "mshowinglockscreen=false",
+            "iskeyguardshowing=false",
+            "mkeyguardshowing=false",
+        )
+
+        if any(m in window for m in locked_markers):
+            return "locked", "Android reports the secure keyguard is showing."
+
+        if any(m in window for m in unlocked_markers):
+            return "unlocked", "Android reports the keyguard is not showing."
+
+        interactive = "minteractive=true" in power or "display power: state=on" in power
+        if interactive:
+            return "likely_unlocked", "Android is interactive and no lock marker was found."
+
+        return "unknown", "Android lock state could not be determined reliably."
+
+    def lock_state_test(self):
+        self.set_footer("Checking Android lock state...")
+
+        def worker():
+            state, detail = self._android_lock_state()
+
+            if state == "locked":
+                message = (
+                    "TEST RESULT: LOCKED\n\n"
+                    + detail
+                    + "\n\nPhoneHub should not treat the phone as fully unlocked."
+                )
+            elif state in ("unlocked", "likely_unlocked"):
+                message = (
+                    "TEST RESULT: UNLOCKED\n\n"
+                    + detail
+                    + "\n\nThis explains why the normal home screen can appear in scrcpy."
+                )
+            else:
+                message = (
+                    "TEST RESULT: UNKNOWN\n\n"
+                    + detail
+                    + "\n\nLock-state reporting varies by Android vendor, so we should not assume it is unlocked."
+                )
+
+            self.bridge.message.emit(message)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def open_screen(self, profile, keep_alive=False):
         # Screen and camera are independent processes. Opening the screen never
