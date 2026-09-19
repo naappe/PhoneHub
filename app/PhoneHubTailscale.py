@@ -52,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.35-core-clean"
+APP_VERSION = "v3.36-screen-recovery"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -127,6 +127,17 @@ class PhoneHubTailscale(PhoneHub):
         self.screen_profile_args = ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"]
         self._force_exit = False
         self.tray_icon = None
+
+        # Keep a remote screen session alive across short ADB/Tailscale drops
+        # that can happen while Android changes lock/unlock state.
+        self._screen_session_requested = False
+        self._screen_recovery_busy = False
+        self._screen_recovery_attempts = 0
+        self._screen_last_args = []
+        self.screen_watchdog_timer = QTimer(self)
+        self.screen_watchdog_timer.setInterval(1500)
+        self.screen_watchdog_timer.timeout.connect(self._screen_watchdog)
+        self.screen_watchdog_timer.start()
 
         self.app_status_timer = QTimer(self)
         self.app_status_timer.setSingleShot(True)
@@ -376,6 +387,94 @@ class PhoneHubTailscale(PhoneHub):
         lay.addWidget(lbl)
 
         return box, lay, lbl
+
+    def open_screen(self, profile, keep_alive=False):
+        # Remember the active screen request so a brief ADB transport reset
+        # during Android lock/unlock does not permanently close scrcpy.
+        self._screen_session_requested = True
+        self._screen_last_args = list(profile)
+        self._screen_recovery_attempts = 0
+        return super().open_screen(profile, keep_alive=keep_alive)
+
+    def disconnect_screen(self):
+        # Explicit PhoneHub disconnect means do not auto-reopen the screen.
+        self._screen_session_requested = False
+        self._screen_recovery_attempts = 0
+        return super().disconnect_screen()
+
+    def _screen_watchdog(self):
+        if not getattr(self, "_screen_session_requested", False):
+            return
+        if getattr(self, "_screen_recovery_busy", False):
+            return
+
+        proc = getattr(self, "screen_process", None)
+        if proc is None or proc.poll() is None:
+            return
+
+        exit_code = proc.poll()
+
+        # A normal scrcpy close (X button / clean exit) is treated as intentional.
+        if exit_code == 0:
+            self._screen_session_requested = False
+            self.screen_process = None
+            self.set_footer("Screen closed.")
+            return
+
+        if self._screen_recovery_attempts >= 3:
+            self._screen_session_requested = False
+            self.screen_process = None
+            self.set_footer("Screen connection dropped. Press Open Screen to retry.")
+            return
+
+        self._screen_recovery_busy = True
+        self._screen_recovery_attempts += 1
+        self.screen_process = None
+        self.set_footer(
+            f"Screen connection interrupted. Reconnecting ({self._screen_recovery_attempts}/3)..."
+        )
+
+        def worker():
+            ok = connect_remote_adb()
+            QTimer.singleShot(0, lambda: self._finish_screen_recovery(ok))
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_screen_recovery(self, connected):
+        self._screen_recovery_busy = False
+
+        if not self._screen_session_requested:
+            return
+
+        if not connected:
+            return
+
+        args = list(getattr(self, "_screen_last_args", []))
+        if not args:
+            args = [
+                "--max-size=1024",
+                "--video-bit-rate=4M",
+                "--max-fps=30",
+                "--video-codec=h264",
+                "--video-buffer=0",
+            ]
+
+        # Give Android a moment to finish the lock/unlock transition before
+        # reattaching scrcpy to the recovered ADB transport.
+        QTimer.singleShot(700, lambda a=args: self._restart_screen_after_reconnect(a))
+
+    def _restart_screen_after_reconnect(self, args):
+        if not self._screen_session_requested:
+            return
+        if self._proc_alive(getattr(self, "screen_process", None)):
+            return
+
+        super().open_screen(args, keep_alive=True)
+
+        if self._proc_alive(getattr(self, "screen_process", None)):
+            self._screen_recovery_attempts = 0
+            self.set_footer("Screen reconnected automatically.")
 
     def page_screen(self):
         page = QWidget()
