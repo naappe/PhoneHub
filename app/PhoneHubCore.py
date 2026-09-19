@@ -13,11 +13,12 @@ from PySide6.QtWidgets import (
 from core_runtime import (
     ROOT, LOG_DIR, SCREENSHOT_DIR, SECURITY_DIR, run, spawn, target,
     save_target, ensure_remote, enable_tcp_on_usb, scrcpy_path,
-    device_snapshot, screenshot, shell_probe
+    device_snapshot, screenshot, shell_probe, connection_mode,
+    configured_target, local_hotspot_target
 )
 from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v4.1-glass-dashboard"
+APP_VERSION = "v4.2-direct-hotspot-path"
 
 
 class Bridge(QObject):
@@ -308,7 +309,17 @@ class PhoneHubCore(QWidget):
         b=QPushButton("Enable Remote ADB via USB"); b.clicked.connect(self.enable_remote)
         row.addWidget(a); row.addWidget(b); cl.addLayout(row); l.addWidget(c)
         c2,c2l=self.card("Setup status")
-        self.setup_box=QTextEdit(); self.setup_box.setReadOnly(True); self.setup_box.setText("USB is only needed once to enable adb tcpip 5555."); c2l.addWidget(self.setup_box)
+        self.setup_box=QTextEdit()
+        self.setup_box.setReadOnly(True)
+        direct = local_hotspot_target() or "not detected"
+        saved_target = configured_target() or "not configured"
+        self.setup_box.setText(
+            "PhoneHub now tries the direct hotspot gateway first, then Tailscale.\n\n"
+            f"Direct hotspot candidate: {direct}\n"
+            f"Tailscale fallback: {saved_target}\n\n"
+            "USB is only needed once to enable adb tcpip 5555."
+        )
+        c2l.addWidget(self.setup_box)
         l.addWidget(c2); return w
 
     def set_footer(self,text):
@@ -327,15 +338,28 @@ class PhoneHubCore(QWidget):
         self.rail_status.setText("● Phone online" if online else "● Phone offline")
         self.rail_status.setObjectName("statusOnline" if online else "statusOffline")
         self.rail_status.style().unpolish(self.rail_status); self.rail_status.style().polish(self.rail_status)
+        mode=data.get("mode","offline")
+        mode_label={
+            "local-hotspot":"Direct hotspot path",
+            "tailscale":"Tailscale path",
+            "network":"Network path",
+            "offline":"Offline",
+        }.get(mode, mode)
         text=(
             f"Status: {'Online' if online else 'Offline'}\n"
+            f"Path: {mode_label}\n"
             f"Target: {data.get('target') or '-'}\n"
             f"Device: {data.get('model','-')}\n"
             f"Android: {data.get('android','-')}\n"
             f"Battery: {data.get('battery','-')}%"
         )
         self.overview_state.setText(text)
-        self.set_footer("Ready" if online else "Phone offline — open Setup if needed.")
+        if online and mode == "local-hotspot":
+            self.set_footer("Direct hotspot path active — Tailscale relay bypassed.")
+        elif online and mode == "tailscale":
+            self.set_footer("Connected through Tailscale.")
+        else:
+            self.set_footer("Ready" if online else "Phone offline — open Setup if needed.")
 
     def save_connect(self):
         try:
