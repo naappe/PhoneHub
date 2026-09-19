@@ -1,27 +1,21 @@
-# PhoneHub
+# PhoneHub 5
 
-PhoneHub is being rebuilt from a clean architecture.
+Clean Windows control center for the owner's Android phone.
 
-The previous codebase is preserved on branch:
+## Finished MVP
+- Tailscale + ADB device connection
+- explicit connection state
+- model / Android / battery status
+- one exclusive scrcpy media-session owner
+- screen control
+- front/back camera
+- screenshots to Pictures/PhoneHub
+- read-only diagnostics
+- screen quality/FPS settings
+- clean shutdown and unit tests
 
-`legacy-before-fresh-rebuild-2026-09-19`
+Run `RUN_PHONEHUB.bat`.
 
-## New direction
+Requirements: Python 3.12+, PySide6, adb and scrcpy available in Windows PATH.
 
-- Python 3.12+
-- PySide6 desktop UI
-- typed domain models
-- isolated device/ADB services
-- explicit connection state machine
-- no hidden background services
-- no legacy compatibility code
-- one application process, one media session owner
-- tests run only against the current architecture
-
-## Run
-
-```bat
-RUN_PHONEHUB.bat
-```
-
-This first clean baseline intentionally focuses on architecture and UI. Device transport will be reintroduced service-by-service after each layer has tests.
+The pre-rebuild project is preserved on branch `legacy-before-fresh-rebuild-2026-09-19`.
