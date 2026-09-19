@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
         return c,l
     def overview(self):
         w=QWidget(); l=QVBoxLayout(w); l.setSpacing(16); self.title(l,"Overview","Phone, transport and media status in one place.")
-        c,cl=self.card("Device status"); self.metric=QLabel("Not connected"); self.metric.setObjectName("Metric"); cl.addWidget(self.metric); self.detail=QLabel("Configure Device to begin."); self.detail.setObjectName("Muted"); cl.addWidget(self.detail); l.addWidget(c)
+        c,cl=self.card("Device status"); self.device_metric=QLabel("Not connected"); self.device_metric.setObjectName("Metric"); cl.addWidget(self.device_metric); self.detail=QLabel("Configure Device to begin."); self.detail.setObjectName("Muted"); cl.addWidget(self.detail); l.addWidget(c)
         row=QHBoxLayout()
         for a,b in [("Transport","Tailscale + ADB"),("Media","One session owner"),("Safety","Explicit controls only")]: row.addWidget(self.card(a,b)[0])
         l.addLayout(row); l.addStretch(); return w
@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
     def diagnostics(self):
         snap=self.adb.snapshot(self.cfg); scr="Found" if self.media.scrcpy else "Missing"; self.secmsg.setText(f"ADB target: {self.cfg.serial or '-'}\nState: {snap.state.value}\nTransport: {snap.transport}\nscrcpy: {scr}")
     def render(self,s:DeviceSnapshot):
-        self.metric.setText(s.device_name); battery=f" • {s.battery_percent}%" if s.battery_percent is not None else ""; self.detail.setText(f"{s.detail}{battery} • Android {s.android_version}"); self.badge.setText(f"● {s.state.value.title()}")
+        self.device_metric.setText(s.device_name); battery=f" • {s.battery_percent}%" if s.battery_percent is not None else ""; self.detail.setText(f"{s.detail}{battery} • Android {s.android_version}"); self.badge.setText(f"● {s.state.value.title()}")
         if hasattr(self,"devmsg"): self.devmsg.setText(s.detail)
     def closeEvent(self,event):
         self.media.stop(); super().closeEvent(event)
