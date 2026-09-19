@@ -98,7 +98,6 @@ def configured_target():
 
 
 def default_gateway():
-    """Return the Windows IPv4 default gateway without relying on UI language."""
     out = run(["route", "print", "-4", "0.0.0.0"], timeout=5)
     candidates = []
     for line in out.splitlines():
@@ -118,6 +117,9 @@ def default_gateway():
 
 
 def local_hotspot_target():
+    cfg = read_config()
+    if not cfg.get("use_local_hotspot", False):
+        return ""
     gw = default_gateway()
     return f"{gw}:{DEFAULT_PORT}" if gw else ""
 
@@ -132,43 +134,19 @@ def _probe(serial, timeout=2):
 
 
 def target(force_refresh=False):
-    """Prefer a direct local-hotspot ADB path, then fall back to Tailscale."""
-    global _ACTIVE_TARGET, _ACTIVE_TARGET_AT
-    now = time.time()
-    if not force_refresh and _ACTIVE_TARGET and now - _ACTIVE_TARGET_AT < 8:
-        if _probe(_ACTIVE_TARGET, timeout=2):
-            return _ACTIVE_TARGET
-
+    """Return the configured transport without modifying ADB state."""
     local = local_hotspot_target()
-    saved = configured_target()
-    candidates = []
-    if local:
-        candidates.append(local)
-    if saved and saved not in candidates:
-        candidates.append(saved)
-
-    for serial in candidates:
-        if _probe(serial, timeout=2):
-            _ACTIVE_TARGET = serial
-            _ACTIVE_TARGET_AT = now
-            return serial
-        run(["adb", "connect", serial], timeout=4)
-        if _probe(serial, timeout=2):
-            _ACTIVE_TARGET = serial
-            _ACTIVE_TARGET_AT = now
-            return serial
-
-    _ACTIVE_TARGET = saved or local
-    _ACTIVE_TARGET_AT = now
-    return _ACTIVE_TARGET
+    if local and _probe(local, timeout=1):
+        return local
+    return configured_target()
 
 
 def connection_mode(serial=None):
     serial = serial or target()
     if not serial:
         return "offline"
-    gw = local_hotspot_target()
-    if gw and serial == gw:
+    local = local_hotspot_target()
+    if local and serial == local:
         return "local-hotspot"
     if serial.startswith("100."):
         return "tailscale"
@@ -192,16 +170,20 @@ def shell_probe(serial=None, timeout=3):
 
 
 def ensure_remote(wait_stable=True):
-    serial = target(force_refresh=True)
+    serial = target()
     if not serial:
         return False
+
+    # Never issue 'adb disconnect' here. Disconnecting the transport kills an
+    # active scrcpy/camera session. A plain adb connect is safe and idempotent.
     if not shell_probe(serial):
-        run(["adb", "disconnect", serial], timeout=2)
         run(["adb", "connect", serial], timeout=5)
+
     if not wait_stable:
         return shell_probe(serial)
+
     hits = 0
-    for _ in range(8):
+    for _ in range(10):
         if shell_probe(serial):
             hits += 1
             if hits >= 2:
@@ -209,7 +191,7 @@ def ensure_remote(wait_stable=True):
         else:
             hits = 0
             run(["adb", "connect", serial], timeout=4)
-        time.sleep(0.45)
+        time.sleep(0.5)
     return False
 
 
