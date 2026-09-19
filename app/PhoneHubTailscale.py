@@ -52,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.38-screen-unlock-fix"
+APP_VERSION = "v3.39-fast-screen-open"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -126,7 +126,7 @@ class PhoneHubTailscale(PhoneHub):
         self.notification_receiver_thread = None
         self.notification_receiver_url = ""
         self.screen_profile_name = "Balanced"
-        self.screen_profile_args = ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"]
+        self.screen_profile_args = ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0", "--no-audio"]
         self._force_exit = False
         self.tray_icon = None
 
@@ -460,6 +460,7 @@ class PhoneHubTailscale(PhoneHub):
                 "--max-fps=30",
                 "--video-codec=h264",
                 "--video-buffer=0",
+                "--no-audio",
             ]
 
         # Give Android a moment to finish the lock/unlock transition before
@@ -581,16 +582,20 @@ class PhoneHubTailscale(PhoneHub):
         args = list(getattr(
             self,
             "screen_profile_args",
-            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
+            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0", "--no-audio"],
         ))
+        if "--no-audio" not in args:
+            args.append("--no-audio")
         self.open_screen(args, keep_alive=True)
 
     def open_screen_phone_off(self):
         args = list(getattr(
             self,
             "screen_profile_args",
-            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
+            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0", "--no-audio"],
         ))
+        if "--no-audio" not in args:
+            args.append("--no-audio")
         args.extend(["--turn-screen-off", "--keep-active"])
         self.open_screen(args, keep_alive=True)
 
