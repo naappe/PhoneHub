@@ -1,6 +1,7 @@
-﻿dist/
+dist/
 build/
 archive_old_*/
+archive/
 apps/
 android/
 *.apk
@@ -11,3 +12,11 @@ runtime/
 screenshots/
 create_phonehub_location_companion.ps1
 PhoneHub_Final/
+
+# Experimental transports - PhoneHub uses Tailscale only
+PhoneHub_USB_V1/
+PhoneHub_USB_UI_V*/
+PhoneHub_Link_V*/
+PhoneHub_WireGuard_OneClick/
+vpn/
+*.conf
