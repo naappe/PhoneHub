@@ -52,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.36-screen-recovery"
+APP_VERSION = "v3.37-screen-recovery-fix"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -414,14 +414,11 @@ class PhoneHubTailscale(PhoneHub):
 
         exit_code = proc.poll()
 
-        # A normal scrcpy close (X button / clean exit) is treated as intentional.
-        if exit_code == 0:
-            self._screen_session_requested = False
-            self.screen_process = None
-            self.set_footer("Screen closed.")
-            return
-
-        if self._screen_recovery_attempts >= 3:
+        # Do not use scrcpy's exit code to decide whether the close was intentional.
+        # scrcpy may return 0 even when the ADB transport disappears during an
+        # Android lock/unlock transition. Only PhoneHub's Disconnect button clears
+        # _screen_session_requested.
+        if self._screen_recovery_attempts >= 5:
             self._screen_session_requested = False
             self.screen_process = None
             self.set_footer("Screen connection dropped. Press Open Screen to retry.")
@@ -431,7 +428,7 @@ class PhoneHubTailscale(PhoneHub):
         self._screen_recovery_attempts += 1
         self.screen_process = None
         self.set_footer(
-            f"Screen connection interrupted. Reconnecting ({self._screen_recovery_attempts}/3)..."
+            f"Screen connection interrupted (scrcpy exit {exit_code}). Reconnecting ({self._screen_recovery_attempts}/5)..."
         )
 
         def worker():
