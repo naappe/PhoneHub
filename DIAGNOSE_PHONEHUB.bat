@@ -11,7 +11,7 @@ echo PhoneHub diagnostic started > "%OUT%\summary.txt"
 echo Date: %date% %time%>> "%OUT%\summary.txt"
 echo.>> "%OUT%\summary.txt"
 
-for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$p=Join-Path $env:USERPROFILE '.phone_remote\config.json'; if(Test-Path $p){$j=Get-Content $p -Raw|ConvertFrom-Json; if($j.phone_ip){Write-Output ($j.phone_ip.ToString()+':'+([int]($j.adb_port ?? 5555)).ToString())}}"`) do set "TARGET=%%I"
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$p=Join-Path $env:USERPROFILE '.phone_remote\config.json'; if(Test-Path $p){$j=Get-Content $p -Raw ^| ConvertFrom-Json; if($j.phone_ip){$port=5555; if($j.adb_port){$port=[int]$j.adb_port}; Write-Output ($j.phone_ip.ToString()+':'+$port.ToString())}}"`) do set "TARGET=%%I"
 
 if not defined TARGET (
   echo ERROR: Phone target not found in config.>> "%OUT%\summary.txt"
@@ -22,7 +22,7 @@ echo Target: %TARGET%>> "%OUT%\summary.txt"
 
 adb start-server >nul 2>&1
 adb devices -l > "%OUT%\adb_devices_before.txt" 2>&1
-adb -s %TARGET% shell "echo PHONEHUB_OK" > "%OUT%\adb_probe_before.txt" 2>&1
+adb -s %TARGET% shell echo PHONEHUB_OK > "%OUT%\adb_probe_before.txt" 2>&1
 adb -s %TARGET% shell getprop ro.product.model > "%OUT%\model.txt" 2>&1
 adb -s %TARGET% shell getprop ro.build.version.release > "%OUT%\android_version.txt" 2>&1
 adb -s %TARGET% shell getprop sys.usb.config > "%OUT%\usb_config.txt" 2>&1
@@ -45,7 +45,7 @@ echo.
 pause >nul
 
 adb devices -l > "%OUT%\adb_devices_after.txt" 2>&1
-adb -s %TARGET% shell "echo PHONEHUB_OK" > "%OUT%\adb_probe_after.txt" 2>&1
+adb -s %TARGET% shell echo PHONEHUB_OK > "%OUT%\adb_probe_after.txt" 2>&1
 adb -s %TARGET% shell dumpsys power > "%OUT%\power_after.txt" 2>&1
 adb -s %TARGET% shell dumpsys window policy > "%OUT%\window_policy_after.txt" 2>&1
 adb -s %TARGET% logcat -d -t 500 > "%OUT%\android_logcat_after.txt" 2>&1
