@@ -45,6 +45,15 @@ class AdbService:
         r=self.runner.run([self.adb,"-s",cfg.serial,"shell",command],8)
         return r.stdout.strip() if r.ok else ""
 
+    def display_state(self,cfg: DeviceConfig):
+        if self.devices().get(cfg.serial)!="device": return "offline"
+        power=self.shell(cfg,"dumpsys power")
+        window=self.shell(cfg,"dumpsys window")
+        interactive=("mWakefulness=Awake" in power or "Display Power: state=ON" in power or "mInteractive=true" in power)
+        locked=("mDreamingLockscreen=true" in window or "isStatusBarKeyguard=true" in window or "mShowingLockscreen=true" in window)
+        if not interactive: return "screen_off"
+        return "locked" if locked else "awake"
+
     def key(self,cfg: DeviceConfig,keycode: int):
         return self.runner.run([self.adb,"-s",cfg.serial,"shell","input","keyevent",str(keycode)],6).ok
 
