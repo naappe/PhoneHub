@@ -30,7 +30,7 @@ class MediaSessionManager:
         except Exception as e: return False,str(e)
 
     def screen(self,cfg:DeviceConfig,max_size=1080,fps=30):
-        return self._start(["-s",cfg.serial,"--no-audio",f"--max-size={max_size}",f"--max-fps={fps}","--window-title=PhoneHub Screen"],"screen")
+        return self._start(["-s",cfg.serial,"--no-audio",f"--max-size={max_size}",f"--max-fps={fps}","--stay-awake","--window-title=PhoneHub Screen"],"screen")
 
     def camera(self,cfg:DeviceConfig,facing:str):
         return self._start(["-s",cfg.serial,"--video-source=camera",f"--camera-facing={facing}","--camera-size=1280x720","--camera-fps=30","--no-audio",f"--window-title=PhoneHub {facing.title()} Camera"],"camera")
