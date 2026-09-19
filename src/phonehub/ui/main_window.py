@@ -61,7 +61,7 @@ class MainWindow(QMainWindow):
         self.setupstep=QLabel("PhoneHub is checking everything automatically…"); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
         sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk); sr.addStretch(); sl.addLayout(sr); l.addWidget(sc); l.addStretch(); return w
     def screen_page(self):
-        w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Open one controlled scrcpy screen session.")
+        w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Remote Mode • Tailscale + ADB • automatically restores after reconnect.")
         c,cl=self.card("Remote screen"); row=QHBoxLayout()
         for name,fn,obj in [("Open Screen",self.open_screen,"Primary"),("Wake",lambda:self.adb.key(self.cfg,224),""),("Home",lambda:self.adb.key(self.cfg,3),""),("Back",lambda:self.adb.key(self.cfg,4),""),("Close",self.stop_media,"Danger")]:
             b=QPushButton(name); b.setObjectName(obj); b.clicked.connect(fn); row.addWidget(b)
@@ -179,7 +179,7 @@ class MainWindow(QMainWindow):
             if not self.screen_watch.isActive(): self.screen_watch.start()
             return
         ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText()))
-        self.screenmsg.setText(msg)
+        self.screenmsg.setText("Remote screen active" if ok else msg)
         if not self.screen_watch.isActive(): self.screen_watch.start()
     def _watch_screen(self):
         if not self.screen_wanted or self.screen_watch_busy: return
