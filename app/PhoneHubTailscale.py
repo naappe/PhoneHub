@@ -52,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.41-wireless-adb-guard"
+APP_VERSION = "v3.42-stable-unlock-recovery"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -67,6 +67,7 @@ class AutoDetectBridge(QObject):
     notifications = Signal(list)
     notification_push = Signal(dict)
     screen_recovery = Signal(bool)
+    screen_guard = Signal(bool)
 
 class PhoneHubTailscale(PhoneHub):
     def __init__(self):
@@ -82,6 +83,7 @@ class PhoneHubTailscale(PhoneHub):
 
         self.auto_bridge = AutoDetectBridge()
         self.auto_bridge.screen_recovery.connect(self._finish_screen_recovery)
+        self.auto_bridge.screen_guard.connect(self._screen_adb_guard_done)
         self.auto_bridge.state.connect(self._apply_auto_detect_state)
         self.auto_bridge.wizard.connect(self._apply_wizard_result)
         self.auto_bridge.health.connect(self._apply_health_results)
@@ -519,6 +521,8 @@ class PhoneHubTailscale(PhoneHub):
             return
         if getattr(self, "_screen_adb_guard_busy", False):
             return
+        if getattr(self, "_screen_recovery_busy", False):
+            return
 
         target = self._screen_remote_target()
         if not target:
@@ -545,7 +549,7 @@ class PhoneHubTailscale(PhoneHub):
                 ).strip()
                 ok = probe == "PHONEHUB_OK"
 
-            self.auto_bridge.screen_recovery.emit(ok)
+            self.auto_bridge.screen_guard.emit(ok)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
@@ -559,7 +563,7 @@ class PhoneHubTailscale(PhoneHub):
 
         self._screen_adb_failures += 1
         if self._screen_adb_failures == 1:
-            self.set_footer("Wireless ADB dropped. Reconnecting...")
+            self.set_footer("Wireless ADB changed during lock/unlock. Waiting for it to stabilize...")
 
     def _screen_watchdog(self):
         if not getattr(self, "_screen_session_requested", False):
@@ -605,18 +609,34 @@ class PhoneHubTailscale(PhoneHub):
         def worker():
             ip, port = get_saved_ip()
             target = f"{ip}:{port}" if ip else ""
+            if not target:
+                self.auto_bridge.screen_recovery.emit(False)
+                return
 
-            _, remote, _, _ = parse_adb_devices()
-            connected = bool(target and target in remote)
+            # Android/OxygenOS may restart wireless adbd during secure
+            # lock/unlock. Do not reopen scrcpy on the first transient success.
+            # Require two consecutive working shell round-trips first.
+            stable_hits = 0
+            for attempt in range(8):
+                probe = run_quiet(
+                    ["adb", "-s", target, "shell", "echo", "PHONEHUB_OK"],
+                    timeout=3,
+                ).strip()
 
-            # Only reconnect ADB when it is actually missing. If ADB is already
-            # healthy, leave it untouched and restart only scrcpy.
-            if target and not connected:
-                run_quiet(["adb", "connect", target], timeout=6)
-                _, remote, _, _ = parse_adb_devices()
-                connected = target in remote
+                if probe == "PHONEHUB_OK":
+                    stable_hits += 1
+                    if stable_hits >= 2:
+                        self.auto_bridge.screen_recovery.emit(True)
+                        return
+                else:
+                    stable_hits = 0
+                    run_quiet(["adb", "disconnect", target], timeout=2)
+                    run_quiet(["adb", "connect", target], timeout=4)
 
-            self.auto_bridge.screen_recovery.emit(connected)
+                import time
+                time.sleep(0.55)
+
+            self.auto_bridge.screen_recovery.emit(False)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
@@ -654,7 +674,7 @@ class PhoneHubTailscale(PhoneHub):
 
         # Give the ROM a short moment after ADB comes back, then launch scrcpy.
         QTimer.singleShot(
-            500, lambda a=args: self._restart_screen_after_reconnect(a)
+            900, lambda a=args: self._restart_screen_after_reconnect(a)
         )
 
     def _restart_screen_after_reconnect(self, args):
