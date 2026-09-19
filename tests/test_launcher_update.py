@@ -12,15 +12,19 @@ class PhoneHubLauncherUpdateTests(unittest.TestCase):
 
     def test_skips_update_when_local_changes_exist(self):
         self.assertIn("git status --porcelain", self.launcher)
-        self.assertIn("local changes detected", self.launcher)
+        self.assertIn("if defined local_changes goto launch_phonehub", self.launcher)
 
     def test_updates_from_origin_main(self):
         self.assertIn("git fetch origin main", self.launcher)
         self.assertIn("git pull --ff-only origin main", self.launcher)
 
-    def test_still_launches_phonehub_after_update_problem(self):
-        self.assertIn(":launch_phonehub", self.launcher)
-        self.assertIn('start "" "c:\\phonehub\\dist\\phonehub.exe"', self.launcher)
+    def test_launches_v4_core_app(self):
+        self.assertIn("phonehubcore.py", self.launcher)
+        self.assertIn("python phonehubcore.py", self.launcher)
+
+    def test_writes_startup_logs(self):
+        self.assertIn("launcher_error.log", self.launcher)
+        self.assertIn("phonehub_stdout.log", self.launcher)
 
 
 if __name__ == "__main__":
