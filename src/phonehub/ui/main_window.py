@@ -147,7 +147,7 @@ class MainWindow(QMainWindow):
         ok,msg=result
         if ok:
             self.cfg=self.configs.save(cfg); self.ip.setText(cfg.phone_ip)
-            self.devmsg.setText("Connected automatically"); self.refresh()
+            self.devmsg.setText(f"Connected automatically • {cfg.phone_ip}"); self.refresh()
         else:
             self._try_peer(peers,index+1)
     def connect(self):
@@ -155,7 +155,13 @@ class MainWindow(QMainWindow):
         except Exception as e:self.devmsg.setText(str(e)); return
         self.devmsg.setText("Connecting…"); self.work(lambda:self.adb.connect(self.cfg),self.connected)
     def connected(self,result):
-        ok,msg=result; self.devmsg.setText(msg); self.refresh()
+        ok,msg=result
+        self.devmsg.setText(msg)
+        if ok:
+            self.refresh()
+        else:
+            self.devmsg.setText("Saved phone is unavailable • finding the current online Android phone…")
+            self.auto_discover()
     def refresh(self): self.work(lambda:self.adb.snapshot(self.cfg),self.state.set_device)
     def ready(self):
         snap=self.adb.snapshot(self.cfg)
