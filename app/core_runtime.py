@@ -27,6 +27,8 @@ def run(args, timeout=8):
             args,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             creationflags=no_window_flag(),
         )
@@ -166,15 +168,25 @@ def connection_mode(serial=None):
     return "network"
 
 
-def adb_devices():
-    run(["adb", "start-server"], timeout=6)
-    out = run(["adb", "devices"], timeout=5)
+def parse_adb_devices_output(output):
     rows = {}
-    for line in out.splitlines()[1:]:
+    for line in (output or "").splitlines()[1:]:
         parts = line.split()
         if len(parts) >= 2:
             rows[parts[0]] = parts[1]
     return rows
+
+
+def adb_devices():
+    run(["adb", "start-server"], timeout=6)
+    return parse_adb_devices_output(run(["adb", "devices"], timeout=5))
+
+
+def adb_state(serial=None):
+    serial = serial or target()
+    if not serial:
+        return "missing"
+    return adb_devices().get(serial, "missing")
 
 
 def shell_probe(serial=None, timeout=3):
@@ -182,29 +194,55 @@ def shell_probe(serial=None, timeout=3):
     return _probe(serial, timeout=timeout)
 
 
-def ensure_remote(wait_stable=True):
+def ensure_remote(wait_stable=True, timeout_seconds=30):
+    """Wait for Android wireless ADB to become genuinely usable.
+
+    During secure lock/unlock on this OnePlus, adbd temporarily becomes
+    offline/authorizing. Repeated adb connect calls during that phase make
+    scrcpy restart too early. Only reconnect when the target is actually
+    missing, then require two consecutive working shell probes.
+    """
     serial = target()
     if not serial:
         return False
 
-    # Never issue 'adb disconnect' here. Disconnecting the transport kills an
-    # active scrcpy/camera session. A plain adb connect is safe and idempotent.
-    if not shell_probe(serial):
-        run(["adb", "connect", serial], timeout=5)
-
     if not wait_stable:
-        return shell_probe(serial)
+        state = adb_state(serial)
+        if state == "missing":
+            run(["adb", "connect", serial], timeout=5)
+            time.sleep(0.5)
+            state = adb_state(serial)
+        return state == "device" and shell_probe(serial, timeout=3)
 
-    hits = 0
-    for _ in range(10):
-        if shell_probe(serial):
-            hits += 1
-            if hits >= 2:
-                return True
+    deadline = time.monotonic() + max(5, timeout_seconds)
+    stable_hits = 0
+    last_connect = 0.0
+
+    while time.monotonic() < deadline:
+        state = adb_state(serial)
+
+        if state == "device":
+            if shell_probe(serial, timeout=3):
+                stable_hits += 1
+                if stable_hits >= 2:
+                    return True
+            else:
+                stable_hits = 0
+
+        elif state == "missing":
+            stable_hits = 0
+            now = time.monotonic()
+            if now - last_connect >= 2.0:
+                run(["adb", "connect", serial], timeout=5)
+                last_connect = now
+
         else:
-            hits = 0
-            run(["adb", "connect", serial], timeout=4)
-        time.sleep(0.5)
+            # offline / unauthorized / authorizing transition:
+            # wait for Android instead of hammering adb connect.
+            stable_hits = 0
+
+        time.sleep(0.75)
+
     return False
 
 
