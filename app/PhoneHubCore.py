@@ -18,7 +18,7 @@ from core_runtime import (
 )
 from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v4.3-stable-media"
+APP_VERSION = "v4.4-unlock-autorecover"
 
 
 class Bridge(QObject):
@@ -43,6 +43,8 @@ class PhoneHubCore(QWidget):
 
         self.screen_proc = None
         self.camera_proc = None
+        self.camera_requested = False
+        self.camera_facing = ""
         self.screen_requested = False
         self.screen_recovering = False
         self.screen_args = []
@@ -61,6 +63,11 @@ class PhoneHubCore(QWidget):
         self.screen_timer.setInterval(900)
         self.screen_timer.timeout.connect(self.watch_screen)
         self.screen_timer.start()
+
+        self.camera_timer = QTimer(self)
+        self.camera_timer.setInterval(1000)
+        self.camera_timer.timeout.connect(self.watch_camera)
+        self.camera_timer.start()
 
         QTimer.singleShot(300, self.refresh_status)
 
@@ -462,34 +469,55 @@ class PhoneHubCore(QWidget):
     def watch_screen(self):
         if not self.screen_requested or self.screen_recovering:
             return
+
         p=self.screen_proc
         if p is None or p.poll() is None:
             return
+
+        # On some OnePlus/OxygenOS builds scrcpy may exit with code 0 or 1 when
+        # secure unlock briefly resets wireless ADB. Do not treat the exit code
+        # as a user-requested close. Only Disconnect clears screen_requested.
         code=p.poll()
         self.screen_proc=None
         if self.screen_log:
-            try: self.screen_log.close()
-            except Exception: pass
+            try:
+                self.screen_log.write(f"EXIT code={code} at {time.strftime('%H:%M:%S')}\n")
+                self.screen_log.close()
+            except Exception:
+                pass
             self.screen_log=None
-        if code == 0:
-            self.screen_requested=False
-            self.set_footer("Screen closed.")
-            return
+
         self.screen_recovering=True
-        self.set_footer("Screen connection changed. Waiting for wireless ADB…")
+        self.set_footer("Unlock changed Android ADB. Reconnecting screen automatically…")
+
         def worker():
+            # Wait for ADB to survive two consecutive shell probes before
+            # reopening scrcpy. This avoids the reopen-close loop during PIN
+            # authentication.
             ok=ensure_remote(wait_stable=True)
             self.bridge.recovery.emit(ok)
+
         threading.Thread(target=worker,daemon=True).start()
 
     def finish_recovery(self,ok):
         if not self.screen_requested:
             self.screen_recovering=False; return
         if not ok:
-            self.screen_recovering=False
-            self.set_footer("Wireless ADB is not stable yet. Retrying automatically.")
+            self.set_footer("Wireless ADB is still changing. Retrying automatically…")
+            QTimer.singleShot(1200, self.retry_screen_recovery)
             return
         QTimer.singleShot(700,self.restart_screen)
+
+    def retry_screen_recovery(self):
+        if not self.screen_requested:
+            self.screen_recovering=False
+            return
+
+        def worker():
+            ok=ensure_remote(wait_stable=True)
+            self.bridge.recovery.emit(ok)
+
+        threading.Thread(target=worker,daemon=True).start()
 
     def restart_screen(self):
         if not self.screen_requested:
@@ -507,13 +535,18 @@ class PhoneHubCore(QWidget):
             self.set_footer("scrcpy or phone target is missing.")
             return
 
-        # Reuse the same stable ADB transport. Do not disconnect it.
+        self.camera_requested=True
+        self.camera_facing=facing
+
+        # A locked OnePlus may briefly reset wireless ADB. Wait for a stable
+        # transport instead of immediately reporting the camera as offline.
         if not shell_probe(serial, timeout=3):
-            if not ensure_remote(wait_stable=False):
-                self.set_footer("Phone ADB is offline.")
+            if not ensure_remote(wait_stable=True):
+                self.set_footer("Camera waiting for wireless ADB…")
+                QTimer.singleShot(1200, lambda f=facing: self.open_camera(f))
                 return
 
-        self.close_camera()
+        self._close_camera_process_only()
 
         LOG_DIR.mkdir(parents=True,exist_ok=True)
         log_path=LOG_DIR/"scrcpy_camera.log"
@@ -549,7 +582,7 @@ class PhoneHubCore(QWidget):
         else:
             self.set_footer("Could not open camera.")
 
-    def close_camera(self):
+    def _close_camera_process_only(self):
         if self.camera_proc and self.camera_proc.poll() is None:
             try:
                 self.camera_proc.terminate()
@@ -562,6 +595,33 @@ class PhoneHubCore(QWidget):
             except Exception:
                 pass
             self.camera_log=None
+
+    def close_camera(self):
+        self.camera_requested=False
+        self.camera_facing=""
+        self._close_camera_process_only()
+        self.set_footer("Camera closed.")
+
+    def watch_camera(self):
+        if not self.camera_requested:
+            return
+        p=self.camera_proc
+        if p is None or p.poll() is None:
+            return
+
+        code=p.poll()
+        self.camera_proc=None
+        if self.camera_log:
+            try:
+                self.camera_log.write(f"EXIT code={code} at {time.strftime('%H:%M:%S')}\n")
+                self.camera_log.close()
+            except Exception:
+                pass
+            self.camera_log=None
+
+        facing=self.camera_facing or "back"
+        self.set_footer("Camera stream changed. Reopening automatically…")
+        QTimer.singleShot(1200, lambda f=facing: self.open_camera(f))
 
     def key(self,keycode):
         serial=target()
