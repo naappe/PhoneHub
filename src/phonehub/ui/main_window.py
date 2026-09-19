@@ -12,13 +12,14 @@ from phonehub.services.config_service import ConfigService,DeviceConfig
 from phonehub.services.adb_service import AdbService
 from phonehub.services.media_service import MediaSessionManager
 from phonehub.services.discovery_service import DiscoveryService
+from phonehub.services.setup_service import SetupService
 from phonehub.ui.theme import APP_STYLE
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("PhoneHub 5.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
         self.state=AppState(); self.state.device_changed.connect(self.render)
-        self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.media=MediaSessionManager()
+        self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.setup=SetupService(self.adb); self.media=MediaSessionManager()
         self.pool=QThreadPool.globalInstance(); self.workers=set()
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
         root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
@@ -54,7 +55,10 @@ class MainWindow(QMainWindow):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Device","Connect your phone over its Tailscale IPv4 address.")
         c,cl=self.card("Connection"); self.ip=QLineEdit(self.cfg.phone_ip); self.ip.setPlaceholderText("100.x.x.x"); cl.addWidget(self.ip)
         row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
-        self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c); l.addStretch(); return w
+        self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
+        sc,sl=self.card("Add a new phone","PhoneHub checks USB authorization first, then prepares Tailscale and the remote link.")
+        self.setupstep=QLabel("1  Connect phone with a USB data cable and unlock it."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
+        sr=QHBoxLayout(); chk=QPushButton("Check USB"); chk.setObjectName("Primary"); chk.clicked.connect(self.check_usb); sr.addWidget(chk); ts=QPushButton("Open Tailscale"); ts.clicked.connect(self.open_tailscale); sr.addWidget(ts); sr.addStretch(); sl.addLayout(sr); l.addWidget(sc); l.addStretch(); return w
     def screen_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Open one controlled scrcpy screen session.")
         c,cl=self.card("Remote screen"); row=QHBoxLayout()
@@ -78,6 +82,21 @@ class MainWindow(QMainWindow):
         c,cl=self.card("Screen quality"); self.quality=QComboBox(); self.quality.addItems(["720","1080","1440"]); self.quality.setCurrentText("1080"); cl.addWidget(self.quality); self.fps=QComboBox(); self.fps.addItems(["15","30","60"]); self.fps.setCurrentText("30"); cl.addWidget(self.fps); l.addWidget(c); l.addStretch(); return w
     def work(self,fn,done):
         w=Worker(fn); self.workers.add(w); w.signals.result.connect(done); w.signals.error.connect(lambda e:self.devmsg.setText(e)); w.signals.finished.connect(lambda:self.workers.discard(w)); self.pool.start(w)
+    def check_usb(self):
+        self.setupstep.setText("Checking USB and Android authorization…")
+        self.work(self.setup.inspect_usb,self._usb_status)
+    def _usb_status(self,status):
+        self.usb_serial=status.serial
+        if status.stage=="ready":
+            self.setupstep.setText("✓ USB authorized. Next: open Tailscale. If it is not installed, install the official Tailscale app on the phone, sign in, then press Auto Detect.")
+        else:
+            self.setupstep.setText(status.message)
+    def open_tailscale(self):
+        serial=getattr(self,"usb_serial","")
+        if not serial:
+            self.setupstep.setText("Check USB first.")
+            return
+        self.work(lambda:self.setup.open_tailscale(serial),lambda ok:self.setupstep.setText("Tailscale opened on phone. Sign in/approve on the phone, then press Auto Detect." if ok else "Tailscale app is not installed yet. Install the official Tailscale app on the phone, then Check USB again."))
     def auto_connect(self):
         self.devmsg.setText("Connecting remembered phone…")
         self.work(lambda:self.adb.connect(self.cfg),self.connected)
