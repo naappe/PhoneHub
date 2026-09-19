@@ -17,7 +17,7 @@ from core_runtime import (
 )
 from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v4.0-clean-core"
+APP_VERSION = "v4.1-glass-dashboard"
 
 
 class Bridge(QObject):
@@ -64,30 +64,91 @@ class PhoneHubCore(QWidget):
 
     def apply_style(self):
         self.setStyleSheet("""
-        QWidget { background:#07111f; color:#eaf2ff; font-family:'Segoe UI'; font-size:13px; }
-        QFrame#rail { background:#0b1728; border-right:1px solid #1b2c44; }
-        QFrame#card { background:#0c1a2b; border:1px solid #1b3554; border-radius:14px; }
-        QLabel#brand { font-size:25px; font-weight:800; color:white; }
-        QLabel#muted { color:#8ea6c4; }
-        QLabel#hero { font-size:24px; font-weight:750; }
-        QLabel#statusOnline { color:#66e3a4; font-weight:700; }
-        QLabel#statusOffline { color:#ff8e8e; font-weight:700; }
+        QWidget {
+            background:#f4f7fb;
+            color:#152238;
+            font-family:'Segoe UI';
+            font-size:13px;
+        }
+        QFrame#rail {
+            background:#ffffff;
+            border-right:1px solid #dbe4ef;
+        }
+        QFrame#card {
+            background:#ffffff;
+            border:1px solid #dfe7f0;
+            border-radius:18px;
+        }
+        QLabel#brand {
+            font-size:28px;
+            font-weight:800;
+            color:#10213a;
+        }
+        QLabel#muted {
+            color:#6f8096;
+        }
+        QLabel#hero {
+            font-size:28px;
+            font-weight:800;
+            color:#10213a;
+        }
+        QLabel#statusOnline {
+            color:#0e9f6e;
+            font-weight:700;
+        }
+        QLabel#statusOffline {
+            color:#d14343;
+            font-weight:700;
+        }
         QPushButton {
-            background:#13243a; border:1px solid #294663; border-radius:10px;
-            padding:10px 14px; font-weight:650;
+            background:#ffffff;
+            border:1px solid #d4deea;
+            border-radius:12px;
+            padding:11px 15px;
+            font-weight:650;
+            color:#21324a;
         }
-        QPushButton:hover { background:#19304d; }
-        QPushButton#nav { text-align:left; border:none; padding:11px 14px; }
-        QPushButton#nav:checked { background:#2463eb; color:white; }
-        QPushButton#primary { background:#2463eb; border-color:#2463eb; color:white; }
-        QPushButton#danger { background:#8f2430; border-color:#b53a47; color:white; }
+        QPushButton:hover {
+            background:#f1f5fb;
+            border-color:#b8c7d9;
+        }
+        QPushButton#nav {
+            text-align:left;
+            border:none;
+            padding:12px 14px;
+            background:transparent;
+        }
+        QPushButton#nav:checked {
+            background:#e8f0ff;
+            color:#1457d9;
+            border-left:4px solid #2563eb;
+            border-radius:10px;
+        }
+        QPushButton#primary {
+            background:#2563eb;
+            border-color:#2563eb;
+            color:white;
+        }
+        QPushButton#primary:hover {
+            background:#1f55ca;
+        }
+        QPushButton#danger {
+            background:#fff1f1;
+            border-color:#f0b8b8;
+            color:#b4232d;
+        }
         QLineEdit, QTextEdit {
-            background:#081524; border:1px solid #28425f; border-radius:10px;
-            padding:10px; color:#edf5ff;
+            background:#fbfdff;
+            border:1px solid #d7e1ec;
+            border-radius:12px;
+            padding:10px;
+            color:#17243a;
         }
-        QTextEdit { selection-background-color:#2463eb; }
+        QTextEdit {
+            selection-background-color:#2563eb;
+        }
         """)
-
+    
     def card(self, title, subtitle=""):
         frame = QFrame()
         frame.setObjectName("card")
@@ -119,7 +180,7 @@ class PhoneHubCore(QWidget):
         brand = QLabel("PhoneHub")
         brand.setObjectName("brand")
         rl.addWidget(brand)
-        sub = QLabel("Private Android Console")
+        sub = QLabel("Secure Remote Workspace")
         sub.setObjectName("muted")
         rl.addWidget(sub)
         rl.addSpacing(16)
@@ -127,11 +188,11 @@ class PhoneHubCore(QWidget):
         self.stack = QStackedWidget()
         self.nav = []
         pages = [
-            ("Overview", self.page_overview),
+            ("Dashboard", self.page_overview),
             ("Screen", self.page_screen),
             ("Camera", self.page_camera),
             ("Files", self.page_files),
-            ("Protection", self.page_protection),
+            ("Security", self.page_protection),
             ("Setup", self.page_setup),
         ]
         for i,(name,builder) in enumerate(pages):
@@ -168,9 +229,9 @@ class PhoneHubCore(QWidget):
 
     def page_overview(self):
         w=QWidget(); l=QVBoxLayout(w); l.setSpacing(14)
-        hero=QLabel("Your phone, one clean control surface")
+        hero=QLabel("PhoneHub Dashboard")
         hero.setObjectName("hero"); l.addWidget(hero)
-        hint=QLabel("Tailscale + remote ADB. USB is needed only for initial enable/repair.")
+        hint=QLabel("Private remote control over Tailscale. USB is only for initial setup or repair.")
         hint.setObjectName("muted"); l.addWidget(hint)
 
         c,cl=self.card("Connection")
@@ -226,7 +287,7 @@ class PhoneHubCore(QWidget):
 
     def page_protection(self):
         w=QWidget(); l=QVBoxLayout(w); l.setSpacing(14)
-        h=QLabel("Protection"); h.setObjectName("hero"); l.addWidget(h)
+        h=QLabel("Security"); h.setObjectName("hero"); l.addWidget(h)
         c,cl=self.card("Read-only security check","Checks ADB, Tailscale, routes, visible sockets, third-party apps and accessibility services. It does not automatically kill or disable anything.")
         row=QHBoxLayout()
         a=QPushButton("Run Scan"); a.setObjectName("primary"); a.clicked.connect(self.run_security)
