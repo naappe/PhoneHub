@@ -98,7 +98,18 @@ class MainWindow(QMainWindow):
             self.setupstep.setText("✓ USB authorized • ✓ Tailscale installed • opening Tailscale and detecting remote link…")
             self.work(lambda:self.setup.open_tailscale(serial),lambda _ok:self.auto_discover())
         else:
-            self.setupstep.setText("Tailscale is missing. Automatic APK installation is being prepared; no manual checks are required.")
+            self.setupstep.setText("Tailscale missing • downloading official stable APK and verifying checksum…")
+            self.work(lambda:self.setup.install_tailscale(serial),lambda result:self._tailscale_installed(serial,result))
+    def _tailscale_installed(self,serial,result):
+        ok,msg=result
+        if not ok:
+            self.setupstep.setText(msg)
+            return
+        self.setupstep.setText("✓ "+msg+" Opening Tailscale…")
+        self.work(lambda:self.setup.open_tailscale(serial),lambda _ok:self._after_tailscale_open())
+    def _after_tailscale_open(self):
+        self.setupstep.setText("Tailscale is ready. If Android asks for VPN/sign-in approval, approve it on the phone. PhoneHub is detecting the remote link…")
+        self.auto_discover()
     def check_usb(self):
         self.setupstep.setText("Checking USB and Android authorization…")
         self.work(self.setup.inspect_usb,self._usb_status)
