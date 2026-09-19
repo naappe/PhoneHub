@@ -18,7 +18,7 @@ from core_runtime import (
 )
 from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v4.2-direct-hotspot-path"
+APP_VERSION = "v4.3-stable-media"
 
 
 class Bridge(QObject):
@@ -47,6 +47,7 @@ class PhoneHubCore(QWidget):
         self.screen_recovering = False
         self.screen_args = []
         self.screen_log = None
+        self.camera_log = None
 
         self.build_ui()
         self.apply_style()
@@ -314,9 +315,9 @@ class PhoneHubCore(QWidget):
         direct = local_hotspot_target() or "not detected"
         saved_target = configured_target() or "not configured"
         self.setup_box.setText(
-            "PhoneHub now tries the direct hotspot gateway first, then Tailscale.\n\n"
-            f"Direct hotspot candidate: {direct}\n"
-            f"Tailscale fallback: {saved_target}\n\n"
+            "PhoneHub uses the saved Tailscale target by default.\n\n"
+            f"Configured target: {saved_target}\n"
+            f"Optional local hotspot target: {direct}\n\n"
             "USB is only needed once to enable adb tcpip 5555."
         )
         c2l.addWidget(self.setup_box)
@@ -327,10 +328,18 @@ class PhoneHubCore(QWidget):
 
     def refresh_status(self):
         self.set_footer("Checking phone…")
+        media_active = (
+            (self.screen_proc is not None and self.screen_proc.poll() is None)
+            or (self.camera_proc is not None and self.camera_proc.poll() is None)
+        )
+
         def worker():
-            if target():
+            # Do not reconnect ADB while scrcpy/camera is running. A reconnect
+            # can terminate the very media session we are trying to monitor.
+            if target() and not media_active and not shell_probe(target(), timeout=2):
                 ensure_remote(wait_stable=False)
             self.bridge.status.emit(device_snapshot())
+
         threading.Thread(target=worker,daemon=True).start()
 
     def apply_status(self,data):
@@ -382,7 +391,7 @@ class PhoneHubCore(QWidget):
         threading.Thread(target=worker,daemon=True).start()
 
     def _screen_profile(self, phone_off=False):
-        args=["--no-audio","--video-codec=h264","--max-size=720","--video-bit-rate=1M","--max-fps=20","--video-buffer=120","--window-title=PhoneHub Screen"]
+        args=["--no-audio","--video-codec=h264","--max-size=720","--video-bit-rate=1M","--max-fps=15","--video-buffer=0","--window-title=PhoneHub Screen"]
         if phone_off:
             args += ["--turn-screen-off","--keep-active"]
         return args
@@ -391,15 +400,27 @@ class PhoneHubCore(QWidget):
         exe=scrcpy_path()
         serial=target()
         if not exe or not serial:
-            self.bridge.message.emit("scrcpy or phone target is missing."); return False
+            self.bridge.message.emit("scrcpy or phone target is missing.")
+            return False
+
+        if not shell_probe(serial, timeout=3):
+            if not ensure_remote(wait_stable=False):
+                self.bridge.message.emit("Phone ADB is offline.")
+                return False
+
         if wake:
             run(["adb","-s",serial,"shell","input","keyevent","224"],timeout=3)
+
         LOG_DIR.mkdir(parents=True,exist_ok=True)
         log_path=LOG_DIR/"scrcpy_screen.log"
         try:
             self.screen_log=open(log_path,"a",encoding="utf-8",buffering=1)
             self.screen_log.write(f"\nSTART {time.strftime('%Y-%m-%d %H:%M:%S')} {serial}\n")
-            self.screen_proc=spawn([exe,"-s",serial]+args,stdout=self.screen_log,stderr=self.screen_log)
+            self.screen_proc=spawn(
+                [exe,"-s",serial]+args,
+                stdout=self.screen_log,
+                stderr=self.screen_log
+            )
         except Exception:
             self.screen_proc=None
         return self.screen_proc is not None
@@ -480,19 +501,67 @@ class PhoneHubCore(QWidget):
         self.screen_recovering=False
 
     def open_camera(self,facing):
-        exe=scrcpy_path(); serial=target()
-        if not exe or not serial or not shell_probe(serial):
-            self.set_footer("Phone is offline."); return
+        exe=scrcpy_path()
+        serial=target()
+        if not exe or not serial:
+            self.set_footer("scrcpy or phone target is missing.")
+            return
+
+        # Reuse the same stable ADB transport. Do not disconnect it.
+        if not shell_probe(serial, timeout=3):
+            if not ensure_remote(wait_stable=False):
+                self.set_footer("Phone ADB is offline.")
+                return
+
         self.close_camera()
-        args=[exe,"-s",serial,"--video-source=camera",f"--camera-facing={facing}","--camera-size=640x480","--camera-fps=15","--video-bit-rate=700K","--video-buffer=120","--no-audio","--window-title=PhoneHub Camera"]
-        self.camera_proc=spawn(args)
-        self.set_footer(f"{facing.title()} camera opening…")
+
+        LOG_DIR.mkdir(parents=True,exist_ok=True)
+        log_path=LOG_DIR/"scrcpy_camera.log"
+
+        args=[
+            exe,"-s",serial,
+            "--video-source=camera",
+            f"--camera-facing={facing}",
+            "--camera-size=640x480",
+            "--camera-fps=15",
+            "--video-bit-rate=500K",
+            "--video-buffer=0",
+            "--no-audio",
+            "--window-title=PhoneHub Camera",
+        ]
+
+        try:
+            self.camera_log=open(log_path,"a",encoding="utf-8",buffering=1)
+            self.camera_log.write(
+                f"\nSTART {time.strftime('%Y-%m-%d %H:%M:%S')} "
+                f"{serial} facing={facing}\n"
+            )
+            self.camera_proc=spawn(
+                args,
+                stdout=self.camera_log,
+                stderr=self.camera_log
+            )
+        except Exception:
+            self.camera_proc=None
+
+        if self.camera_proc:
+            self.set_footer(f"{facing.title()} camera opening…")
+        else:
+            self.set_footer("Could not open camera.")
 
     def close_camera(self):
         if self.camera_proc and self.camera_proc.poll() is None:
-            try:self.camera_proc.terminate()
-            except Exception:pass
+            try:
+                self.camera_proc.terminate()
+            except Exception:
+                pass
         self.camera_proc=None
+        if self.camera_log:
+            try:
+                self.camera_log.close()
+            except Exception:
+                pass
+            self.camera_log=None
 
     def key(self,keycode):
         serial=target()
