@@ -52,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.40-screen-stable"
+APP_VERSION = "v3.41-wireless-adb-guard"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -126,7 +126,7 @@ class PhoneHubTailscale(PhoneHub):
         self.notification_receiver_thread = None
         self.notification_receiver_url = ""
         self.screen_profile_name = "Balanced"
-        self.screen_profile_args = ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0", "--no-audio"]
+        self.screen_profile_args = ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=100", "--no-audio"]
         self._force_exit = False
         self.tray_icon = None
 
@@ -140,9 +140,20 @@ class PhoneHubTailscale(PhoneHub):
         self._screen_log_path = Path(r"C:\PhoneHub\logs\scrcpy_screen.log")
         self._screen_log_path.parent.mkdir(parents=True, exist_ok=True)
         self.screen_watchdog_timer = QTimer(self)
-        self.screen_watchdog_timer.setInterval(1500)
+        self.screen_watchdog_timer.setInterval(1000)
         self.screen_watchdog_timer.timeout.connect(self._screen_watchdog)
         self.screen_watchdog_timer.start()
+
+        # Some Android ROMs briefly drop TCP ADB when the secure lock screen
+        # changes state. Keep an independent remote-ADB heartbeat while a screen
+        # session is requested, so recovery is based on a real shell probe
+        # instead of stale 'adb devices' state.
+        self._screen_adb_guard_busy = False
+        self._screen_adb_failures = 0
+        self.screen_adb_guard_timer = QTimer(self)
+        self.screen_adb_guard_timer.setInterval(1200)
+        self.screen_adb_guard_timer.timeout.connect(self._screen_adb_guard_tick)
+        self.screen_adb_guard_timer.start()
 
         self.app_status_timer = QTimer(self)
         self.app_status_timer.setSingleShot(True)
@@ -444,6 +455,7 @@ class PhoneHubTailscale(PhoneHub):
                 f"\n[{datetime.now().isoformat(timespec='seconds')}] "
                 f"START target={target} args={' '.join(args[3:])}\n"
             )
+            self._screen_log_handle.flush()
             self.screen_process = subprocess.Popen(
                 args,
                 stdout=self._screen_log_handle,
@@ -496,6 +508,58 @@ class PhoneHubTailscale(PhoneHub):
         if self.current_view == "screen":
             self.current_view = ""
         self.set_footer("Screen disconnected.")
+
+    def _screen_remote_target(self):
+        ip, port = get_saved_ip()
+        return f"{ip}:{port}" if ip else ""
+
+    def _screen_adb_guard_tick(self):
+        if not getattr(self, "_screen_session_requested", False):
+            self._screen_adb_failures = 0
+            return
+        if getattr(self, "_screen_adb_guard_busy", False):
+            return
+
+        target = self._screen_remote_target()
+        if not target:
+            return
+
+        self._screen_adb_guard_busy = True
+
+        def worker():
+            # A real shell round-trip is the health check. 'adb devices' can
+            # temporarily report a transport as present even when it can no
+            # longer carry commands.
+            probe = run_quiet(
+                ["adb", "-s", target, "shell", "echo", "PHONEHUB_OK"],
+                timeout=3,
+            ).strip()
+            ok = probe == "PHONEHUB_OK"
+
+            if not ok:
+                run_quiet(["adb", "disconnect", target], timeout=3)
+                run_quiet(["adb", "connect", target], timeout=5)
+                probe = run_quiet(
+                    ["adb", "-s", target, "shell", "echo", "PHONEHUB_OK"],
+                    timeout=3,
+                ).strip()
+                ok = probe == "PHONEHUB_OK"
+
+            self.auto_bridge.screen_recovery.emit(ok)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _screen_adb_guard_done(self, ok):
+        self._screen_adb_guard_busy = False
+
+        if ok:
+            self._screen_adb_failures = 0
+            return
+
+        self._screen_adb_failures += 1
+        if self._screen_adb_failures == 1:
+            self.set_footer("Wireless ADB dropped. Reconnecting...")
 
     def _screen_watchdog(self):
         if not getattr(self, "_screen_session_requested", False):
@@ -558,17 +622,23 @@ class PhoneHubTailscale(PhoneHub):
         threading.Thread(target=worker, daemon=True).start()
 
     def _finish_screen_recovery(self, connected):
+        # This signal is used by both the screen watchdog and the wireless-ADB
+        # guard. Always clear both busy flags safely.
         self._screen_recovery_busy = False
+        self._screen_adb_guard_busy = False
 
         if not self._screen_session_requested:
             return
 
         if not connected:
-            self.set_footer(
-                f"Remote ADB unavailable. Retry "
-                f"{self._screen_recovery_attempts}/5..."
-            )
-            # The watchdog sees screen_process=None on its next tick and retries.
+            self._screen_adb_failures += 1
+            self.set_footer("Wireless ADB unavailable. Retrying...")
+            return
+
+        self._screen_adb_failures = 0
+
+        # If scrcpy is already running, the ADB guard has done its job.
+        if self._proc_alive(getattr(self, "screen_process", None)):
             return
 
         args = list(getattr(self, "_screen_last_args", []))
@@ -578,14 +648,13 @@ class PhoneHubTailscale(PhoneHub):
                 "--video-bit-rate=4M",
                 "--max-fps=30",
                 "--video-codec=h264",
-                "--video-buffer=0",
+                "--video-buffer=100",
                 "--no-audio",
             ]
 
-        # Restart scrcpy itself. Do not send another wake/unlock command and do
-        # not tear down a healthy ADB/Tailscale session.
+        # Give the ROM a short moment after ADB comes back, then launch scrcpy.
         QTimer.singleShot(
-            350, lambda a=args: self._restart_screen_after_reconnect(a)
+            500, lambda a=args: self._restart_screen_after_reconnect(a)
         )
 
     def _restart_screen_after_reconnect(self, args):
@@ -714,7 +783,7 @@ class PhoneHubTailscale(PhoneHub):
         args = list(getattr(
             self,
             "screen_profile_args",
-            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0", "--no-audio"],
+            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=100", "--no-audio"],
         ))
         if "--no-audio" not in args:
             args.append("--no-audio")
@@ -724,7 +793,7 @@ class PhoneHubTailscale(PhoneHub):
         args = list(getattr(
             self,
             "screen_profile_args",
-            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0", "--no-audio"],
+            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=100", "--no-audio"],
         ))
         if "--no-audio" not in args:
             args.append("--no-audio")
@@ -791,7 +860,7 @@ class PhoneHubTailscale(PhoneHub):
             "--video-codec=h264",
             "--video-bit-rate=2M",
             "--max-fps=30",
-            "--video-buffer=0",
+            "--video-buffer=100",
             "--print-fps",
             "--window-title=PhoneHub FPS Test",
         ]
