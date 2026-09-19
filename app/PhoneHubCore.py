@@ -18,7 +18,7 @@ from core_runtime import (
 )
 from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v4.6-private-screen-off"
+APP_VERSION = "v4.7-auto-open-unlock"
 
 
 class Bridge(QObject):
@@ -26,6 +26,7 @@ class Bridge(QObject):
     message = Signal(str)
     recovery = Signal(bool)
     security = Signal(str)
+    unlock_state = Signal(dict)
 
 
 class PhoneHubCore(QWidget):
@@ -40,6 +41,7 @@ class PhoneHubCore(QWidget):
         self.bridge.message.connect(self.set_footer)
         self.bridge.recovery.connect(self.finish_recovery)
         self.bridge.security.connect(self.security_output)
+        self.bridge.unlock_state.connect(self.apply_unlock_state)
 
         self.screen_proc = None
         self.camera_proc = None
@@ -54,6 +56,9 @@ class PhoneHubCore(QWidget):
         self.camera_log_path = LOG_DIR / "scrcpy_camera.log"
         self.screen_log_offset = 0
         self.camera_log_offset = 0
+        self._unlock_check_busy = False
+        self._last_unlock_state = None
+        self._auto_open_on_unlock = True
 
         self.build_ui()
         self.apply_style()
@@ -73,7 +78,119 @@ class PhoneHubCore(QWidget):
         self.camera_timer.timeout.connect(self.watch_camera)
         self.camera_timer.start()
 
+        self.unlock_state_timer = QTimer(self)
+        self.unlock_state_timer.setInterval(1400)
+        self.unlock_state_timer.timeout.connect(self.check_unlock_state)
+        self.unlock_state_timer.start()
+
         QTimer.singleShot(300, self.refresh_status)
+
+    def check_unlock_state(self):
+        if self._unlock_check_busy:
+            return
+
+        serial=target()
+        if not serial:
+            return
+
+        self._unlock_check_busy=True
+
+        def worker():
+            online=shell_probe(serial, timeout=2)
+            state={
+                "online": online,
+                "interactive": False,
+                "locked": None,
+            }
+
+            if online:
+                power=run(
+                    ["adb","-s",serial,"shell","dumpsys","power"],
+                    timeout=3
+                ).lower()
+                policy=run(
+                    ["adb","-s",serial,"shell","dumpsys","window","policy"],
+                    timeout=3
+                ).lower()
+                trust=run(
+                    ["adb","-s",serial,"shell","dumpsys","trust"],
+                    timeout=3
+                ).lower()
+
+                state["interactive"]=(
+                    "minteractive=true" in power
+                    or "mwakefulness=awake" in power
+                    or "wakefulness=awake" in power
+                )
+
+                combined=policy+"\n"+trust
+                locked_markers=(
+                    "devicelocked=true",
+                    "device locked=true",
+                    "mshowinglockscreen=true",
+                    "iskeyguardshowing=true",
+                    "keyguard showing=true",
+                    "mkeyguardshowing=true",
+                )
+                unlocked_markers=(
+                    "devicelocked=false",
+                    "device locked=false",
+                    "mshowinglockscreen=false",
+                    "iskeyguardshowing=false",
+                    "mkeyguardshowing=false",
+                )
+
+                if any(x in combined for x in locked_markers):
+                    state["locked"]=True
+                elif any(x in combined for x in unlocked_markers):
+                    state["locked"]=False
+
+            self.bridge.unlock_state.emit(state)
+
+        threading.Thread(target=worker,daemon=True).start()
+
+    def apply_unlock_state(self,state):
+        self._unlock_check_busy=False
+
+        online=bool(state.get("online"))
+        interactive=bool(state.get("interactive"))
+        locked=state.get("locked")
+
+        if not online:
+            current="offline"
+        elif not interactive:
+            current="asleep"
+        elif locked is True:
+            current="locked"
+        elif locked is False:
+            current="unlocked"
+        else:
+            current="awake"
+
+        previous=self._last_unlock_state
+        self._last_unlock_state=current
+
+        # First sample establishes a baseline so starting PhoneHub while the
+        # phone is already unlocked does not unexpectedly pop open a screen.
+        if previous is None:
+            return
+
+        became_unlocked=(
+            current=="unlocked"
+            and previous in ("locked","asleep","offline","awake")
+        )
+
+        if not became_unlocked or not self._auto_open_on_unlock:
+            return
+
+        if self.screen_proc is not None and self.screen_proc.poll() is None:
+            return
+
+        self.screen_requested=True
+        self.screen_args=self._screen_profile(False)
+        self.screen_recovering=False
+        self.set_footer("Phone unlocked. Opening screen automatically…")
+        QTimer.singleShot(250, self.open_screen)
 
     def apply_style(self):
         self.setStyleSheet("""
@@ -244,7 +361,7 @@ class PhoneHubCore(QWidget):
         w=QWidget(); l=QVBoxLayout(w); l.setSpacing(14)
         hero=QLabel("PhoneHub Dashboard")
         hero.setObjectName("hero"); l.addWidget(hero)
-        hint=QLabel("Private remote control over Tailscale. USB is only for initial setup or repair.")
+        hint=QLabel("Private remote control over Tailscale. When the phone wakes and unlocks, the screen opens automatically.")
         hint.setObjectName("muted"); l.addWidget(hint)
 
         c,cl=self.card("Connection")
@@ -266,7 +383,7 @@ class PhoneHubCore(QWidget):
     def page_screen(self):
         w=QWidget(); l=QVBoxLayout(w); l.setSpacing(14)
         hero=QLabel("Screen"); hero.setObjectName("hero"); l.addWidget(hero)
-        c,cl=self.card("Remote screen","Use Screen Off for a private black phone display while keeping remote control alive. Secure Lock uses Android keyguard and can reset wireless ADB on this OnePlus.")
+        c,cl=self.card("Remote screen","The screen automatically reopens after the phone wakes and unlocks. Use Screen Off for privacy without entering Android keyguard.")
         row=QHBoxLayout()
         a=QPushButton("Open Screen"); a.setObjectName("primary"); a.clicked.connect(self.open_screen)
         b=QPushButton("Private Screen Off"); b.clicked.connect(self.open_screen_off)
