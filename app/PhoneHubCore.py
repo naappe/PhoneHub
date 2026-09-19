@@ -18,7 +18,7 @@ from core_runtime import (
 )
 from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v4.8-auth-aware-recovery"
+APP_VERSION = "v4.9-single-session"
 
 
 class Bridge(QObject):
