@@ -23,7 +23,7 @@ class MainWindow(QMainWindow):
         self.pool=QThreadPool.globalInstance(); self.workers=set()
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
         root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
-        if self.cfg.serial: self.auto_connect()
+        self.auto_setup()
 
     def sidebar(self):
         s=QFrame(); s.setObjectName("Sidebar"); s.setFixedWidth(218); l=QVBoxLayout(s); l.setContentsMargins(18,22,18,18); l.setSpacing(7)
@@ -52,13 +52,13 @@ class MainWindow(QMainWindow):
         for a,b in [("Transport","Tailscale + ADB"),("Media","One session owner"),("Safety","Explicit controls only")]: row.addWidget(self.card(a,b)[0])
         l.addLayout(row); l.addStretch(); return w
     def device_page(self):
-        w=QWidget(); l=QVBoxLayout(w); self.title(l,"Device","Connect your phone over its Tailscale IPv4 address.")
+        w=QWidget(); l=QVBoxLayout(w); self.title(l,"Device","Automatic phone setup and connection.")
         c,cl=self.card("Connection"); self.ip=QLineEdit(self.cfg.phone_ip); self.ip.setPlaceholderText("100.x.x.x"); cl.addWidget(self.ip)
         row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
         sc,sl=self.card("Add a new phone","PhoneHub checks USB authorization first, then prepares Tailscale and the remote link.")
-        self.setupstep=QLabel("1  Connect phone with a USB data cable and unlock it."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
-        sr=QHBoxLayout(); chk=QPushButton("Check USB"); chk.setObjectName("Primary"); chk.clicked.connect(self.check_usb); sr.addWidget(chk); ts=QPushButton("Open Tailscale"); ts.clicked.connect(self.open_tailscale); sr.addWidget(ts); sr.addStretch(); sl.addLayout(sr); l.addWidget(sc); l.addStretch(); return w
+        self.setupstep=QLabel("PhoneHub is checking everything automatically…"); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
+        sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk); sr.addStretch(); sl.addLayout(sr); l.addWidget(sc); l.addStretch(); return w
     def screen_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Open one controlled scrcpy screen session.")
         c,cl=self.card("Remote screen"); row=QHBoxLayout()
@@ -82,6 +82,23 @@ class MainWindow(QMainWindow):
         c,cl=self.card("Screen quality"); self.quality=QComboBox(); self.quality.addItems(["720","1080","1440"]); self.quality.setCurrentText("1080"); cl.addWidget(self.quality); self.fps=QComboBox(); self.fps.addItems(["15","30","60"]); self.fps.setCurrentText("30"); cl.addWidget(self.fps); l.addWidget(c); l.addStretch(); return w
     def work(self,fn,done):
         w=Worker(fn); self.workers.add(w); w.signals.result.connect(done); w.signals.error.connect(lambda e:self.devmsg.setText(e)); w.signals.finished.connect(lambda:self.workers.discard(w)); self.pool.start(w)
+    def auto_setup(self):
+        self.setupstep.setText("Auto Setup: checking USB, authorization, Tailscale and remote link…")
+        self.work(self.setup.inspect_usb,self._auto_usb)
+    def _auto_usb(self,status):
+        self.usb_serial=status.serial
+        if status.stage!="ready":
+            self.setupstep.setText(status.message)
+            if self.cfg.serial: self.auto_connect()
+            return
+        self.setupstep.setText("✓ USB authorized • checking Tailscale…")
+        self.work(lambda:self.setup.package_installed(status.serial,"com.tailscale.ipn"),lambda installed:self._tailscale_checked(status.serial,installed))
+    def _tailscale_checked(self,serial,installed):
+        if installed:
+            self.setupstep.setText("✓ USB authorized • ✓ Tailscale installed • opening Tailscale and detecting remote link…")
+            self.work(lambda:self.setup.open_tailscale(serial),lambda _ok:self.auto_discover())
+        else:
+            self.setupstep.setText("Tailscale is missing. Automatic APK installation is being prepared; no manual checks are required.")
     def check_usb(self):
         self.setupstep.setText("Checking USB and Android authorization…")
         self.work(self.setup.inspect_usb,self._usb_status)
