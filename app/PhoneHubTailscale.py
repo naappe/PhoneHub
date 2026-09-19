@@ -52,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.37-screen-recovery-fix"
+APP_VERSION = "v3.38-screen-unlock-fix"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -66,6 +66,7 @@ class AutoDetectBridge(QObject):
     health = Signal(dict)
     notifications = Signal(list)
     notification_push = Signal(dict)
+    screen_recovery = Signal(bool)
 
 class PhoneHubTailscale(PhoneHub):
     def __init__(self):
@@ -80,6 +81,7 @@ class PhoneHubTailscale(PhoneHub):
         self._auto_detect_busy = False
 
         self.auto_bridge = AutoDetectBridge()
+        self.auto_bridge.screen_recovery.connect(self._finish_screen_recovery)
         self.auto_bridge.state.connect(self._apply_auto_detect_state)
         self.auto_bridge.wizard.connect(self._apply_wizard_result)
         self.auto_bridge.health.connect(self._apply_health_results)
@@ -433,7 +435,10 @@ class PhoneHubTailscale(PhoneHub):
 
         def worker():
             ok = connect_remote_adb()
-            QTimer.singleShot(0, lambda: self._finish_screen_recovery(ok))
+            # Cross the worker/UI-thread boundary with a Qt signal. A zero-delay
+            # QTimer created from this worker thread may never fire because the
+            # worker has no Qt event loop.
+            self.auto_bridge.screen_recovery.emit(ok)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
