@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import os, subprocess, zipfile
-from PySide6.QtCore import QThreadPool
+from PySide6.QtCore import QThreadPool, QTimer
 from PySide6.QtWidgets import QFrame,QHBoxLayout,QLabel,QLineEdit,QMainWindow,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QComboBox
 from phonehub.core.command import SubprocessRunner
 from phonehub.core.state import AppState
@@ -18,9 +18,9 @@ class MainWindow(QMainWindow):
         super().__init__(); self.setWindowTitle("PhoneHub 5.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
         self.state=AppState(); self.state.device_changed.connect(self.render)
         self.configs=ConfigService(); self.cfg=self.configs.load(); self.adb=AdbService(SubprocessRunner()); self.media=MediaSessionManager()
-        self.pool=QThreadPool.globalInstance(); self.workers=set()
+        self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_requested=False; self.recovery_busy=False
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
-        root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
+        root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)\n        self.recovery_timer=QTimer(self); self.recovery_timer.setInterval(2500); self.recovery_timer.timeout.connect(self.poll_recovery); self.recovery_timer.start()
 
     def sidebar(self):
         s=QFrame(); s.setObjectName("Sidebar"); s.setFixedWidth(218); l=QVBoxLayout(s); l.setContentsMargins(18,22,18,18); l.setSpacing(7)
@@ -89,7 +89,7 @@ class MainWindow(QMainWindow):
         return True
     def open_screen(self):
         if not self.ready(): self.screenmsg.setText("Connect Device first"); return
-        ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText())); self.screenmsg.setText(msg)
+        ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText())); self.screen_requested=ok; self.screenmsg.setText(msg)
     def open_camera(self,face):
         if not self.ready(): self.cameramsg.setText("Connect Device first"); return
         ok,msg=self.media.camera(self.cfg,face); self.cameramsg.setText(msg)
@@ -104,4 +104,4 @@ class MainWindow(QMainWindow):
         self.metric.setText(s.device_name); battery=f" • {s.battery_percent}%" if s.battery_percent is not None else ""; self.detail.setText(f"{s.detail}{battery} • Android {s.android_version}"); self.badge.setText(f"● {s.state.value.title()}")
         if hasattr(self,"devmsg"): self.devmsg.setText(s.detail)
     def closeEvent(self,event):
-        self.media.stop(); super().closeEvent(event)
+        self.screen_requested=False; self.recovery_timer.stop(); self.media.stop(); super().closeEvent(event)
