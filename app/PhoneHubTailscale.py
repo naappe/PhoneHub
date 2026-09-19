@@ -52,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.39-fast-screen-open"
+APP_VERSION = "v3.40-screen-stable"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -136,6 +136,9 @@ class PhoneHubTailscale(PhoneHub):
         self._screen_recovery_busy = False
         self._screen_recovery_attempts = 0
         self._screen_last_args = []
+        self._screen_log_handle = None
+        self._screen_log_path = Path(r"C:\PhoneHub\logs\scrcpy_screen.log")
+        self._screen_log_path.parent.mkdir(parents=True, exist_ok=True)
         self.screen_watchdog_timer = QTimer(self)
         self.screen_watchdog_timer.setInterval(1500)
         self.screen_watchdog_timer.timeout.connect(self._screen_watchdog)
@@ -390,19 +393,109 @@ class PhoneHubTailscale(PhoneHub):
 
         return box, lay, lbl
 
+    def _close_screen_log(self):
+        handle = getattr(self, "_screen_log_handle", None)
+        if handle:
+            try:
+                handle.flush()
+                handle.close()
+            except Exception:
+                pass
+        self._screen_log_handle = None
+
+    def _screen_error_tail(self):
+        try:
+            if self._screen_log_handle:
+                self._screen_log_handle.flush()
+            if not self._screen_log_path.exists():
+                return ""
+            lines = self._screen_log_path.read_text(
+                encoding="utf-8", errors="ignore"
+            ).splitlines()
+            useful = [line.strip() for line in lines[-25:] if line.strip()]
+            return useful[-1] if useful else ""
+        except Exception:
+            return ""
+
+    def _launch_screen_process(self, profile, wake=False):
+        scrcpy = scrcpy_path()
+        if not scrcpy:
+            self.set_footer("scrcpy not found.")
+            return False
+
+        target = self._device_target()
+        if not target:
+            self.set_footer("Phone remote ADB is not connected.")
+            return False
+
+        if wake:
+            run_background([
+                "adb", "-s", target, "shell", "input", "keyevent", "224"
+            ])
+
+        args = [scrcpy, "-s", target] + list(profile)
+
+        self._close_screen_log()
+        try:
+            self._screen_log_handle = self._screen_log_path.open(
+                "a", encoding="utf-8", buffering=1
+            )
+            self._screen_log_handle.write(
+                f"\n[{datetime.now().isoformat(timespec='seconds')}] "
+                f"START target={target} args={' '.join(args[3:])}\n"
+            )
+            self.screen_process = subprocess.Popen(
+                args,
+                stdout=self._screen_log_handle,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW
+                    if sys.platform.startswith("win") else 0
+                ),
+            )
+        except Exception as exc:
+            self._close_screen_log()
+            self.screen_process = None
+            self.set_footer(f"Could not open screen: {exc}")
+            return False
+
+        self.current_view = "screen"
+        return True
+
     def open_screen(self, profile, keep_alive=False):
-        # Remember the active screen request so a brief ADB transport reset
-        # during Android lock/unlock does not permanently close scrcpy.
+        # One screen session at a time. The remote Tailscale ADB target is used
+        # directly; USB is only a fallback inside _device_target().
+        if self._proc_alive(getattr(self, "screen_process", None)):
+            self.set_footer("Screen already open.")
+            return
+
         self._screen_session_requested = True
         self._screen_last_args = list(profile)
         self._screen_recovery_attempts = 0
-        return super().open_screen(profile, keep_alive=keep_alive)
+        self._screen_recovery_busy = False
+
+        if self._launch_screen_process(profile, wake=True):
+            self.set_footer("Opening screen...")
+        else:
+            # Leave the session requested: the watchdog will retry if the remote
+            # ADB transport is temporarily unavailable.
+            self.set_footer("Screen start failed. Retrying remote connection...")
 
     def disconnect_screen(self):
-        # Explicit PhoneHub disconnect means do not auto-reopen the screen.
+        # This is the only action that intentionally disables auto-recovery.
         self._screen_session_requested = False
+        self._screen_recovery_busy = False
         self._screen_recovery_attempts = 0
-        return super().disconnect_screen()
+
+        proc = getattr(self, "screen_process", None)
+        self._stop_proc(proc)
+        self.screen_process = None
+        self._close_screen_log()
+
+        if self.current_view == "screen":
+            self.current_view = ""
+        self.set_footer("Screen disconnected.")
 
     def _screen_watchdog(self):
         if not getattr(self, "_screen_session_requested", False):
@@ -411,34 +504,55 @@ class PhoneHubTailscale(PhoneHub):
             return
 
         proc = getattr(self, "screen_process", None)
-        if proc is None or proc.poll() is None:
+
+        # A running scrcpy process is healthy from PhoneHub's point of view.
+        if proc is not None and proc.poll() is None:
             return
 
-        exit_code = proc.poll()
+        exit_code = proc.poll() if proc is not None else None
 
-        # Do not use scrcpy's exit code to decide whether the close was intentional.
-        # scrcpy may return 0 even when the ADB transport disappears during an
-        # Android lock/unlock transition. Only PhoneHub's Disconnect button clears
-        # _screen_session_requested.
-        if self._screen_recovery_attempts >= 5:
+        # Closing the scrcpy window normally returns 0. Do not reopen it.
+        if proc is not None and exit_code == 0:
             self._screen_session_requested = False
             self.screen_process = None
-            self.set_footer("Screen connection dropped. Press Open Screen to retry.")
+            self._close_screen_log()
+            self.set_footer("Screen closed.")
             return
 
-        self._screen_recovery_busy = True
-        self._screen_recovery_attempts += 1
         self.screen_process = None
+        self._close_screen_log()
+
+        if self._screen_recovery_attempts >= 5:
+            self._screen_session_requested = False
+            detail = self._screen_error_tail()
+            self.set_footer(
+                "Screen could not recover."
+                + (f" scrcpy: {detail}" if detail else "")
+            )
+            return
+
+        self._screen_recovery_attempts += 1
+        self._screen_recovery_busy = True
         self.set_footer(
-            f"Screen connection interrupted (scrcpy exit {exit_code}). Reconnecting ({self._screen_recovery_attempts}/5)..."
+            f"Screen stream dropped. Recovering "
+            f"({self._screen_recovery_attempts}/5)..."
         )
 
         def worker():
-            ok = connect_remote_adb()
-            # Cross the worker/UI-thread boundary with a Qt signal. A zero-delay
-            # QTimer created from this worker thread may never fire because the
-            # worker has no Qt event loop.
-            self.auto_bridge.screen_recovery.emit(ok)
+            ip, port = get_saved_ip()
+            target = f"{ip}:{port}" if ip else ""
+
+            _, remote, _, _ = parse_adb_devices()
+            connected = bool(target and target in remote)
+
+            # Only reconnect ADB when it is actually missing. If ADB is already
+            # healthy, leave it untouched and restart only scrcpy.
+            if target and not connected:
+                run_quiet(["adb", "connect", target], timeout=6)
+                _, remote, _, _ = parse_adb_devices()
+                connected = target in remote
+
+            self.auto_bridge.screen_recovery.emit(connected)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
@@ -450,6 +564,11 @@ class PhoneHubTailscale(PhoneHub):
             return
 
         if not connected:
+            self.set_footer(
+                f"Remote ADB unavailable. Retry "
+                f"{self._screen_recovery_attempts}/5..."
+            )
+            # The watchdog sees screen_process=None on its next tick and retries.
             return
 
         args = list(getattr(self, "_screen_last_args", []))
@@ -463,9 +582,11 @@ class PhoneHubTailscale(PhoneHub):
                 "--no-audio",
             ]
 
-        # Give Android a moment to finish the lock/unlock transition before
-        # reattaching scrcpy to the recovered ADB transport.
-        QTimer.singleShot(700, lambda a=args: self._restart_screen_after_reconnect(a))
+        # Restart scrcpy itself. Do not send another wake/unlock command and do
+        # not tear down a healthy ADB/Tailscale session.
+        QTimer.singleShot(
+            350, lambda a=args: self._restart_screen_after_reconnect(a)
+        )
 
     def _restart_screen_after_reconnect(self, args):
         if not self._screen_session_requested:
@@ -473,11 +594,22 @@ class PhoneHubTailscale(PhoneHub):
         if self._proc_alive(getattr(self, "screen_process", None)):
             return
 
-        super().open_screen(args, keep_alive=True)
+        if self._launch_screen_process(args, wake=False):
+            # Verify that scrcpy survives startup before declaring recovery.
+            QTimer.singleShot(900, self._verify_recovered_screen)
+        else:
+            self.set_footer("scrcpy restart failed. Retrying...")
 
-        if self._proc_alive(getattr(self, "screen_process", None)):
+    def _verify_recovered_screen(self):
+        proc = getattr(self, "screen_process", None)
+        if self._proc_alive(proc):
             self._screen_recovery_attempts = 0
-            self.set_footer("Screen reconnected automatically.")
+            self.set_footer("Screen reconnected.")
+            return
+
+        # Keep session requested. The watchdog will retry and preserve the log.
+        code = proc.poll() if proc is not None else "?"
+        self.set_footer(f"scrcpy restart exited ({code}). Retrying...")
 
     def page_screen(self):
         page = QWidget()
