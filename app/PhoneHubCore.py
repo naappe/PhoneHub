@@ -18,7 +18,7 @@ from core_runtime import (
 )
 from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v4.7-auto-open-unlock"
+APP_VERSION = "v4.8-auth-aware-recovery"
 
 
 class Bridge(QObject):
@@ -86,7 +86,7 @@ class PhoneHubCore(QWidget):
         QTimer.singleShot(300, self.refresh_status)
 
     def check_unlock_state(self):
-        if self._unlock_check_busy:
+        if self._unlock_check_busy or self.screen_recovering:
             return
 
         serial=target()
@@ -680,7 +680,7 @@ class PhoneHubCore(QWidget):
         self.set_footer("Phone unlock reset ADB. Restoring screen…")
 
         def worker():
-            ok=ensure_remote(wait_stable=True)
+            ok=ensure_remote(wait_stable=True, timeout_seconds=35)
             self.bridge.recovery.emit(ok)
 
         threading.Thread(target=worker,daemon=True).start()
@@ -709,8 +709,8 @@ class PhoneHubCore(QWidget):
         if not self.screen_requested:
             self.screen_recovering=False; return
         if not ok:
-            self.set_footer("Wireless ADB is still changing. Retrying automatically…")
-            QTimer.singleShot(1200, self.retry_screen_recovery)
+            self.set_footer("Android ADB is still authorizing. Waiting before another recovery check…")
+            QTimer.singleShot(2500, self.retry_screen_recovery)
             return
         QTimer.singleShot(700,self.restart_screen)
 
@@ -720,7 +720,7 @@ class PhoneHubCore(QWidget):
             return
 
         def worker():
-            ok=ensure_remote(wait_stable=True)
+            ok=ensure_remote(wait_stable=True, timeout_seconds=35)
             self.bridge.recovery.emit(ok)
 
         threading.Thread(target=worker,daemon=True).start()
