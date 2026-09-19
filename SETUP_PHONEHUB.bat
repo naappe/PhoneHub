@@ -33,6 +33,25 @@ if not exist "C:\PhoneHub\runtime\scrcpy\scrcpy.exe" (
 
 set "PATH=C:\PhoneHub\runtime\scrcpy;%PATH%"
 
+where python >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Python was not found.
+  pause
+  exit /b 1
+)
+
+echo [PhoneHub] Checking Python dependencies...
+python -c "import PySide6" >nul 2>&1
+if errorlevel 1 (
+  echo [PhoneHub] Installing required Python UI package...
+  python -m pip install --disable-pip-version-check -r "C:\PhoneHub\requirements.txt"
+  if errorlevel 1 (
+    echo [ERROR] Python dependency installation failed.
+    pause
+    exit /b 1
+  )
+)
+
 where adb >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] ADB runtime not found after setup.
@@ -47,6 +66,8 @@ if not exist "C:\PhoneHub\runtime\scrcpy\scrcpy.exe" (
 )
 
 echo [OK] Tailscale found.
+echo [OK] Python found.
+echo [OK] PySide6 found.
 echo [OK] ADB found.
 echo [OK] scrcpy found.
 echo.
