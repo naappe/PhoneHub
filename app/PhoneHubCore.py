@@ -18,7 +18,7 @@ from core_runtime import (
 )
 from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v4.4-unlock-autorecover"
+APP_VERSION = "v4.5-disconnect-aware"
 
 
 class Bridge(QObject):
@@ -50,6 +50,10 @@ class PhoneHubCore(QWidget):
         self.screen_args = []
         self.screen_log = None
         self.camera_log = None
+        self.screen_log_path = LOG_DIR / "scrcpy_screen.log"
+        self.camera_log_path = LOG_DIR / "scrcpy_camera.log"
+        self.screen_log_offset = 0
+        self.camera_log_offset = 0
 
         self.build_ui()
         self.apply_style()
@@ -60,12 +64,12 @@ class PhoneHubCore(QWidget):
         self.status_timer.start()
 
         self.screen_timer = QTimer(self)
-        self.screen_timer.setInterval(900)
+        self.screen_timer.setInterval(300)
         self.screen_timer.timeout.connect(self.watch_screen)
         self.screen_timer.start()
 
         self.camera_timer = QTimer(self)
-        self.camera_timer.setInterval(1000)
+        self.camera_timer.setInterval(500)
         self.camera_timer.timeout.connect(self.watch_camera)
         self.camera_timer.start()
 
@@ -334,16 +338,18 @@ class PhoneHubCore(QWidget):
         self.footer.setText(text)
 
     def refresh_status(self):
-        self.set_footer("Checking phone…")
         media_active = (
-            (self.screen_proc is not None and self.screen_proc.poll() is None)
-            or (self.camera_proc is not None and self.camera_proc.poll() is None)
+            self.screen_requested
+            or self.camera_requested
+            or self.screen_recovering
         )
+        if media_active:
+            return
+
+        self.set_footer("Checking phone…")
 
         def worker():
-            # Do not reconnect ADB while scrcpy/camera is running. A reconnect
-            # can terminate the very media session we are trying to monitor.
-            if target() and not media_active and not shell_probe(target(), timeout=2):
+            if target() and not shell_probe(target(), timeout=2):
                 ensure_remote(wait_stable=False)
             self.bridge.status.emit(device_snapshot())
 
@@ -419,10 +425,12 @@ class PhoneHubCore(QWidget):
             run(["adb","-s",serial,"shell","input","keyevent","224"],timeout=3)
 
         LOG_DIR.mkdir(parents=True,exist_ok=True)
-        log_path=LOG_DIR/"scrcpy_screen.log"
+        log_path=self.screen_log_path
         try:
             self.screen_log=open(log_path,"a",encoding="utf-8",buffering=1)
             self.screen_log.write(f"\nSTART {time.strftime('%Y-%m-%d %H:%M:%S')} {serial}\n")
+            self.screen_log.flush()
+            self.screen_log_offset=self.screen_log.tell()
             self.screen_proc=spawn(
                 [exe,"-s",serial]+args,
                 stdout=self.screen_log,
@@ -466,38 +474,91 @@ class PhoneHubCore(QWidget):
             self.screen_log=None
         self.set_footer("Screen disconnected.")
 
-    def watch_screen(self):
+    def _read_new_log_text(self, path, attr_name):
+        try:
+            offset=getattr(self, attr_name, 0)
+            if not path.exists():
+                return ""
+            with open(path,"r",encoding="utf-8",errors="ignore") as fh:
+                fh.seek(offset)
+                text=fh.read()
+                setattr(self, attr_name, fh.tell())
+                return text
+        except Exception:
+            return ""
+
+    def _screen_disconnect_logged(self):
+        text=self._read_new_log_text(
+            self.screen_log_path, "screen_log_offset"
+        ).lower()
+        return (
+            "device disconnected" in text
+            or "server disconnected" in text
+            or "connection reset" in text
+            or "broken pipe" in text
+        )
+
+    def _camera_disconnect_logged(self):
+        text=self._read_new_log_text(
+            self.camera_log_path, "camera_log_offset"
+        ).lower()
+        return (
+            "device disconnected" in text
+            or "server disconnected" in text
+            or "connection reset" in text
+            or "broken pipe" in text
+        )
+
+    def _begin_screen_recovery(self, reason):
         if not self.screen_requested or self.screen_recovering:
             return
 
+        self.screen_recovering=True
         p=self.screen_proc
-        if p is None or p.poll() is None:
-            return
-
-        # On some OnePlus/OxygenOS builds scrcpy may exit with code 0 or 1 when
-        # secure unlock briefly resets wireless ADB. Do not treat the exit code
-        # as a user-requested close. Only Disconnect clears screen_requested.
-        code=p.poll()
         self.screen_proc=None
+        if p and p.poll() is None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+
         if self.screen_log:
             try:
-                self.screen_log.write(f"EXIT code={code} at {time.strftime('%H:%M:%S')}\n")
+                self.screen_log.write(
+                    f"RECOVERY reason={reason} at {time.strftime('%H:%M:%S')}\n"
+                )
                 self.screen_log.close()
             except Exception:
                 pass
             self.screen_log=None
 
-        self.screen_recovering=True
-        self.set_footer("Unlock changed Android ADB. Reconnecting screen automatically…")
+        self.set_footer("Phone unlock reset ADB. Restoring screen…")
 
         def worker():
-            # Wait for ADB to survive two consecutive shell probes before
-            # reopening scrcpy. This avoids the reopen-close loop during PIN
-            # authentication.
             ok=ensure_remote(wait_stable=True)
             self.bridge.recovery.emit(ok)
 
         threading.Thread(target=worker,daemon=True).start()
+
+    def watch_screen(self):
+        if not self.screen_requested or self.screen_recovering:
+            return
+
+        p=self.screen_proc
+        if p is None:
+            self._begin_screen_recovery("screen process missing")
+            return
+
+        # scrcpy 4.1 keeps its window visible for about two seconds after ADB
+        # disappears and renders the large disconnected-phone icon. Detect the
+        # warning in scrcpy's live log immediately instead of waiting for the
+        # process/window to close.
+        if p.poll() is None:
+            if self._screen_disconnect_logged():
+                self._begin_screen_recovery("scrcpy reported device disconnected")
+            return
+
+        self._begin_screen_recovery(f"scrcpy exited code {p.poll()}")
 
     def finish_recovery(self,ok):
         if not self.screen_requested:
@@ -549,7 +610,7 @@ class PhoneHubCore(QWidget):
         self._close_camera_process_only()
 
         LOG_DIR.mkdir(parents=True,exist_ok=True)
-        log_path=LOG_DIR/"scrcpy_camera.log"
+        log_path=self.camera_log_path
 
         args=[
             exe,"-s",serial,
@@ -569,6 +630,8 @@ class PhoneHubCore(QWidget):
                 f"\nSTART {time.strftime('%Y-%m-%d %H:%M:%S')} "
                 f"{serial} facing={facing}\n"
             )
+            self.camera_log.flush()
+            self.camera_log_offset=self.camera_log.tell()
             self.camera_proc=spawn(
                 args,
                 stdout=self.camera_log,
@@ -605,23 +668,46 @@ class PhoneHubCore(QWidget):
     def watch_camera(self):
         if not self.camera_requested:
             return
+
         p=self.camera_proc
-        if p is None or p.poll() is None:
+        if p is None:
+            facing=self.camera_facing or "back"
+            QTimer.singleShot(900, lambda f=facing: self.open_camera(f))
             return
 
-        code=p.poll()
+        if p.poll() is None:
+            if not self._camera_disconnect_logged():
+                return
+
+            # Kill the stale disconnected-icon window immediately. The normal
+            # camera reopen path waits for ADB to stabilize before relaunching.
+            try:
+                p.terminate()
+            except Exception:
+                pass
+            self.camera_proc=None
+            if self.camera_log:
+                try:
+                    self.camera_log.close()
+                except Exception:
+                    pass
+                self.camera_log=None
+
+            facing=self.camera_facing or "back"
+            self.set_footer("Camera connection reset. Restoring camera…")
+            QTimer.singleShot(900, lambda f=facing: self.open_camera(f))
+            return
+
+        facing=self.camera_facing or "back"
         self.camera_proc=None
         if self.camera_log:
             try:
-                self.camera_log.write(f"EXIT code={code} at {time.strftime('%H:%M:%S')}\n")
                 self.camera_log.close()
             except Exception:
                 pass
             self.camera_log=None
-
-        facing=self.camera_facing or "back"
-        self.set_footer("Camera stream changed. Reopening automatically…")
-        QTimer.singleShot(1200, lambda f=facing: self.open_camera(f))
+        self.set_footer("Camera stream ended. Reopening automatically…")
+        QTimer.singleShot(900, lambda f=facing: self.open_camera(f))
 
     def key(self,keycode):
         serial=target()
