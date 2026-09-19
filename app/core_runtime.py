@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -82,7 +83,11 @@ def save_target(ip, port=DEFAULT_PORT):
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
-def target():
+_ACTIVE_TARGET = ""
+_ACTIVE_TARGET_AT = 0.0
+
+
+def configured_target():
     cfg = read_config()
     ip = str(cfg.get("phone_ip", "")).strip()
     try:
@@ -90,6 +95,84 @@ def target():
     except Exception:
         port = DEFAULT_PORT
     return f"{ip}:{port}" if ip else ""
+
+
+def default_gateway():
+    """Return the Windows IPv4 default gateway without relying on UI language."""
+    out = run(["route", "print", "-4", "0.0.0.0"], timeout=5)
+    candidates = []
+    for line in out.splitlines():
+        cols = line.split()
+        if len(cols) >= 5 and cols[0] == "0.0.0.0" and cols[1] == "0.0.0.0":
+            gw = cols[2].strip()
+            if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", gw) and gw != "0.0.0.0":
+                try:
+                    metric = int(cols[-1])
+                except Exception:
+                    metric = 999999
+                candidates.append((metric, gw))
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
+
+def local_hotspot_target():
+    gw = default_gateway()
+    return f"{gw}:{DEFAULT_PORT}" if gw else ""
+
+
+def _probe(serial, timeout=2):
+    if not serial:
+        return False
+    return run(
+        ["adb", "-s", serial, "shell", "echo", "PHONEHUB_OK"],
+        timeout=timeout,
+    ).strip() == "PHONEHUB_OK"
+
+
+def target(force_refresh=False):
+    """Prefer a direct local-hotspot ADB path, then fall back to Tailscale."""
+    global _ACTIVE_TARGET, _ACTIVE_TARGET_AT
+    now = time.time()
+    if not force_refresh and _ACTIVE_TARGET and now - _ACTIVE_TARGET_AT < 8:
+        if _probe(_ACTIVE_TARGET, timeout=2):
+            return _ACTIVE_TARGET
+
+    local = local_hotspot_target()
+    saved = configured_target()
+    candidates = []
+    if local:
+        candidates.append(local)
+    if saved and saved not in candidates:
+        candidates.append(saved)
+
+    for serial in candidates:
+        if _probe(serial, timeout=2):
+            _ACTIVE_TARGET = serial
+            _ACTIVE_TARGET_AT = now
+            return serial
+        run(["adb", "connect", serial], timeout=4)
+        if _probe(serial, timeout=2):
+            _ACTIVE_TARGET = serial
+            _ACTIVE_TARGET_AT = now
+            return serial
+
+    _ACTIVE_TARGET = saved or local
+    _ACTIVE_TARGET_AT = now
+    return _ACTIVE_TARGET
+
+
+def connection_mode(serial=None):
+    serial = serial or target()
+    if not serial:
+        return "offline"
+    gw = local_hotspot_target()
+    if gw and serial == gw:
+        return "local-hotspot"
+    if serial.startswith("100."):
+        return "tailscale"
+    return "network"
 
 
 def adb_devices():
@@ -105,13 +188,11 @@ def adb_devices():
 
 def shell_probe(serial=None, timeout=3):
     serial = serial or target()
-    if not serial:
-        return False
-    return run(["adb", "-s", serial, "shell", "echo", "PHONEHUB_OK"], timeout=timeout).strip() == "PHONEHUB_OK"
+    return _probe(serial, timeout=timeout)
 
 
 def ensure_remote(wait_stable=True):
-    serial = target()
+    serial = target(force_refresh=True)
     if not serial:
         return False
     if not shell_probe(serial):
@@ -157,7 +238,14 @@ def scrcpy_path():
 def device_snapshot():
     serial = target()
     if not serial or not shell_probe(serial):
-        return {"online": False, "target": serial, "model": "-", "android": "-", "battery": "-"}
+        return {
+            "online": False,
+            "target": serial,
+            "mode": connection_mode(serial) if serial else "offline",
+            "model": "-",
+            "android": "-",
+            "battery": "-",
+        }
     model = run(["adb", "-s", serial, "shell", "getprop", "ro.product.model"], timeout=4) or "-"
     android = run(["adb", "-s", serial, "shell", "getprop", "ro.build.version.release"], timeout=4) or "-"
     battery_raw = run(["adb", "-s", serial, "shell", "dumpsys", "battery"], timeout=5)
@@ -166,7 +254,14 @@ def device_snapshot():
         if "level:" in line:
             battery = line.split(":", 1)[1].strip()
             break
-    return {"online": True, "target": serial, "model": model, "android": android, "battery": battery}
+    return {
+        "online": True,
+        "target": serial,
+        "mode": connection_mode(serial),
+        "model": model,
+        "android": android,
+        "battery": battery,
+    }
 
 
 def screenshot():
