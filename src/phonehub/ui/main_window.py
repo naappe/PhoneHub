@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
         super().__init__(); self.setWindowTitle("PhoneHub 5.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
         self.state=AppState(); self.state.device_changed.connect(self.render)
         self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.setup=SetupService(self.adb); self.media=MediaSessionManager()
-        self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_wanted=False; self.screen_watch_busy=False; self.screen_restarting=False
+        self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_wanted=False; self.screen_watch_busy=False; self.screen_restarting=False; self.screen_started_once=False
         self.screen_watch=QTimer(self); self.screen_watch.setInterval(2500); self.screen_watch.timeout.connect(self._watch_screen)
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
         root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
@@ -179,8 +179,9 @@ class MainWindow(QMainWindow):
             if not self.screen_watch.isActive(): self.screen_watch.start()
             return
         ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText()))
+        self.screen_started_once=ok
         self.screenmsg.setText("Remote screen active" if ok else msg)
-        if not self.screen_watch.isActive(): self.screen_watch.start()
+        if ok and not self.screen_watch.isActive(): self.screen_watch.start()
     def _watch_screen(self):
         if not self.screen_wanted or self.screen_watch_busy: return
         self.screen_watch_busy=True
@@ -192,17 +193,19 @@ class MainWindow(QMainWindow):
         if snap.state!=ConnectionState.ONLINE:
             self.screenmsg.setText("Phone locked/offline • waiting for unlock…")
             return
-        if not self.media.active and not self.screen_restarting:
-            self.screen_restarting=True
-            self.screenmsg.setText("Phone online • restoring screen…")
-            ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText()))
-            self.screen_restarting=False
-            self.screenmsg.setText("Screen restored" if ok else msg)
+        if self.screen_started_once and not self.media.active:
+            # A closed scrcpy window is treated as an explicit user Close.
+            # Do not reopen it in a loop. Recovery will only run while the
+            # original media process still owns the session.
+            self.screen_wanted=False
+            self.screen_watch.stop()
+            self.screenmsg.setText("Screen closed")
+            return
     def open_camera(self,face):
         if not self.ready(): self.cameramsg.setText("Connect Device first"); return
         ok,msg=self.media.camera(self.cfg,face); self.cameramsg.setText(msg)
     def stop_media(self):
-        self.screen_wanted=False; self.screen_watch.stop(); self.screen_watch_busy=False; self.screen_restarting=False
+        self.screen_wanted=False; self.screen_watch.stop(); self.screen_watch_busy=False; self.screen_restarting=False; self.screen_started_once=False
         self.media.stop(); self.screenmsg.setText("Closed"); self.cameramsg.setText("Closed")
     def capture(self):
         if not self.ready(): self.filemsg.setText("Connect Device first"); return
