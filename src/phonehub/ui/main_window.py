@@ -186,22 +186,21 @@ class MainWindow(QMainWindow):
     def _watch_screen(self):
         if not self.screen_wanted or self.screen_user_closed or self.screen_watch_busy: return
         self.screen_watch_busy=True
-        self.work(lambda:self.adb.snapshot(self.cfg),self._screen_health)
-    def _screen_health(self,snap):
+        self.work(lambda:(self.adb.snapshot(self.cfg),self.adb.display_state(self.cfg)),self._screen_health)
+    def _screen_health(self,result):
         self.screen_watch_busy=False
+        snap,display=result
         self.state.set_device(snap)
         if not self.screen_wanted or self.screen_user_closed: return
-        if snap.state!=ConnectionState.ONLINE:
-            self.screenmsg.setText("Phone locked/offline • waiting for unlock…")
+        if snap.state!=ConnectionState.ONLINE or display in {"offline","screen_off","locked"}:
+            self.screenmsg.setText("Phone locked/asleep • waiting for unlock…")
             return
-        if self.screen_started_once and not self.media.active:
-            # A closed scrcpy window is treated as an explicit user Close.
-            # Do not reopen it in a loop. Recovery will only run while the
-            # original media process still owns the session.
-            self.screen_wanted=False
-            self.screen_watch.stop()
-            self.screenmsg.setText("Screen closed")
-            return
+        if not self.media.active and not self.screen_restarting:
+            self.screen_restarting=True
+            self.screenmsg.setText("Phone unlocked • restoring screen…")
+            ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText()))
+            self.screen_restarting=False
+            self.screenmsg.setText("Screen restored" if ok else msg)
     def open_camera(self,face):
         if not self.ready(): self.cameramsg.setText("Connect Device first"); return
         ok,msg=self.media.camera(self.cfg,face); self.cameramsg.setText(msg)
