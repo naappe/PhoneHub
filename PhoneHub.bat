@@ -46,10 +46,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-for /f "tokens=2 delims== " %%V in ('findstr /B /C:"APP_VERSION =" "C:\PhoneHub\app\PhoneHubTailscale.py" 2^>nul') do echo [PhoneHub] Launching %%~V
+for /f "tokens=2 delims== " %%V in ('findstr /B /C:"APP_VERSION =" "C:\PhoneHub\app\PhoneHubCore.py" 2^>nul') do echo [PhoneHub] Launching %%~V
 
 REM Start through cmd so Python import/startup failures are written to a persistent log.
-start "PhoneHub" /min cmd /c "cd /d C:\PhoneHub\app && python PhoneHubTailscale.py 1>>C:\PhoneHub\logs\phonehub_stdout.log 2>>C:\PhoneHub\logs\launcher_error.log"
+start "PhoneHub" /min cmd /c "cd /d C:\PhoneHub\app && python PhoneHubCore.py 1>>C:\PhoneHub\logs\phonehub_stdout.log 2>>C:\PhoneHub\logs\launcher_error.log"
 
 timeout /t 2 /nobreak >nul
 
