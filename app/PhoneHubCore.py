@@ -18,7 +18,7 @@ from core_runtime import (
 )
 from security_monitor import scan_device, summarize_findings
 
-APP_VERSION = "v4.5-disconnect-aware"
+APP_VERSION = "v4.6-private-screen-off"
 
 
 class Bridge(QObject):
@@ -258,7 +258,7 @@ class PhoneHubCore(QWidget):
 
         c2,c2l=self.card("Quick actions")
         row2=QHBoxLayout()
-        for text,fn in [("Screenshot",self.take_screenshot),("Wake",self.wake),("Lock",self.lock),("Back Camera",lambda:self.open_camera("back"))]:
+        for text,fn in [("Screenshot",self.take_screenshot),("Wake",self.wake),("Screen Off",self.private_screen_off),("Back Camera",lambda:self.open_camera("back"))]:
             b=QPushButton(text); b.clicked.connect(fn); row2.addWidget(b)
         c2l.addLayout(row2); l.addWidget(c2); l.addStretch()
         return w
@@ -266,18 +266,37 @@ class PhoneHubCore(QWidget):
     def page_screen(self):
         w=QWidget(); l=QVBoxLayout(w); l.setSpacing(14)
         hero=QLabel("Screen"); hero.setObjectName("hero"); l.addWidget(hero)
-        c,cl=self.card("Remote screen","Optimized for your Tailscale connection. If Android drops wireless ADB during unlock, PhoneHub waits for it to stabilize and reopens the screen once.")
+        c,cl=self.card("Remote screen","Use Screen Off for a private black phone display while keeping remote control alive. Secure Lock uses Android keyguard and can reset wireless ADB on this OnePlus.")
         row=QHBoxLayout()
         a=QPushButton("Open Screen"); a.setObjectName("primary"); a.clicked.connect(self.open_screen)
-        b=QPushButton("Screen Off + Control"); b.clicked.connect(self.open_screen_off)
+        b=QPushButton("Private Screen Off"); b.clicked.connect(self.open_screen_off)
         d=QPushButton("Disconnect"); d.setObjectName("danger"); d.clicked.connect(self.disconnect_screen)
         row.addWidget(a,2); row.addWidget(b,2); row.addWidget(d); cl.addLayout(row)
         l.addWidget(c)
-        c2,c2l=self.card("Controls")
+        c2,c2l=self.card(
+            "Controls",
+            "Use Screen Off when you want privacy without breaking the remote session. Secure Lock uses Android keyguard and may reset wireless ADB on this phone."
+        )
         row2=QHBoxLayout()
-        for text,fn in [("Screenshot",self.take_screenshot),("Wake",self.wake),("Lock",self.lock),("Home",lambda:self.key("3")),("Back",lambda:self.key("4"))]:
+        for text,fn in [
+            ("Screenshot",self.take_screenshot),
+            ("Wake",self.wake),
+            ("Screen Off",self.private_screen_off),
+            ("Home",lambda:self.key("3")),
+            ("Back",lambda:self.key("4")),
+        ]:
             x=QPushButton(text); x.clicked.connect(fn); row2.addWidget(x)
-        c2l.addLayout(row2); l.addWidget(c2); l.addStretch()
+        c2l.addLayout(row2)
+
+        secure_row=QHBoxLayout()
+        secure=QPushButton("Secure Lock")
+        secure.setObjectName("danger")
+        secure.clicked.connect(self.secure_lock)
+        secure_row.addStretch()
+        secure_row.addWidget(secure)
+        c2l.addLayout(secure_row)
+
+        l.addWidget(c2); l.addStretch()
         return w
 
     def page_camera(self):
@@ -404,9 +423,18 @@ class PhoneHubCore(QWidget):
         threading.Thread(target=worker,daemon=True).start()
 
     def _screen_profile(self, phone_off=False):
-        args=["--no-audio","--video-codec=h264","--max-size=720","--video-bit-rate=1M","--max-fps=15","--video-buffer=0","--window-title=PhoneHub Screen"]
+        args=[
+            "--no-audio",
+            "--video-codec=h264",
+            "--max-size=720",
+            "--video-bit-rate=1M",
+            "--max-fps=15",
+            "--video-buffer=0",
+            "--keep-active",
+            "--window-title=PhoneHub Screen",
+        ]
         if phone_off:
-            args += ["--turn-screen-off","--keep-active"]
+            args += ["--turn-screen-off"]
         return args
 
     def _start_screen(self,args,wake=True):
@@ -714,8 +742,33 @@ class PhoneHubCore(QWidget):
         if serial and shell_probe(serial):
             spawn(["adb","-s",serial,"shell","input","keyevent",keycode])
 
-    def wake(self): self.key("224")
-    def lock(self): self.key("26")
+    def wake(self):
+        self.key("224")
+
+    def private_screen_off(self):
+        # Do not send POWER/LOCK. On this OnePlus, secure lock resets wireless
+        # ADB. Instead restart scrcpy with --turn-screen-off so the physical
+        # display is black while remote control remains active.
+        was_requested=self.screen_requested
+        if self.screen_proc and self.screen_proc.poll() is None:
+            self.disconnect_screen()
+        self.screen_requested=True
+        self.screen_args=self._screen_profile(True)
+        self.screen_recovering=False
+        if self._start_screen(self.screen_args,False):
+            self.set_footer("Phone display off; remote control stays active.")
+        else:
+            self.screen_requested=was_requested
+            self.set_footer("Could not switch to private screen-off mode.")
+
+    def secure_lock(self):
+        # Real Android keyguard. The device ROM may reset wireless ADB here;
+        # PhoneHub recovery will reconnect when Android exposes ADB again.
+        self.key("26")
+        self.set_footer("Secure Lock sent. This phone may reset wireless ADB during keyguard.")
+
+    def lock(self):
+        self.secure_lock()
 
     def take_screenshot(self):
         def worker():
