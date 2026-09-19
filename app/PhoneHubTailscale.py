@@ -52,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.33-one-click-private-link"
+APP_VERSION = "v3.34-tailscale-core"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -191,7 +191,7 @@ class PhoneHubTailscale(PhoneHub):
         logo.setObjectName("logo")
         side.addWidget(logo)
 
-        sub = QLabel("Tailscale Control")
+        sub = QLabel("Private Device Control")
         sub.setObjectName("muted")
         side.addWidget(sub)
 
@@ -201,16 +201,10 @@ class PhoneHubTailscale(PhoneHub):
         pages = [
             ("Home", self.page_dashboard),
             ("Setup", self.page_setup_new_phone),
-            ("Screen", self.page_screen),
+            ("Screen & Control", self.page_screen),
             ("Camera", self.page_camera),
-            ("Audio", self.page_audio),
             ("Files", self.page_files),
-            ("Apps", self.page_apps),
-            ("Control", self.page_control),
             ("Device", self.page_device_tools),
-            ("Notifications", self.page_notifications),
-            ("App Control", self.page_app_control),
-            ("Settings", self.page_settings),
         ]
 
         for index, (name, builder) in enumerate(pages):
@@ -3851,9 +3845,8 @@ class PhoneHubTailscale(PhoneHub):
         row.addWidget(setup)
         layout.addLayout(row)
 
-        # Keep location available without making the first screen excessively tall.
-        loc_box, _, self.location_info = self.card("Location History", self._location_text())
-        layout.addWidget(loc_box)
+        # Keep the dashboard focused on connection and core device access.
+        self.location_info = QLabel("")
         layout.addStretch()
 
         return page
