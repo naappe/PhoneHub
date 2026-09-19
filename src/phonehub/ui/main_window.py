@@ -11,16 +11,19 @@ from phonehub.domain.models import DeviceSnapshot,ConnectionState
 from phonehub.services.config_service import ConfigService,DeviceConfig
 from phonehub.services.adb_service import AdbService
 from phonehub.services.media_service import MediaSessionManager
+from phonehub.services.discovery_service import DiscoveryService
 from phonehub.ui.theme import APP_STYLE
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("PhoneHub 5.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
         self.state=AppState(); self.state.device_changed.connect(self.render)
-        self.configs=ConfigService(); self.cfg=self.configs.load(); self.adb=AdbService(SubprocessRunner()); self.media=MediaSessionManager()
+        self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.media=MediaSessionManager()
         self.pool=QThreadPool.globalInstance(); self.workers=set()
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
         root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
+        if self.cfg.serial: self.auto_connect()
+        else: self.auto_discover()
 
     def sidebar(self):
         s=QFrame(); s.setObjectName("Sidebar"); s.setFixedWidth(218); l=QVBoxLayout(s); l.setContentsMargins(18,22,18,18); l.setSpacing(7)
@@ -51,7 +54,7 @@ class MainWindow(QMainWindow):
     def device_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Device","Connect your phone over its Tailscale IPv4 address.")
         c,cl=self.card("Connection"); self.ip=QLineEdit(self.cfg.phone_ip); self.ip.setPlaceholderText("100.x.x.x"); cl.addWidget(self.ip)
-        row=QHBoxLayout(); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
+        row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c); l.addStretch(); return w
     def screen_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Open one controlled scrcpy screen session.")
@@ -76,6 +79,29 @@ class MainWindow(QMainWindow):
         c,cl=self.card("Screen quality"); self.quality=QComboBox(); self.quality.addItems(["720","1080","1440"]); self.quality.setCurrentText("1080"); cl.addWidget(self.quality); self.fps=QComboBox(); self.fps.addItems(["15","30","60"]); self.fps.setCurrentText("30"); cl.addWidget(self.fps); l.addWidget(c); l.addStretch(); return w
     def work(self,fn,done):
         w=Worker(fn); self.workers.add(w); w.signals.result.connect(done); w.signals.error.connect(lambda e:self.devmsg.setText(e)); w.signals.finished.connect(lambda:self.workers.discard(w)); self.pool.start(w)
+    def auto_discover(self):
+        self.devmsg.setText("Finding Tailscale phones…")
+        self.work(self.discovery.adb_candidates,self._discovered)
+    def _discovered(self,peers):
+        if not peers:
+            self.devmsg.setText("No online Tailscale phone found. Use Connect once.")
+            return
+        self._try_peer(peers,0)
+    def _try_peer(self,peers,index):
+        if index>=len(peers):
+            self.devmsg.setText("Phones found, but none accepted ADB on port 5555.")
+            return
+        peer=peers[index]; cfg=DeviceConfig(peer.ip,5555)
+        self.devmsg.setText(f"Trying {peer.name}…")
+        self.work(lambda:self.adb.connect(cfg),lambda result:self._peer_result(peers,index,cfg,result))
+    def _peer_result(self,peers,index,cfg,result):
+        ok,msg=result
+        if ok:
+            self.cfg=self.configs.save(cfg); self.ip.setText(cfg.phone_ip); self.devmsg.setText("Connected automatically"); self.refresh()
+        else:self._try_peer(peers,index+1)
+    def auto_connect(self):
+        self.devmsg.setText("Connecting remembered phone…")
+        self.work(lambda:self.adb.connect(self.cfg),self.connected)
     def connect(self):
         try:self.cfg=self.configs.save(DeviceConfig(self.ip.text(),5555))
         except Exception as e:self.devmsg.setText(str(e)); return
