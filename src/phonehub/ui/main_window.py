@@ -105,16 +105,29 @@ class MainWindow(QMainWindow):
     def _recover_session(self):
         if self.recovery_busy or not self.cfg.serial: return
         self.recovery_busy=True
-        try:
-            snap=self.adb.snapshot(self.cfg)
+        cfg=self.cfg
+        def check():
+            snap=self.adb.snapshot(cfg)
             if snap.state in {ConnectionState.RECOVERING, ConnectionState.DISCONNECTED}:
-                self.adb.recover(self.cfg)
-                snap=self.adb.snapshot(self.cfg)
-            if snap.state==ConnectionState.ONLINE and self.screen_requested and not self.media.active:
-                ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText()))
-                if hasattr(self,'screenmsg'): self.screenmsg.setText(msg)
-        finally:
-            self.recovery_busy=False
+                self.adb.recover(cfg)
+                snap=self.adb.snapshot(cfg)
+            return snap
+        w=Worker(check); self.workers.add(w)
+        w.signals.result.connect(self._recovery_result)
+        w.signals.error.connect(self._recovery_error)
+        w.signals.finished.connect(lambda:self.workers.discard(w))
+        self.pool.start(w)
+
+    def _recovery_result(self,snap):
+        self.recovery_busy=False
+        self.state.set_device(snap)
+        if snap.state==ConnectionState.ONLINE and self.screen_requested and not self.media.active:
+            ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText()))
+            if hasattr(self,'screenmsg'): self.screenmsg.setText(msg)
+
+    def _recovery_error(self,message):
+        self.recovery_busy=False
+        if hasattr(self,'devmsg'): self.devmsg.setText(message)
     def render(self,s:DeviceSnapshot):
         self.device_metric.setText(s.device_name); battery=f" • {s.battery_percent}%" if s.battery_percent is not None else ""; self.detail.setText(f"{s.detail}{battery} • Android {s.android_version}"); self.badge.setText(f"● {s.state.value.title()}")
         if hasattr(self,"devmsg"): self.devmsg.setText(s.detail)
