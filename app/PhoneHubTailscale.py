@@ -52,7 +52,7 @@ from PhoneHub import (
 )
 from phone_config import normalize_tailscale_ipv4
 
-APP_VERSION = "v3.34-tailscale-core"
+APP_VERSION = "v3.35-core-clean"
 TAILSCALE_PACKAGE = "com.tailscale.ipn"
 TAILSCALE_STABLE_PAGE = "https://pkgs.tailscale.com/stable/"
 TAILSCALE_BASE_URL = "https://pkgs.tailscale.com/stable/"
@@ -201,10 +201,10 @@ class PhoneHubTailscale(PhoneHub):
         pages = [
             ("Home", self.page_dashboard),
             ("Setup", self.page_setup_new_phone),
-            ("Screen & Control", self.page_screen),
+            ("Screen", self.page_screen),
             ("Camera", self.page_camera),
             ("Files", self.page_files),
-            ("Device", self.page_device_tools),
+            ("Protection", self.page_security),
         ]
 
         for index, (name, builder) in enumerate(pages):
@@ -384,105 +384,36 @@ class PhoneHubTailscale(PhoneHub):
         layout.setSpacing(12)
 
         main_box, main_layout, _ = self.card(
-            "Screen Studio",
-            "Choose a practical screen profile, then open the phone screen. "
-            "H.264 + zero video buffer is the default low-latency path.",
+            "Screen Control",
+            "Open and control your phone through the private Tailscale connection.",
         )
 
-        self.screen_profile_label = QLabel(
-            "Profile: Balanced · 1024 max · 4 Mbps · 30 FPS · H.264 · 0 ms buffer"
-        )
-        self.screen_profile_label.setObjectName("sideStatus")
-        self.screen_profile_label.setWordWrap(True)
-        main_layout.addWidget(self.screen_profile_label)
-
-        profile_row = QHBoxLayout()
-
-        fast = QPushButton("Fast")
-        fast.clicked.connect(lambda: self.set_screen_profile(
-            "Fast",
-            ["--max-size=720", "--video-bit-rate=2M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
-            "720 max · 2 Mbps · 30 FPS · H.264 · 0 ms buffer",
-        ))
-
-        balanced = QPushButton("Balanced")
-        balanced.setObjectName("primary")
-        balanced.clicked.connect(lambda: self.set_screen_profile(
-            "Balanced",
-            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
-            "1024 max · 4 Mbps · 30 FPS · H.264 · 0 ms buffer",
-        ))
-
-        quality = QPushButton("High Quality")
-        quality.clicked.connect(lambda: self.set_screen_profile(
-            "High Quality",
-            ["--max-size=1920", "--video-bit-rate=8M", "--max-fps=30", "--video-codec=h264", "--video-buffer=0"],
-            "1920 max · 8 Mbps · 30 FPS · H.264 · 0 ms buffer",
-        ))
-
-        smooth = QPushButton("Smooth")
-        smooth.clicked.connect(lambda: self.set_screen_profile(
-            "Smooth",
-            ["--max-size=1024", "--video-bit-rate=4M", "--max-fps=30", "--video-codec=h264", "--video-buffer=50"],
-            "1024 max · 4 Mbps · 30 FPS · H.264 · 50 ms buffer",
-        ))
-
-        profile_row.addWidget(fast)
-        profile_row.addWidget(balanced)
-        profile_row.addWidget(quality)
-        profile_row.addWidget(smooth)
-        main_layout.addLayout(profile_row)
-
-        open_row = QHBoxLayout()
+        row = QHBoxLayout()
 
         open_btn = QPushButton("Open Screen")
         open_btn.setObjectName("primary")
-        open_btn.setMinimumHeight(44)
+        open_btn.setMinimumHeight(46)
         open_btn.clicked.connect(self.open_selected_screen_profile)
 
         screen_off = QPushButton("Open + Phone Screen Off")
         screen_off.clicked.connect(self.open_screen_phone_off)
 
-        close_btn = QPushButton("Disconnect Screen")
+        close_btn = QPushButton("Disconnect")
         close_btn.setObjectName("danger")
         close_btn.clicked.connect(self.disconnect_screen)
 
-        open_row.addWidget(open_btn)
-        open_row.addWidget(screen_off)
-        open_row.addWidget(close_btn)
-        main_layout.addLayout(open_row)
+        row.addWidget(open_btn, 2)
+        row.addWidget(screen_off, 2)
+        row.addWidget(close_btn, 1)
+        main_layout.addLayout(row)
         layout.addWidget(main_box)
 
-        controls_box, controls_layout, _ = self.card(
-            "Quick Controls",
-            "Common controls without needing scrcpy keyboard shortcuts.",
+        tools_box, tools_layout, _ = self.card(
+            "Essential Controls",
+            "Only the controls needed during normal remote use.",
         )
 
-        controls_row = QHBoxLayout()
-
-        home = QPushButton("Home")
-        home.clicked.connect(lambda: self.screen_adb_key("3", "Home"))
-
-        back = QPushButton("Back")
-        back.clicked.connect(lambda: self.screen_adb_key("4", "Back"))
-
-        apps = QPushButton("Recent Apps")
-        apps.clicked.connect(lambda: self.screen_adb_key("187", "Recent Apps"))
-
-        notifications = QPushButton("Notifications")
-        notifications.clicked.connect(self.expand_android_notifications)
-
-        collapse = QPushButton("Collapse")
-        collapse.clicked.connect(self.collapse_android_notifications)
-
-        controls_row.addWidget(home)
-        controls_row.addWidget(back)
-        controls_row.addWidget(apps)
-        controls_row.addWidget(notifications)
-        controls_row.addWidget(collapse)
-        controls_layout.addLayout(controls_row)
-
-        second_row = QHBoxLayout()
+        tools = QHBoxLayout()
 
         shot = QPushButton("Screenshot")
         shot.clicked.connect(self.screenshot_async)
@@ -493,40 +424,48 @@ class PhoneHubTailscale(PhoneHub):
         lock = QPushButton("Lock")
         lock.clicked.connect(self.lock_phone)
 
-        second_row.addWidget(shot)
-        second_row.addWidget(wake)
-        second_row.addWidget(lock)
-        controls_layout.addLayout(second_row)
-        layout.addWidget(controls_box)
+        home = QPushButton("Home")
+        home.clicked.connect(lambda: self.screen_adb_key("3", "Home"))
 
-        diag_box, diag_layout, _ = self.card(
-            "Screen Diagnostics",
-            "Use these when screen quality, lag, encoder compatibility or secondary displays need checking.",
+        back = QPushButton("Back")
+        back.clicked.connect(lambda: self.screen_adb_key("4", "Back"))
+
+        tools.addWidget(shot)
+        tools.addWidget(wake)
+        tools.addWidget(lock)
+        tools.addWidget(home)
+        tools.addWidget(back)
+        tools_layout.addLayout(tools)
+
+        layout.addWidget(tools_box)
+        layout.addStretch()
+        return page
+
+    def page_files(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        box, box_layout, _ = self.card(
+            "PhoneHub Files",
+            "Keep PhoneHub captures and evidence organized. No location-history tools are shown.",
         )
 
-        diag_row = QHBoxLayout()
+        row = QHBoxLayout()
 
-        encoders = QPushButton("List Encoders")
-        encoders.clicked.connect(self.screen_list_encoders)
+        screenshots = QPushButton("Open Screenshots")
+        screenshots.setObjectName("primary")
+        screenshots.clicked.connect(self.open_screenshots)
 
-        displays = QPushButton("List Displays")
-        displays.clicked.connect(self.screen_list_displays)
+        evidence = QPushButton("Open Protection Evidence")
+        evidence.clicked.connect(self.open_security_evidence)
 
-        fps = QPushButton("FPS Test")
-        fps.clicked.connect(self.screen_fps_test)
+        row.addWidget(screenshots)
+        row.addWidget(evidence)
+        box_layout.addLayout(row)
 
-        diag_row.addWidget(encoders)
-        diag_row.addWidget(displays)
-        diag_row.addWidget(fps)
-        diag_layout.addLayout(diag_row)
-
-        self.screen_diagnostics = QTextEdit()
-        self.screen_diagnostics.setReadOnly(True)
-        self.screen_diagnostics.setMinimumHeight(150)
-        self.screen_diagnostics.setText("No screen diagnostic run yet.")
-        diag_layout.addWidget(self.screen_diagnostics)
-
-        layout.addWidget(diag_box)
+        layout.addWidget(box)
         layout.addStretch()
         return page
 
