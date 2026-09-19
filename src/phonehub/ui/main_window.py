@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
         super().__init__(); self.setWindowTitle("PhoneHub 5.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
         self.state=AppState(); self.state.device_changed.connect(self.render)
         self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.setup=SetupService(self.adb); self.media=MediaSessionManager()
-        self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_wanted=False; self.screen_watch_busy=False; self.screen_restarting=False; self.screen_started_once=False
+        self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_wanted=False; self.screen_watch_busy=False; self.screen_restarting=False; self.screen_user_closed=False; self.screen_started_once=False
         self.screen_watch=QTimer(self); self.screen_watch.setInterval(2500); self.screen_watch.timeout.connect(self._watch_screen)
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
         root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
@@ -169,6 +169,7 @@ class MainWindow(QMainWindow):
         if snap.state!=ConnectionState.ONLINE: self.state.set_device(snap); return False
         return True
     def open_screen(self):
+        self.screen_user_closed=False
         self.screen_wanted=True
         self.screenmsg.setText("Opening screen…")
         self.work(lambda:self.adb.snapshot(self.cfg),self._open_screen_ready)
@@ -183,13 +184,13 @@ class MainWindow(QMainWindow):
         self.screenmsg.setText("Remote screen active" if ok else msg)
         if ok and not self.screen_watch.isActive(): self.screen_watch.start()
     def _watch_screen(self):
-        if not self.screen_wanted or self.screen_watch_busy: return
+        if not self.screen_wanted or self.screen_user_closed or self.screen_watch_busy: return
         self.screen_watch_busy=True
         self.work(lambda:self.adb.snapshot(self.cfg),self._screen_health)
     def _screen_health(self,snap):
         self.screen_watch_busy=False
         self.state.set_device(snap)
-        if not self.screen_wanted: return
+        if not self.screen_wanted or self.screen_user_closed: return
         if snap.state!=ConnectionState.ONLINE:
             self.screenmsg.setText("Phone locked/offline • waiting for unlock…")
             return
@@ -205,7 +206,7 @@ class MainWindow(QMainWindow):
         if not self.ready(): self.cameramsg.setText("Connect Device first"); return
         ok,msg=self.media.camera(self.cfg,face); self.cameramsg.setText(msg)
     def stop_media(self):
-        self.screen_wanted=False; self.screen_watch.stop(); self.screen_watch_busy=False; self.screen_restarting=False; self.screen_started_once=False
+        self.screen_user_closed=True; self.screen_wanted=False; self.screen_watch.stop(); self.screen_watch_busy=False; self.screen_restarting=False; self.screen_started_once=False
         self.media.stop(); self.screenmsg.setText("Closed"); self.cameramsg.setText("Closed")
     def capture(self):
         if not self.ready(): self.filemsg.setText("Connect Device first"); return
