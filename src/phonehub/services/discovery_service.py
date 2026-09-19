@@ -7,6 +7,7 @@ from phonehub.services.config_service import normalize_tailscale_ipv4
 class DiscoveredPeer:
     ip: str
     name: str
+    os: str = ""
 
 class DiscoveryService:
     def __init__(self, runner):
@@ -26,5 +27,6 @@ class DiscoveryService:
                 continue
             ip = next((normalize_tailscale_ipv4(x) for x in peer.get("TailscaleIPs", []) if normalize_tailscale_ipv4(x)), "")
             if ip:
-                peers.append(DiscoveredPeer(ip, peer.get("HostName") or peer.get("DNSName", "").rstrip(".") or "Tailscale device"))
-        return peers
+                peers.append(DiscoveredPeer(ip, peer.get("HostName") or peer.get("DNSName", "").rstrip(".") or "Tailscale device", str(peer.get("OS") or "").lower()))
+        android=[p for p in peers if p.os=="android"]
+        return android or peers
