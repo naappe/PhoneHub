@@ -20,7 +20,8 @@ class MainWindow(QMainWindow):
         self.configs=ConfigService(); self.cfg=self.configs.load(); self.adb=AdbService(SubprocessRunner()); self.media=MediaSessionManager()
         self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_requested=False; self.recovery_busy=False
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
-        root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)\n        self.recovery_timer=QTimer(self); self.recovery_timer.setInterval(2500); self.recovery_timer.timeout.connect(self.poll_recovery); self.recovery_timer.start()
+        root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
+        self.recovery_timer=QTimer(self); self.recovery_timer.setInterval(2500); self.recovery_timer.timeout.connect(self._recover_session); self.recovery_timer.start()
 
     def sidebar(self):
         s=QFrame(); s.setObjectName("Sidebar"); s.setFixedWidth(218); l=QVBoxLayout(s); l.setContentsMargins(18,22,18,18); l.setSpacing(7)
@@ -45,7 +46,7 @@ class MainWindow(QMainWindow):
     def overview(self):
         w=QWidget(); l=QVBoxLayout(w); l.setSpacing(16); self.title(l,"Overview","Phone, transport and media status in one place.")
         c,cl=self.card("Device status"); self.metric=QLabel("Not connected"); self.metric.setObjectName("Metric"); cl.addWidget(self.metric); self.detail=QLabel("Configure Device to begin."); self.detail.setObjectName("Muted"); cl.addWidget(self.detail); l.addWidget(c)
-        row=QHBoxLayout()
+        row=QHBoxLayout();
         for a,b in [("Transport","Tailscale + ADB"),("Media","One session owner"),("Safety","Explicit controls only")]: row.addWidget(self.card(a,b)[0])
         l.addLayout(row); l.addStretch(); return w
     def device_page(self):
@@ -88,18 +89,32 @@ class MainWindow(QMainWindow):
         if snap.state!=ConnectionState.ONLINE: self.state.set_device(snap); return False
         return True
     def open_screen(self):
+        self.screen_requested=True
         if not self.ready(): self.screenmsg.setText("Connect Device first"); return
         ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText())); self.screen_requested=ok; self.screenmsg.setText(msg)
     def open_camera(self,face):
         if not self.ready(): self.cameramsg.setText("Connect Device first"); return
         ok,msg=self.media.camera(self.cfg,face); self.cameramsg.setText(msg)
     def stop_media(self):
-        self.media.stop(); self.screenmsg.setText("Closed"); self.cameramsg.setText("Closed")
+        self.media.stop(); self.screen_requested=False; self.screenmsg.setText("Closed"); self.cameramsg.setText("Closed")
     def capture(self):
         if not self.ready(): self.filemsg.setText("Connect Device first"); return
         p=Path.home()/"Pictures"/"PhoneHub"/f"capture_{datetime.now():%Y%m%d_%H%M%S}.png"; self.work(lambda:self.adb.screenshot(self.cfg,p),lambda r:self.filemsg.setText(r[1]))
     def diagnostics(self):
         snap=self.adb.snapshot(self.cfg); scr="Found" if self.media.scrcpy else "Missing"; self.secmsg.setText(f"ADB target: {self.cfg.serial or '-'}\nState: {snap.state.value}\nTransport: {snap.transport}\nscrcpy: {scr}")
+    def _recover_session(self):
+        if self.recovery_busy or not self.cfg.serial: return
+        self.recovery_busy=True
+        try:
+            snap=self.adb.snapshot(self.cfg)
+            if snap.state in {ConnectionState.RECOVERING, ConnectionState.DISCONNECTED}:
+                self.adb.recover(self.cfg)
+                snap=self.adb.snapshot(self.cfg)
+            if snap.state==ConnectionState.ONLINE and self.screen_requested and not self.media.active:
+                ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText()))
+                if hasattr(self,'screenmsg'): self.screenmsg.setText(msg)
+        finally:
+            self.recovery_busy=False
     def render(self,s:DeviceSnapshot):
         self.metric.setText(s.device_name); battery=f" • {s.battery_percent}%" if s.battery_percent is not None else ""; self.detail.setText(f"{s.detail}{battery} • Android {s.android_version}"); self.badge.setText(f"● {s.state.value.title()}")
         if hasattr(self,"devmsg"): self.devmsg.setText(s.detail)
