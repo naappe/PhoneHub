@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import re
 import shutil
@@ -68,14 +69,26 @@ def read_config():
     return {}
 
 
+TAILSCALE_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
+def normalize_tailscale_ipv4(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        addr = ipaddress.ip_address(text)
+    except ValueError:
+        return ""
+    if addr.version != 4 or addr not in TAILSCALE_IPV4_NETWORK:
+        return ""
+    return str(addr)
+
+
 def save_target(ip, port=DEFAULT_PORT):
-    ip = (ip or "").strip()
-    parts = ip.split(".")
-    if len(parts) != 4 or parts[0] != "100":
-        raise ValueError("Enter the phone Tailscale IPv4 address (100.x.x.x).")
-    nums = [int(x) for x in parts]
-    if any(x < 0 or x > 255 for x in nums):
-        raise ValueError("Invalid IPv4 address.")
+    ip = normalize_tailscale_ipv4(ip)
+    if not ip:
+        raise ValueError("Enter a valid Tailscale IPv4 address (100.64.0.0/10).")
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     cfg = read_config()
     cfg["phone_ip"] = ip
