@@ -2,45 +2,38 @@
 setlocal
 cd /d "%~dp0"
 set "PYTHONPATH=%~dp0src"
-set "TOOLS=%~dp0runtime\platform-tools"
-set "SCRCPY_DIR=%~dp0runtime\scrcpy"
 
 where python >nul 2>&1 || (
   echo [PhoneHub Setup] Python 3 is required.
-  echo Install Python once, then run this file again.
+  echo Install Python, then run this file again.
   pause
   exit /b 1
 )
 
 python -c "import PySide6" >nul 2>&1 || (
-  echo [PhoneHub Setup] Installing PySide6...
+  echo [PhoneHub Setup] Installing PhoneHub UI dependency...
   python -m pip install "PySide6>=6.8,<7" || goto :failed
 )
 
-where adb >nul 2>&1
+where tailscale >nul 2>&1
 if errorlevel 1 (
-  if exist "%TOOLS%\adb.exe" (
-    set "PATH=%TOOLS%;%PATH%"
-  ) else (
-    echo [PhoneHub Setup] Installing Android Platform Tools...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $u='https://dl.google.com/android/repository/platform-tools-latest-windows.zip'; $z=Join-Path $env:TEMP 'phonehub-platform-tools.zip'; Invoke-WebRequest $u -OutFile $z; New-Item -ItemType Directory -Force -Path '%~dp0runtime' | Out-Null; Expand-Archive -Force $z '%~dp0runtime'; Remove-Item $z -Force" || goto :failed
-    set "PATH=%TOOLS%;%PATH%"
+  echo [PhoneHub Setup] Tailscale is missing on this PC.
+  where winget >nul 2>&1 || (
+    echo [PhoneHub Setup] Windows Package Manager ^(winget^) is required for automatic Tailscale installation.
+    echo Install Tailscale manually, then run PhoneHub again.
+    pause
+    exit /b 1
   )
+  echo [PhoneHub Setup] Installing Tailscale automatically...
+  winget install --id Tailscale.Tailscale -e --accept-package-agreements --accept-source-agreements || goto :failed
 )
 
-where scrcpy >nul 2>&1
-if errorlevel 1 (
-  if exist "%SCRCPY_DIR%\scrcpy.exe" (
-    set "PATH=%SCRCPY_DIR%;%PATH%"
-  ) else (
-    echo [PhoneHub Setup] scrcpy is missing.
-    echo PhoneHub will open, but Screen and Camera require scrcpy.
-    echo Install scrcpy once with: winget install --exact Genymobile.scrcpy
-  )
-)
+echo [PhoneHub Setup] Tailscale available.
 
-adb start-server >nul 2>&1
-echo [PhoneHub] Starting...
+rem ADB and scrcpy are optional engineering tools in PhoneHub 6.
+rem They are not required for normal PhoneHub startup or device-online status.
+
+echo [PhoneHub] Starting PhoneHub 6...
 python -m phonehub
 exit /b %errorlevel%
 
