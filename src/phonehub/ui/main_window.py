@@ -60,7 +60,11 @@ class MainWindow(QMainWindow):
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
         sc,sl=self.card("PhoneHub 6 Auto Setup","PhoneHub checks Tailscale on this PC, detects the Android phone, and guides phone-side setup. USB/ADB are optional.")
         self.setupstep=QLabel("PhoneHub will check Tailscale and discover your phone automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
-        sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk); sr.addStretch(); sl.addLayout(sr); l.addWidget(sc); l.addStretch(); return w
+        sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk)
+        agent=QPushButton("Install PhoneHub Agent to Phone"); agent.setObjectName("Primary"); agent.clicked.connect(self.install_agent_to_phone); sr.addWidget(agent)
+        sr.addStretch(); sl.addLayout(sr)
+        self.agentmsg=QLabel("Connect and unlock the phone. PhoneHub can send the Agent APK over USB automatically."); self.agentmsg.setObjectName("Muted"); self.agentmsg.setWordWrap(True); sl.addWidget(self.agentmsg)
+        l.addWidget(sc); l.addStretch(); return w
     def screen_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Optional engineering screen tool. ADB/scrcpy are only required when this feature is used.")
         c,cl=self.card("Remote screen"); row=QHBoxLayout()
@@ -99,6 +103,31 @@ class MainWindow(QMainWindow):
         if not install.ok:
             return False,install.stderr or install.stdout or "Automatic Tailscale installation failed."
         return True,"Tailscale installed successfully on this PC."
+
+    def install_agent_to_phone(self):
+        self.agentmsg.setText("Sending PhoneHub Agent 6.1 to the connected phone…")
+        self.work(self._run_agent_bootstrap,self._agent_bootstrap_done)
+
+    def _run_agent_bootstrap(self):
+        root=Path(__file__).resolve().parents[3]
+        script=root/"AUTO_BOOTSTRAP_PHONE.ps1"
+        if not script.exists():
+            return False,"PhoneHub bootstrap script is missing."
+        apk=root/"PhoneHub-Agent-6.1.0"/"PhoneHub-Agent-6.1.0-debug.apk"
+        if not apk.exists():
+            return False,"PhoneHub Agent APK is missing. Extract PhoneHub-Agent-6.1.0.zip into C:\\PhoneHub first."
+        result=subprocess.run(
+            ["powershell","-NoProfile","-ExecutionPolicy","Bypass","-File",str(script),"-ApkPath",str(apk),"-NoPause"],
+            capture_output=True,text=True,timeout=90
+        )
+        output=(result.stdout or "")+"\n"+(result.stderr or "")
+        if result.returncode==0:
+            return True,"Agent sent to phone. On the phone, tap the APK notification/file and choose Update / Install."
+        return False,output.strip() or "Could not send PhoneHub Agent to the phone."
+
+    def _agent_bootstrap_done(self,result):
+        ok,msg=result
+        self.agentmsg.setText(("✓ " if ok else "⚠ ")+msg)
 
     def _pc_tailscale_ready(self,result):
         ok,msg=result
