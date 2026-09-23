@@ -17,14 +17,15 @@ from phonehub.ui.theme import APP_STYLE
 
 class MainWindow(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle("PhoneHub 5.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
+        super().__init__(); self.setWindowTitle("PhoneHub 6.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
         self.state=AppState(); self.state.device_changed.connect(self.render)
         self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.setup=SetupService(self.adb); self.media=MediaSessionManager()
         self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_wanted=False; self.screen_watch_busy=False; self.screen_restarting=False; self.screen_user_closed=False; self.screen_started_once=False
         self.screen_watch=QTimer(self); self.screen_watch.setInterval(2500); self.screen_watch.timeout.connect(self._watch_screen)
+        self.connection_watch=QTimer(self); self.connection_watch.setInterval(5000); self.connection_watch.timeout.connect(self.refresh); self.connection_watch.start()
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
         root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
-        self.auto_setup()
+        QTimer.singleShot(500,self.auto_setup)
 
     def sidebar(self):
         s=QFrame(); s.setObjectName("Sidebar"); s.setFixedWidth(218); l=QVBoxLayout(s); l.setContentsMargins(18,22,18,18); l.setSpacing(7)
@@ -50,18 +51,18 @@ class MainWindow(QMainWindow):
         w=QWidget(); l=QVBoxLayout(w); l.setSpacing(16); self.title(l,"Overview","Phone, transport and media status in one place.")
         c,cl=self.card("Device status"); self.device_metric=QLabel("Not connected"); self.device_metric.setObjectName("Metric"); cl.addWidget(self.device_metric); self.detail=QLabel("Configure Device to begin."); self.detail.setObjectName("Muted"); cl.addWidget(self.detail); l.addWidget(c)
         row=QHBoxLayout()
-        for a,b in [("Transport","Tailscale + ADB"),("Media","One session owner"),("Safety","Explicit controls only")]: row.addWidget(self.card(a,b)[0])
+        for a,b in [("Transport","Tailscale / PhoneHub Agent"),("ADB","Optional engineering tool"),("Safety","Protected controls")]: row.addWidget(self.card(a,b)[0])
         l.addLayout(row); l.addStretch(); return w
     def device_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Device","Automatic phone setup and connection.")
         c,cl=self.card("Connection"); self.ip=QLineEdit(self.cfg.phone_ip); self.ip.setPlaceholderText("100.x.x.x"); cl.addWidget(self.ip)
         row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
-        sc,sl=self.card("Add a new phone","PhoneHub checks USB authorization first, then prepares Tailscale and the remote link.")
-        self.setupstep=QLabel("PhoneHub is checking everything automatically…"); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
+        sc,sl=self.card("PhoneHub 6 Auto Setup","PhoneHub checks Tailscale on this PC, detects the Android phone, and guides phone-side setup. USB/ADB are optional.")
+        self.setupstep=QLabel("PhoneHub will check Tailscale and discover your phone automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
         sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk); sr.addStretch(); sl.addLayout(sr); l.addWidget(sc); l.addStretch(); return w
     def screen_page(self):
-        w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Remote Mode • Tailscale + ADB • automatically restores after reconnect.")
+        w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Optional engineering screen tool. ADB/scrcpy are only required when this feature is used.")
         c,cl=self.card("Remote screen"); row=QHBoxLayout()
         for name,fn,obj in [("Open Screen",self.open_screen,"Primary"),("Wake",lambda:self.adb.key(self.cfg,224),""),("Home",lambda:self.adb.key(self.cfg,3),""),("Back",lambda:self.adb.key(self.cfg,4),""),("Close",self.stop_media,"Danger")]:
             b=QPushButton(name); b.setObjectName(obj); b.clicked.connect(fn); row.addWidget(b)
@@ -84,8 +85,28 @@ class MainWindow(QMainWindow):
     def work(self,fn,done):
         w=Worker(fn); self.workers.add(w); w.signals.result.connect(done); w.signals.error.connect(lambda e:self.devmsg.setText(e)); w.signals.finished.connect(lambda:self.workers.discard(w)); self.pool.start(w)
     def auto_setup(self):
-        self.setupstep.setText("Auto Setup: checking USB, authorization, Tailscale and remote link…")
-        self.work(self.setup.inspect_usb,self._auto_usb)
+        self.setupstep.setText("Auto Setup: checking Tailscale on this PC…")
+        self.work(self._ensure_pc_tailscale,self._pc_tailscale_ready)
+
+    def _ensure_pc_tailscale(self):
+        check=self.runner.run(["where.exe","tailscale"],8)
+        if check.ok:
+            return True,"Tailscale is installed on this PC."
+        winget=self.runner.run(["where.exe","winget"],8)
+        if not winget.ok:
+            return False,"Tailscale is missing and winget is unavailable. Install Tailscale on the PC, then run Auto Setup again."
+        install=self.runner.run(["winget","install","--id","Tailscale.Tailscale","-e","--accept-package-agreements","--accept-source-agreements"],180)
+        if not install.ok:
+            return False,install.stderr or install.stdout or "Automatic Tailscale installation failed."
+        return True,"Tailscale installed successfully on this PC."
+
+    def _pc_tailscale_ready(self,result):
+        ok,msg=result
+        if not ok:
+            self.setupstep.setText(msg)
+            return
+        self.setupstep.setText("✓ "+msg+" Detecting Android phones on Tailscale…")
+        self.auto_discover()
     def _auto_usb(self,status):
         self.usb_serial=status.serial
         if status.stage!="ready":
@@ -134,9 +155,29 @@ class MainWindow(QMainWindow):
         self.work(self.discovery.peers,self._discovered)
     def _discovered(self,peers):
         if not peers:
-            self.devmsg.setText("No online Tailscale devices found.")
+            self.devmsg.setText("No online Android phone found on Tailscale.")
+            self.setupstep.setText("PC setup is ready. On the phone: install/open Tailscale, sign in with the same account, turn it ON, then open PhoneHub Agent. PhoneHub will detect it automatically.")
+            self.state.set_device(DeviceSnapshot(
+                state=ConnectionState.DISCONNECTED,
+                device_name="Phone offline",
+                transport="Tailscale / PhoneHub Agent",
+                detail="PC ready • phone Tailscale/Agent not online"
+            ))
             return
-        self._try_peer(peers,0)
+        peer=next((p for p in peers if p.os=="android"),peers[0])
+        try:
+            self.cfg=self.configs.save(DeviceConfig(peer.ip,5555))
+            self.ip.setText(peer.ip)
+        except Exception:
+            pass
+        self.devmsg.setText(f"Network online • {peer.name} • {peer.ip}")
+        self.setupstep.setText("✓ Tailscale phone detected. Next: open PhoneHub Agent on the phone for full policy and notification sync.")
+        self.state.set_device(DeviceSnapshot(
+            state=ConnectionState.ONLINE,
+            device_name=peer.name or "Android phone",
+            transport="Tailscale / PhoneHub Agent",
+            detail=f"Network online • {peer.ip}"
+        ))
     def _try_peer(self,peers,index):
         if index>=len(peers):
             self.devmsg.setText("No authorized Android phone found on ADB port 5555.")
@@ -154,7 +195,8 @@ class MainWindow(QMainWindow):
     def connect(self):
         try:self.cfg=self.configs.save(DeviceConfig(self.ip.text(),5555))
         except Exception as e:self.devmsg.setText(str(e)); return
-        self.devmsg.setText("Connecting…"); self.work(lambda:self.adb.connect(self.cfg),self.connected)
+        self.devmsg.setText("Checking Tailscale connection…")
+        self.refresh()
     def connected(self,result):
         ok,msg=result
         self.devmsg.setText(msg)
@@ -163,7 +205,27 @@ class MainWindow(QMainWindow):
         else:
             self.devmsg.setText("Saved phone is unavailable • finding the current online Android phone…")
             self.auto_discover()
-    def refresh(self): self.work(lambda:self.adb.snapshot(self.cfg),self.state.set_device)
+    def refresh(self):
+        self.work(self._network_snapshot,self.state.set_device)
+
+    def _network_snapshot(self):
+        peers=self.discovery.peers()
+        peer=next((p for p in peers if p.ip==self.cfg.phone_ip),None)
+        if peer is None:
+            peer=next((p for p in peers if p.os=="android"),None)
+        if peer is not None:
+            return DeviceSnapshot(
+                state=ConnectionState.ONLINE,
+                device_name=peer.name or "Android phone",
+                transport="Tailscale / PhoneHub Agent",
+                detail=f"Network online • {peer.ip}"
+            )
+        return DeviceSnapshot(
+            state=ConnectionState.DISCONNECTED,
+            device_name="Phone offline",
+            transport="Tailscale / PhoneHub Agent",
+            detail="No online Android phone found on Tailscale"
+        )
     def ready(self):
         snap=self.adb.snapshot(self.cfg)
         if snap.state!=ConnectionState.ONLINE: self.state.set_device(snap); return False
