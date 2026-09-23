@@ -116,4 +116,4 @@ Write-Host "  Files > Downloads > $sourceName > Update / Install" -ForegroundCol
 Write-Host ""
 Write-Host "After PhoneHub 6.1 is installed, future Tailscale setup and managed updates can be handled by PhoneHub." -ForegroundColor Green
 Write-Host ""
-pause
+if (-not $NoPause) { pause }
