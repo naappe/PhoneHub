@@ -30,6 +30,27 @@ if (!(Test-Path $ApkPath)) {
     exit 1
 }
 
+# Fast path: if an authorized ADB device is already available, install/update directly.
+# ADB is optional; normal PhoneHub operation does not depend on it.
+$adb = Get-Command adb -ErrorAction SilentlyContinue
+if ($null -ne $adb) {
+    $devices = & adb devices 2>$null
+    $authorized = @($devices | Select-String -Pattern "\tdevice$")
+
+    if ($authorized.Count -gt 0) {
+        Write-Host "[PhoneHub] Authorized Android service link found." -ForegroundColor Green
+        Write-Host "[PhoneHub] Installing PhoneHub Agent directly..." -ForegroundColor Cyan
+        & adb install -r "$ApkPath"
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host ""
+            Write-Host "[PhoneHub] PhoneHub Agent installed/updated successfully." -ForegroundColor Green
+            if (-not $NoPause) { pause }
+            exit 0
+        }
+        Write-Host "[PhoneHub] Direct install unavailable. Falling back to USB file transfer..." -ForegroundColor Yellow
+    }
+}
+
 $shell = New-Object -ComObject Shell.Application
 $thisPc = $shell.Namespace(17)
 if ($null -eq $thisPc) {
@@ -114,6 +135,7 @@ Write-Host ""
 Write-Host "PHONE - ONE FINAL TAP:" -ForegroundColor Cyan
 Write-Host "  Files > Downloads > $sourceName > Update / Install" -ForegroundColor White
 Write-Host ""
-Write-Host "After PhoneHub 6.1 is installed, future Tailscale setup and managed updates can be handled by PhoneHub." -ForegroundColor Green
+Write-Host "Android requires the final install confirmation when only USB file transfer is available." -ForegroundColor Yellow
+Write-Host "After PhoneHub Agent is active, PhoneHub can use the managed update path for future supported updates." -ForegroundColor Green
 Write-Host ""
 if (-not $NoPause) { pause }
