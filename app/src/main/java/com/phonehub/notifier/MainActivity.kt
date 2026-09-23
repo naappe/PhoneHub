@@ -98,11 +98,13 @@ private fun StatusCard(title: String, value: String, supporting: String, icon: @
 
 @Composable
 fun HomeScreen(controller: DevicePolicyController, store: PolicyStore, onApps: () -> Unit, onPolicies: () -> Unit, onSettings: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val tailscale = remember { TailscaleInstaller(context) }
     val apps = remember { controller.installedApps() }
     val suspended = apps.count { store.get(it.packageName).suspended }
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Header("PhoneHub", "Your device. Your control.") }
-        item { StatusCard("Connection", if (store.receiverUrl().isBlank()) "Not configured" else "Configured", "PhoneHub receiver", { Icon(Icons.Default.Wifi, null) }, onSettings) }
+        item { StatusCard("Connection", if (tailscale.isInstalled()) "Tailscale installed" else "Tailscale missing", if (store.receiverUrl().isBlank()) "Receiver not configured" else "Receiver configured", { Icon(Icons.Default.Wifi, null) }, onSettings) }
         item { StatusCard("Device Owner", if (controller.isDeviceOwner()) "Active" else "Inactive", if (controller.isDeviceOwner()) "Policy controls available" else "Provisioning required", { Icon(Icons.Default.AdminPanelSettings, null) }, onSettings) }
         item { StatusCard("Managed Apps", "${apps.size} apps", "$suspended suspended", { Icon(Icons.Default.Apps, null) }, onApps) }
         item { StatusCard("Policies", if (store.autoApply()) "Auto apply ON" else "Auto apply OFF", "Tap to manage policy behavior", { Icon(Icons.Default.Policy, null) }, onPolicies) }
@@ -203,11 +205,39 @@ fun NotificationsScreen(store: PolicyStore) {
 @Composable
 fun SettingsScreen(store: PolicyStore, controller: DevicePolicyController) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val tailscale = remember { TailscaleInstaller(context) }
     var url by remember { mutableStateOf(store.receiverUrl()) }
     var token by remember { mutableStateOf(store.pairingToken()) }
     var saved by remember { mutableStateOf(false) }
+    var installStatus by remember { mutableStateOf(if (tailscale.isInstalled()) "Installed" else "Not installed") }
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Header("Settings", "Connection, protection and device status") }
+        item { Text("Tailscale Manager", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+        item {
+            StatusCard(
+                "Tailscale",
+                if (tailscale.isInstalled()) "Installed" else "Missing",
+                installStatus,
+                { Icon(Icons.Default.VpnKey, null) }
+            )
+        }
+        item {
+            Button(
+                onClick = {
+                    installStatus = "Starting managed install…"
+                    tailscale.installLatest { progress -> installStatus = progress.message }
+                },
+                enabled = controller.isDeviceOwner(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Download, null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (tailscale.isInstalled()) "Update Tailscale" else "Install Tailscale")
+            }
+        }
+        if (!controller.isDeviceOwner()) item {
+            Text("Managed install requires PhoneHub Device Owner.", color = MaterialTheme.colorScheme.error)
+        }
         item { Text("Connection", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         item { OutlinedTextField(url, { url = it; saved = false }, label = { Text("Receiver URL") }, modifier = Modifier.fillMaxWidth()) }
         item { OutlinedTextField(token, { token = it; saved = false }, label = { Text("Pairing token") }, modifier = Modifier.fillMaxWidth()) }
