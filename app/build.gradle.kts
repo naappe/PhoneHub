@@ -40,3 +40,5 @@ dependencies {
 // PhoneHub 6.1 cloud build trigger
 
 // PhoneHub 6.1 cloud rebuild after workflow fix
+
+// rebuild after sdkmanager path fix
