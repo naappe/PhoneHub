@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">PhoneHub</string>
+    <string name="device_admin_description">PhoneHub managed-device policy controller.</string>
+</resources>

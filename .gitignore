@@ -10,3 +10,7 @@ build/
 *.spec
 .DS_Store
 Thumbs.db
+
+.gradle/
+
+local.properties
