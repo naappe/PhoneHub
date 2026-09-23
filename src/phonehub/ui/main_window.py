@@ -61,9 +61,9 @@ class MainWindow(QMainWindow):
         sc,sl=self.card("PhoneHub 6 Auto Setup","PhoneHub checks Tailscale on this PC, detects the Android phone, and guides phone-side setup. USB/ADB are optional.")
         self.setupstep=QLabel("PhoneHub will check Tailscale and discover your phone automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
         sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk)
-        agent=QPushButton("Install PhoneHub Agent to Phone"); agent.setObjectName("Primary"); agent.clicked.connect(self.install_agent_to_phone); sr.addWidget(agent)
+        agent=QPushButton("Install / Update Agent"); agent.setObjectName("Primary"); agent.clicked.connect(self.install_agent_to_phone); sr.addWidget(agent)
         sr.addStretch(); sl.addLayout(sr)
-        self.agentmsg=QLabel("Connect and unlock the phone. PhoneHub can send the Agent APK over USB automatically."); self.agentmsg.setObjectName("Muted"); self.agentmsg.setWordWrap(True); sl.addWidget(self.agentmsg)
+        self.agentmsg=QLabel("Connect and unlock the phone. PhoneHub will direct-install when an authorized service link exists; otherwise it will copy the Agent automatically over USB."); self.agentmsg.setObjectName("Muted"); self.agentmsg.setWordWrap(True); sl.addWidget(self.agentmsg)
         l.addWidget(sc); l.addStretch(); return w
     def screen_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Optional engineering screen tool. ADB/scrcpy are only required when this feature is used.")
@@ -122,7 +122,9 @@ class MainWindow(QMainWindow):
         )
         output=(result.stdout or "")+"\n"+(result.stderr or "")
         if result.returncode==0:
-            return True,"Agent sent to phone. On the phone, tap the APK notification/file and choose Update / Install."
+            if "installed/updated successfully" in output.lower():
+            return True,"PhoneHub Agent installed/updated directly."
+        return True,"Agent copied to the phone. Android still requires one Update / Install confirmation because only USB file transfer is available."
         return False,output.strip() or "Could not send PhoneHub Agent to the phone."
 
     def _agent_bootstrap_done(self,result):
