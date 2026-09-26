@@ -13,4 +13,5 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "PhoneHub"
-include(":app")\ninclude(":companion")\n
+include(":app")
+include(":companion")
