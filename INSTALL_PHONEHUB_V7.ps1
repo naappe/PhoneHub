@@ -2,7 +2,7 @@ param()
 $ErrorActionPreference="Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 $Root=Split-Path -Parent $MyInvocation.MyCommand.Path
-$Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev3.apk"
+$Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev4.apk"
 $Pkg="com.phonehub.companion"
 if(-not(Test-Path $Apk)){throw "APK not found: $Apk"}
 if(-not(Get-Command adb -ErrorAction SilentlyContinue)){throw "adb not found."}
