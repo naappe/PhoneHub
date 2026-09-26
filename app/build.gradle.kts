@@ -42,3 +42,5 @@ dependencies {
 // PhoneHub 6.1 cloud rebuild after workflow fix
 
 // rebuild after sdkmanager path fix
+
+// PhoneHub 6.2 remote-screen build trigger
