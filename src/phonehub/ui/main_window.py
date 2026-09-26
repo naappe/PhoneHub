@@ -503,6 +503,7 @@ class MainWindow(QMainWindow):
     def open_screen(self):
         self.screen_user_closed=False
         self.screen_wanted=True
+        self.screen_fallback_started=False
         self.screenmsg.setText("Checking PhoneHub Agent over Tailscale…")
         ip=self.cfg.phone_ip
         if ip:
@@ -532,6 +533,10 @@ class MainWindow(QMainWindow):
             self.screenmsg.setText("PhoneHub Agent remote service is not available over Tailscale. Run Auto Setup once with USB connected to update/verify Agent 6.2.")
 
     def _open_screen_fallback(self):
+        # Fallback is user-triggered only. Never keep resurrecting a scrcpy
+        # window after the user closes it.
+        if self.screen_user_closed or self.screen_fallback_started:
+            return
         cfg=self._engineering_cfg()
         self.work(lambda:self.adb.snapshot(cfg),lambda snap:self._open_screen_ready(cfg,snap))
 
@@ -559,7 +564,8 @@ class MainWindow(QMainWindow):
             return
         ok,msg=self.media.screen(cfg,int(self.quality.currentText()),int(self.fps.currentText()))
         self.screen_started_once=ok
-        self.screenmsg.setText("Remote screen active" if ok else msg)
+        self.screen_fallback_started=ok
+        self.screenmsg.setText("Engineering USB/ADB screen active" if ok else msg)
         if ok and not self.screen_watch.isActive(): self.screen_watch.start()
     def _watch_screen(self):
         if not self.screen_wanted or self.screen_user_closed or self.screen_watch_busy: return
@@ -579,19 +585,21 @@ class MainWindow(QMainWindow):
         if display=="locked":
             self.screenmsg.setText("Phone is locked • waiting for unlock…")
             return
-        if not self.media.active and not self.screen_restarting:
-            self.screen_restarting=True
-            self.screenmsg.setText("Phone unlocked • restoring screen…")
-            ok,msg=self.media.screen(cfg,int(self.quality.currentText()),int(self.fps.currentText()))
-            self.screen_restarting=False
-            self.screenmsg.setText("Screen restored" if ok else msg)
+        if self.screen_fallback_started and not self.media.active:
+            # scrcpy exited after being opened. Treat that as an intentional
+            # close; do not automatically reopen it in a watchdog loop.
+            self.screen_user_closed=True
+            self.screen_wanted=False
+            self.screen_fallback_started=False
+            self.screen_watch.stop()
+            self.screenmsg.setText("Screen closed • press Open Screen to start it again.")
     def open_camera(self,face):
         if not self.ready(): self.cameramsg.setText("Connect Device first"); return
         ok,msg=self.media.camera(self._engineering_cfg(),face); self.cameramsg.setText(msg)
     def stop_media(self):
         self.screen_user_closed=True; self.screen_wanted=False
         self.screen_watch.stop(); self.agent_screen_watch.stop()
-        self.screen_watch_busy=False; self.agent_screen_busy=False; self.screen_restarting=False; self.screen_started_once=False
+        self.screen_watch_busy=False; self.agent_screen_busy=False; self.screen_restarting=False; self.screen_started_once=False; self.screen_fallback_started=False
         if self.cfg.phone_ip:
             self.work(lambda:self.agent.stop_screen(self.cfg.phone_ip),lambda _ok:None)
         self.media.stop()
