@@ -12,8 +12,8 @@ android {
         applicationId = "com.phonehub.notifier"
         minSdk = 26
         targetSdk = 35
-        versionCode = 62
-        versionName = "6.2.0"
+        versionCode = 63
+        versionName = "6.2.1"
     }
 
     buildFeatures { compose = true }
