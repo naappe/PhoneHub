@@ -51,10 +51,30 @@ $licenses | & $SdkManager --licenses | Out-Null
 & $SdkManager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 if ($LASTEXITCODE -ne 0) { throw "Android SDK setup failed." }
 
-$secure = Read-Host "PhoneHub signing password" -AsSecureString
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-try {
+$password = $null
+$bstr = [IntPtr]::Zero
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $secure = Read-Host "PhoneHub signing password" -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     $password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    $env:PHONEHUB_STORE_PASSWORD = $password
+
+    # Validate the keystore immediately so a typo does not waste a full Gradle build.
+    & keytool -list -keystore $Keystore -storepass:env PHONEHUB_STORE_PASSWORD -alias phonehub *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[Signing] Password verified."
+        break
+    }
+
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    $bstr = [IntPtr]::Zero
+    $password = $null
+    $env:PHONEHUB_STORE_PASSWORD = $null
+    if ($attempt -lt 3) { Write-Host "[Signing] Password did not match this keystore. Try again." }
+}
+if (-not $password) { throw "Signing password verification failed after 3 attempts." }
+
+try {
     $env:PHONEHUB_STORE_PASSWORD = $password
     $env:PHONEHUB_KEY_PASSWORD = $password
     $env:PHONEHUB_KEY_ALIAS = "phonehub"
