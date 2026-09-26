@@ -14,6 +14,18 @@ class CompanionService : Service() {
     companion object {
         private const val CHANNEL = "phonehub_connection"
         private const val NOTIFICATION_ID = 7001
+        private const val PREFS = "phonehub"
+        private const val ENABLED = "companion_enabled"
+
+        fun enable(context: Context) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(ENABLED, true).apply()
+            start(context)
+        }
+
+        fun isEnabled(context: Context): Boolean =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(ENABLED, false)
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, CompanionService::class.java))
@@ -29,18 +41,13 @@ class CompanionService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentTitle("PhoneHub")
-            .setContentText("Companion connection is active")
+            .setContentText("Companion service active")
             .setOngoing(true)
             .setSilent(true)
             .build()
         startForeground(NOTIFICATION_ID, notification)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Transport/pairing is added next. Keeping the service alive first lets
-        // us validate Android/OxygenOS lifecycle behavior independently.
-        return START_STICKY
-    }
-
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
     override fun onBind(intent: Intent?): IBinder? = null
 }
