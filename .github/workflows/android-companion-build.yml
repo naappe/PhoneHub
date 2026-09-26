@@ -1,0 +1,41 @@
+name: Build PhoneHub 7 Companion
+
+on:
+  push:
+    branches:
+      - feature/phonehub-v7-companion
+    paths:
+      - "companion/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle/**"
+      - "gradle.properties"
+      - ".github/workflows/android-companion-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Android SDK
+        run: |
+          SDKMANAGER="/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      - run: chmod +x gradlew
+      - name: Build Companion APK
+        run: ./gradlew :companion:assembleDebug
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          cp companion/build/outputs/apk/debug/companion-debug.apk dist/PhoneHub-Companion-7.0.0-dev1.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhoneHub-Companion-7.0.0-dev1
+          path: dist/PhoneHub-Companion-7.0.0-dev1.apk
+          if-no-files-found: error
