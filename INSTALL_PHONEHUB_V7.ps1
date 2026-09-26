@@ -44,20 +44,31 @@ Write-Host "[2/3] Launching Companion..."
 & adb -s $serial shell monkey -p $Pkg -c android.intent.category.LAUNCHER 1 | Out-Null
 Write-Host "[3/4] Installed and launched."
 Write-Host "[4/4] Enabling authorized wireless ADB for local high-performance screen..."
-$route = (& adb -s $serial shell ip route 2>$null | Out-String)
+# Resolve the Wi-Fi interface explicitly. A generic 'ip route' can return
+# cellular/VPN routes first (for example 10.x addresses) and send adb to the
+# wrong network.
 $phoneIp = $null
-if($route -match '\bsrc\s+(\d+\.\d+\.\d+\.\d+)'){ $phoneIp=$matches[1] }
+$wifiAddr = (& adb -s $serial shell ip -4 addr show wlan0 2>$null | Out-String)
+if($wifiAddr -match '\binet\s+(\d+\.\d+\.\d+\.\d+)/\d+'){ $phoneIp=$matches[1] }
+if(-not $phoneIp){
+  $wifiRoute = (& adb -s $serial shell ip -4 route show dev wlan0 2>$null | Out-String)
+  if($wifiRoute -match '\bsrc\s+(\d+\.\d+\.\d+\.\d+)'){ $phoneIp=$matches[1] }
+}
 $tcp = (& adb -s $serial tcpip 5555 2>&1 | Out-String).Trim()
 if($LASTEXITCODE -eq 0){
   Write-Host "Wireless ADB enabled on TCP 5555."
   if($phoneIp){
     Start-Sleep -Seconds 2
     $target = "${phoneIp}:5555"
+    Write-Host "Wi-Fi target: $target"
     $connect = (& adb connect $target 2>&1 | Out-String).Trim()
-    Write-Host "Wireless target: $target"
     Write-Host $connect
+    if($connect -notmatch '(?i)(connected to|already connected)'){
+      Write-Host "Wi-Fi ADB was not reachable. PhoneHub will keep Companion/WebRTC fallback available."
+    }
   } else {
-    Write-Host "Phone Wi-Fi IP was not available; Companion will advertise it securely."
+    Write-Host "No wlan0 IPv4 address detected; skipping guessed ADB target."
+    Write-Host "PhoneHub will use Companion discovery/WebRTC fallback instead."
   }
 } else { Write-Host "Wireless ADB setup skipped: $tcp" }
 Write-Host ""
