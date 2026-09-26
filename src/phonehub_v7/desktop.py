@@ -45,7 +45,7 @@ class Window(QMainWindow):
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
         self.stack.addWidget(self.info_page("Notifications","Notification forwarding will appear here after Android notification access is enabled."))
         self.stack.addWidget(self.info_page("Settings","Connection, protection, backup, logs and new-phone setup will live here."))
-        self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000);self.screen_timer=QTimer(self);self.screen_timer.timeout.connect(self.screen_refresh);self.screen_timer.start(3000);QTimer.singleShot(400,self.refresh)
+        self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000);self.screen_timer=QTimer(self);self.screen_timer.timeout.connect(self.screen_refresh);self.screen_timer.start(5000);QTimer.singleShot(400,self.refresh)
 
     def home(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
@@ -125,9 +125,17 @@ class Window(QMainWindow):
             if result.get("type")!="screen_snapshot":
                 self.screen_status.setText("Screen sharing permission required on phone");self.screen_view.setText(result.get("message","Open PhoneHub Companion and start screen sharing."));return
             try:
-                raw=base64.b64decode(result.get("image",""));pix=QPixmap();pix.loadFromData(raw,"JPEG");self._screen_pixmap=pix
-                self.screen_view.setPixmap(pix.scaled(self.screen_view.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation));self.screen_status.setText(f"Encrypted preview • {result.get('width','?')}×{result.get('height','?')}")
-            except Exception as e:self.screen_status.setText(f"Frame decode failed: {e}")
+                raw=base64.b64decode(result.get("image",""))
+                pix=QPixmap()
+                if not raw: raise ValueError("phone returned an empty frame")
+                if not pix.loadFromData(raw): raise ValueError(f"Qt could not decode JPEG ({len(raw)} bytes)")
+                self._screen_pixmap=pix
+                self.screen_view.setText("")
+                self.screen_view.setPixmap(pix.scaled(self.screen_view.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation))
+                self.screen_status.setText(f"Encrypted preview • {result.get('width','?')}×{result.get('height','?')} • {len(raw)//1024} KB")
+            except Exception as e:
+                self.screen_status.setText(f"Frame decode failed: {e}")
+                self.screen_view.setText("A screen frame reached the PC but could not be displayed.")
         elif tag=="policy_get":
             if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
             p=result.get("policy",{})
