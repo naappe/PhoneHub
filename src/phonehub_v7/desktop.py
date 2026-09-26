@@ -1,7 +1,8 @@
 from __future__ import annotations
-import sys, json
+import sys, json, base64
 from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, QDateTime, QObject, Signal, QRunnable, QThreadPool
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QComboBox,QCheckBox,QAbstractItemView,QMenu
 from .companion_server import CompanionServer
 
@@ -28,23 +29,23 @@ class Task(QRunnable):
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False
+        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_busy=False;self._screen_pixmap=None
         self.setWindowTitle("PhoneHub 7");self.resize(1100,700);self.setMinimumSize(820,560)
         root=QWidget();self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         nav=QFrame();nav.setObjectName("nav");nav.setFixedWidth(220);nl=QVBoxLayout(nav);nl.setContentsMargins(18,24,18,24)
         brand=QLabel("PhoneHub 7");brand.setObjectName("brand");nl.addWidget(brand);nl.addSpacing(22)
         self.stack=QStackedWidget()
-        names=["Home","Apps","App Policy","Policies","Notifications","Settings"]
+        names=["Home","Screen","Apps","App Policy","Policies","Notifications","Settings"]
         for i,name in enumerate(names):
             b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));nl.addWidget(b)
             if i==0:b.setChecked(True)
         nl.addStretch();nl.addWidget(QLabel("Secure Companion"))
         outer.addWidget(nav);outer.addWidget(self.stack,1)
-        self.stack.addWidget(self.home());self.stack.addWidget(self.apps_page());self.stack.addWidget(self.policy_page())
+        self.stack.addWidget(self.home());self.stack.addWidget(self.screen_page());self.stack.addWidget(self.apps_page());self.stack.addWidget(self.policy_page())
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
         self.stack.addWidget(self.info_page("Notifications","Notification forwarding will appear here after Android notification access is enabled."))
         self.stack.addWidget(self.info_page("Settings","Connection, protection, backup, logs and new-phone setup will live here."))
-        self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000);QTimer.singleShot(400,self.refresh)
+        self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000);self.screen_timer=QTimer(self);self.screen_timer.timeout.connect(self.screen_refresh);self.screen_timer.start(3000);QTimer.singleShot(400,self.refresh)
 
     def home(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
@@ -57,6 +58,20 @@ class Window(QMainWindow):
         row2=QHBoxLayout();self.storage=Card("STORAGE",progress=True);self.memory=Card("MEMORY",progress=True);self.android=Card("ANDROID")
         for x in [self.storage,self.memory,self.android]:row2.addWidget(x)
         l.addLayout(row2);l.addStretch();return p
+
+    def screen_page(self):
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
+        top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Waiting for phone");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
+        self.screen_help=QLabel("Android requires screen-capture consent. On the phone, open PhoneHub Companion and tap Start screen sharing once for this capture session.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
+        self.screen_view=QLabel("Screen preview will appear here");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
+        b=QPushButton("Refresh screen");b.clicked.connect(self.screen_refresh);l.addWidget(b)
+        return p
+
+    def screen_refresh(self):
+        if not hasattr(self,"screen_view") or self.stack.currentIndex()!=1 or self._screen_busy:return
+        ds=self.server.devices()
+        if not ds:self.screen_status.setText("Phone offline");return
+        self._screen_busy=True;self.screen_status.setText("Requesting encrypted screen frame…");self.run_task("screen_snapshot",lambda:self.server.screen_snapshot(ds[0]))
 
     def info_page(self,title,body):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,32,36,32);h=QLabel(title);h.setObjectName("heading");l.addWidget(h);d=QLabel(body);d.setWordWrap(True);l.addWidget(d);l.addStretch();return p
@@ -104,6 +119,15 @@ class Window(QMainWindow):
             mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
             self.android.value.setText(str(s.get("android_version","—")));self.android.detail.setText(f"SDK {s.get('sdk','—')}")
             if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
+        elif tag=="screen_snapshot":
+            self._screen_busy=False
+            if isinstance(result,Exception):self.screen_status.setText(f"Screen unavailable: {result}");return
+            if result.get("type")!="screen_snapshot":
+                self.screen_status.setText("Screen sharing permission required on phone");self.screen_view.setText(result.get("message","Open PhoneHub Companion and start screen sharing."));return
+            try:
+                raw=base64.b64decode(result.get("image",""));pix=QPixmap();pix.loadFromData(raw,"JPEG");self._screen_pixmap=pix
+                self.screen_view.setPixmap(pix.scaled(self.screen_view.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation));self.screen_status.setText(f"Encrypted preview • {result.get('width','?')}×{result.get('height','?')}")
+            except Exception as e:self.screen_status.setText(f"Frame decode failed: {e}")
         elif tag=="policy_get":
             if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
             p=result.get("policy",{})
@@ -145,7 +169,7 @@ class Window(QMainWindow):
     def open_policy(self,row,col):self.select_policy(row)
     def select_policy(self,row):
         app=self.app_table.item(row,0).text();pkg=self.app_table.item(row,1).text()
-        self.policy_title.setText(app);self.policy_package.setText(pkg);self.stack.setCurrentIndex(2);self.policy_status.setText("Loading policy from phone…")
+        self.policy_title.setText(app);self.policy_package.setText(pkg);self.stack.setCurrentIndex(3);self.policy_status.setText("Loading policy from phone…")
         for cb in self.policy_checks.values():cb.setEnabled(False)
         self.policy_save.setEnabled(False)
         ds=self.server.devices()
@@ -175,6 +199,7 @@ class Window(QMainWindow):
         #heading{font-size:30px;font-weight:700;color:#111827} #policyTitle{font-size:22px;font-weight:700;color:#182033} #status{color:#16803a;font-weight:600;padding:2px 0 8px 0} #updated{color:#8490a4;font-size:12px}
         #card{background:#ffffff;border:1px solid #e1e7ef;border-radius:16px;min-height:142px}
         #cardTitle{background:transparent;color:#7a8599;font-size:11px;font-weight:700} #cardValue{background:transparent;font-size:24px;font-weight:700;color:#182033} #cardDetail{background:transparent;color:#6b768a}
+        #screenView{background:#111827;border:1px solid #d9e0ea;border-radius:14px;color:#94a3b8}
         QProgressBar{background:#edf1f6;border:0;border-radius:3px} QProgressBar::chunk{background:#2563eb;border-radius:3px}\n        QLineEdit,QComboBox{background:#fff;border:1px solid #dfe5ee;border-radius:9px;padding:9px} QTableWidget{background:#fff;border:1px solid #e1e7ef;border-radius:12px;gridline-color:#eef1f5} QHeaderView::section{background:#f7f9fc;border:0;border-bottom:1px solid #e5eaf1;padding:9px;font-weight:600}
         """)
 
