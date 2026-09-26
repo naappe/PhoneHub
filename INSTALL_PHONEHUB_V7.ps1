@@ -2,7 +2,7 @@ param()
 $ErrorActionPreference="Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 $Root=Split-Path -Parent $MyInvocation.MyCommand.Path
-$Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev15.apk"
+$Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev16.apk"
 $Pkg="com.phonehub.companion"
 if(-not(Test-Path $Apk)){throw "APK not found: $Apk"}
 if(-not(Get-Command adb -ErrorAction SilentlyContinue)){throw "adb not found."}
@@ -44,7 +44,21 @@ Write-Host "[2/3] Launching Companion..."
 & adb -s $serial shell monkey -p $Pkg -c android.intent.category.LAUNCHER 1 | Out-Null
 Write-Host "[3/4] Installed and launched."
 Write-Host "[4/4] Enabling authorized wireless ADB for local high-performance screen..."
+$route = (& adb -s $serial shell ip route 2>$null | Out-String)
+$phoneIp = $null
+if($route -match '\bsrc\s+(\d+\.\d+\.\d+\.\d+)'){ $phoneIp=$matches[1] }
 $tcp = (& adb -s $serial tcpip 5555 2>&1 | Out-String).Trim()
-if($LASTEXITCODE -eq 0){ Write-Host "Wireless ADB enabled on TCP 5555." } else { Write-Host "Wireless ADB setup skipped: $tcp" }
+if($LASTEXITCODE -eq 0){
+  Write-Host "Wireless ADB enabled on TCP 5555."
+  if($phoneIp){
+    Start-Sleep -Seconds 2
+    $target = "${phoneIp}:5555"
+    $connect = (& adb connect $target 2>&1 | Out-String).Trim()
+    Write-Host "Wireless target: $target"
+    Write-Host $connect
+  } else {
+    Write-Host "Phone Wi-Fi IP was not available; Companion will advertise it securely."
+  }
+} else { Write-Host "Wireless ADB setup skipped: $tcp" }
 Write-Host ""
 Write-Host "If this was the one-time signing migration, tap Enable automatic service once on the phone."
