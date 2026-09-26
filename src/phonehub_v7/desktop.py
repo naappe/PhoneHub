@@ -71,7 +71,7 @@ class Window(QMainWindow):
         top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Ready for live screen");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
         self.screen_help=QLabel("PhoneHub automatically uses high-performance scrcpy control on a reachable local wireless-ADB connection. Remote networks fall back to encrypted WebRTC.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
         self.screen_view=QLabel("Open this page to connect the live screen");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
-        self.screen_button=QPushButton("Reconnect live screen");self.screen_button.clicked.connect(self.start_live_screen);l.addWidget(self.screen_button)
+        self.screen_button=QPushButton("Reconnect live screen");self.screen_button.clicked.connect(self.reconnect_live_screen);l.addWidget(self.screen_button)
         return p
 
     def page_changed(self,index):
@@ -90,6 +90,10 @@ class Window(QMainWindow):
         if self._screen_device is not None:
             self.screen_client.stop(self._screen_device)
         self._screen_device=None
+
+    def reconnect_live_screen(self):
+        if self._screen_active:self.stop_live_screen()
+        QTimer.singleShot(250,self.start_live_screen)
 
     def start_live_screen(self):
         if self._screen_active:return
