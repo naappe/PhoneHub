@@ -46,11 +46,11 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(30, 26, 30, 26)
         layout.setSpacing(16)
 
-        brand = QLabel("PhoneHub")
+        brand = QLabel("PhoneHub 6.3")
         brand.setObjectName("PageTitle")
         layout.addWidget(brand)
 
-        subtitle = QLabel("PC ↔ Phone over Tailscale")
+        subtitle = QLabel("Private phone connection over Tailscale")
         subtitle.setObjectName("Muted")
         layout.addWidget(subtitle)
 
@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.pc_status)
         sl.addWidget(self.phone_status)
         sl.addWidget(self.path_status)
-        self.quality_status = QLabel("Latency: —   Transport: —")
+        self.quality_status = QLabel("Latency —   •   Route —")
         self.quality_status.setObjectName("Muted")
         sl.addWidget(self.quality_status)
 
@@ -108,12 +108,23 @@ class MainWindow(QMainWindow):
         tl.addWidget(self.quick)
         layout.addWidget(tools)
 
+        camera, cam = self.card("Camera")
+        self.camera_status = QLabel("Not configured")
+        self.camera_status.setObjectName("Muted")
+        cam.addWidget(self.camera_status)
+        camrow = QHBoxLayout()
+        self.camera_url = QLineEdit()
+        self.camera_url.setPlaceholderText("Existing camera stream URL, e.g. http://100.x.x.x:8080/video")
+        camrow.addWidget(self.camera_url)
+        open_camera = QPushButton("Open Stream")
+        open_camera.clicked.connect(self.open_camera_stream)
+        camrow.addWidget(open_camera)
+        cam.addLayout(camrow)
+        layout.addWidget(camera)
+
         guide, gl = self.card("Setup")
         instructions = QLabel(
-            "1. Tailscale ON on PC and phone.\n"
-            "2. Use the same Tailscale account.\n"
-            "3. Press Refresh.\n"
-            "Connected = ready."
+            "Tailscale ON on both devices • Same tailnet • Refresh"
         )
         instructions.setWordWrap(True)
         gl.addWidget(instructions)
@@ -184,7 +195,7 @@ class MainWindow(QMainWindow):
             return
 
         self.phone_status.setText(f"Android: ✓ {peer.name} • {peer.ip}")
-        self.path_status.setText("✓ Connected")
+        self.path_status.setText("CONNECTED")
         # Do not overwrite Ping/Test Port results during the automatic refresh.
         if self.test_result.text() in {
             "Select an online Android device first.",
@@ -215,8 +226,7 @@ class MainWindow(QMainWindow):
                 low, high = min(self.latencies), max(self.latencies)
                 quality = "Excellent" if avg < 50 else "Good" if avg < 150 else "Usable" if avg <= 300 else "Poor"
                 self.quality_status.setText(
-                    f"Latency: {latency} ms • {quality} • {transport} • "
-                    f"10-ping window {low}/{avg}/{high} ms"
+                    f"{quality}   •   {latency} ms   •   {transport}   •   min/avg/max {low}/{avg}/{high} ms"
                 )
                 self.last_good = {
                     "seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -232,6 +242,17 @@ class MainWindow(QMainWindow):
         else:
             detail = output.splitlines()[-1] if output else "No pong received."
             self.test_result.setText(f"✕ Tailscale ping failed • {detail}")
+
+    def open_camera_stream(self):
+        url = self.camera_url.text().strip()
+        if not url:
+            self.camera_status.setText("Not configured • enter a camera stream URL from an existing phone service.")
+            return
+        if not (url.startswith("http://") or url.startswith("https://")):
+            self.camera_status.setText("Use an http:// or https:// camera stream URL.")
+            return
+        webbrowser.open(url)
+        self.camera_status.setText("Opened camera stream in browser.")
 
     def copy_ip(self):
         if self.peer is None:
