@@ -1,5 +1,14 @@
 $ErrorActionPreference = "Stop"
 
+$mutex = New-Object System.Threading.Mutex($false, "PhoneHubTailscaleInstall")
+$hasMutex = $false
+
+try {
+    $hasMutex = $mutex.WaitOne(0)
+    if (-not $hasMutex) {
+        throw "Another PhoneHub Tailscale installation is already running."
+    }
+
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host " PhoneHub - Auto Install Tailscale to Phone" -ForegroundColor Cyan
@@ -34,7 +43,7 @@ $version = $match.Groups[2].Value
 $apkUrl = if ($rel -match '^https?://') { $rel } else { ([uri]::new([uri]$stable, $rel)).AbsoluteUri }
 $shaUrl = "$apkUrl.sha256"
 
-$tmp = Join-Path $env:TEMP "phonehub-tailscale-$version.apk"
+$tmp = Join-Path $env:TEMP ("phonehub-tailscale-{0}-{1}.apk" -f $version, [guid]::NewGuid().ToString("N"))
 
 Write-Host "[PhoneHub] Downloading Tailscale $version..." -ForegroundColor Cyan
 Invoke-WebRequest -UseBasicParsing -Uri $apkUrl -OutFile $tmp
@@ -63,3 +72,13 @@ Write-Host "[PhoneHub] Starting Tailscale..." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "[PhoneHub] Tailscale installed and opened successfully." -ForegroundColor Green
 Write-Host "Approve VPN/sign-in on the phone if Android asks." -ForegroundColor Yellow
+}
+finally {
+    if ($tmp -and (Test-Path $tmp)) {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+    if ($hasMutex) {
+        $mutex.ReleaseMutex() | Out-Null
+    }
+    $mutex.Dispose()
+}
