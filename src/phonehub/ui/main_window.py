@@ -25,7 +25,7 @@ class MainWindow(QMainWindow):
         self.connection_watch=QTimer(self); self.connection_watch.setInterval(5000); self.connection_watch.timeout.connect(self.refresh); self.connection_watch.start()
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
         root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
-        QTimer.singleShot(500,self.auto_setup)
+        QTimer.singleShot(500,self.refresh)
 
     def sidebar(self):
         s=QFrame(); s.setObjectName("Sidebar"); s.setFixedWidth(218); l=QVBoxLayout(s); l.setContentsMargins(18,22,18,18); l.setSpacing(7)
@@ -58,7 +58,7 @@ class MainWindow(QMainWindow):
         c,cl=self.card("Connection"); self.ip=QLineEdit(self.cfg.phone_ip); self.ip.setPlaceholderText("100.x.x.x"); cl.addWidget(self.ip)
         row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
-        sc,sl=self.card("PhoneHub 6 Auto Setup","One-click setup checks PC Tailscale, updates the PhoneHub Agent, installs/opens Tailscale on the phone, and waits for connection automatically.")
+        sc,sl=self.card("PhoneHub 6 Auto Setup","USB and Tailscale are tracked separately. Auto Setup uses the authorized USB link to prepare the phone, then waits for Tailscale.")
         self.setupstep=QLabel("Run Auto Setup once. PhoneHub will handle the PC and phone setup sequence automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
         sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk)
         agent=QPushButton("Install / Update Agent"); agent.setObjectName("Primary"); agent.clicked.connect(self.install_agent_to_phone); sr.addWidget(agent)
@@ -118,7 +118,18 @@ class MainWindow(QMainWindow):
             self.setupstep.setText(status.message)
             return
         serial=status.serial
-        self.setupstep.setText("Downloading official Tailscale APK, verifying it, and installing to phone…")
+        self.setupstep.setText("Checking whether Tailscale is already installed on the phone…")
+        self.work(
+            lambda:self.setup.package_installed(serial,"com.tailscale.ipn"),
+            lambda installed:self._manual_tailscale_checked(serial,installed)
+        )
+
+    def _manual_tailscale_checked(self,serial,installed):
+        if installed:
+            self.setupstep.setText("✓ Tailscale already installed • opening it on phone…")
+            self.work(lambda:self.setup.open_tailscale(serial),lambda opened:self._tailscale_opened(opened))
+            return
+        self.setupstep.setText("Tailscale missing • installing verified APK to phone…")
         self.work(self._run_tailscale_installer_script,lambda result:self._tailscale_phone_done(serial,result))
 
     def _tailscale_phone_done(self,serial,result):
@@ -411,13 +422,36 @@ class MainWindow(QMainWindow):
                 state=ConnectionState.ONLINE,
                 device_name=peer.name or "Android phone",
                 transport="Tailscale / PhoneHub Agent",
-                detail=f"Network online • {peer.ip}"
+                detail=f"Tailscale online • {peer.ip}"
             )
+
+        devices=self.adb.devices()
+        usb=next(((serial,state) for serial,state in devices.items() if ":" not in serial),None)
+        if usb is not None:
+            serial,state=usb
+            if state=="device":
+                model=self.runner.run([self.adb.adb,"-s",serial,"shell","getprop","ro.product.model"],6)
+                android=self.runner.run([self.adb.adb,"-s",serial,"shell","getprop","ro.build.version.release"],6)
+                return DeviceSnapshot(
+                    state=ConnectionState.DEGRADED,
+                    device_name=(model.stdout.strip() if model.ok and model.stdout.strip() else "Android phone"),
+                    transport="USB service link",
+                    android_version=(android.stdout.strip() if android.ok and android.stdout.strip() else "-"),
+                    detail="USB authorized • Tailscale offline"
+                )
+            if state=="unauthorized":
+                return DeviceSnapshot(
+                    state=ConnectionState.RECOVERING,
+                    device_name="Android phone",
+                    transport="USB service link",
+                    detail="USB connected • authorize Android debugging/service access"
+                )
+
         return DeviceSnapshot(
             state=ConnectionState.DISCONNECTED,
             device_name="Phone offline",
-            transport="Tailscale / PhoneHub Agent",
-            detail="No online Android phone found on Tailscale"
+            transport="Tailscale / USB",
+            detail="No online Tailscale phone and no authorized USB service link"
         )
     def ready(self):
         snap=self.adb.snapshot(self.cfg)
