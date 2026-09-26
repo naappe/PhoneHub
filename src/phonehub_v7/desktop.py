@@ -1,6 +1,6 @@
 from __future__ import annotations
 import sys
-from PySide6.QtCore import QTimer, Qt, QDateTime
+from PySide6.QtCore import QTimer, Qt, QDateTime, QObject, Signal, QRunnable, QThreadPool
 from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QComboBox,QCheckBox
 from .companion_server import CompanionServer
 
@@ -17,9 +17,17 @@ class Card(QFrame):
             self.bar=QProgressBar();self.bar.setRange(0,100);self.bar.setTextVisible(False);self.bar.setFixedHeight(7);lay.addWidget(self.bar)
         lay.addWidget(self.detail)
 
+class TaskSignals(QObject):
+    done=Signal(object,object)
+class Task(QRunnable):
+    def __init__(self,fn,tag):super().__init__();self.fn=fn;self.tag=tag;self.signals=TaskSignals()
+    def run(self):
+        try:self.signals.done.emit(self.tag,self.fn())
+        except Exception as e:self.signals.done.emit(self.tag,e)
+
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__();self.server=CompanionServer();self.server.start();self.current=None
+        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False
         self.setWindowTitle("PhoneHub 7");self.resize(1100,700);self.setMinimumSize(820,560)
         root=QWidget();self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         nav=QFrame();nav.setObjectName("nav");nav.setFixedWidth(220);nl=QVBoxLayout(nav);nl.setContentsMargins(18,24,18,24)
@@ -35,7 +43,7 @@ class Window(QMainWindow):
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
         self.stack.addWidget(self.info_page("Notifications","Notification forwarding will appear here after Android notification access is enabled."))
         self.stack.addWidget(self.info_page("Settings","Connection, protection, backup, logs and new-phone setup will live here."))
-        self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(3000);QTimer.singleShot(400,self.refresh)
+        self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000);QTimer.singleShot(400,self.refresh)
 
     def home(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
@@ -65,12 +73,29 @@ class Window(QMainWindow):
             cb=QCheckBox(text);cb.setChecked(on);cb.setEnabled(False);l.addWidget(cb)
         l.addStretch();return p
 
+    def run_task(self,tag,fn):
+        t=Task(fn,tag);t.signals.done.connect(self.task_done);self.pool.start(t)
     def load_apps(self,d):
-        try:
-            r=self.server.apps(d)
-            if r.get("type")=="apps":
-                self._apps=r.get("apps",[]);self.app_count.setText(f"{len(self._apps)} installed");self.filter_apps()
-        except Exception as e:self.app_count.setText(f"Apps unavailable: {e}")
+        if self._apps_loading:return
+        self._apps_loading=True;self.app_count.setText("Loading apps…");self.run_task("apps",lambda:self.server.apps(d))
+    def task_done(self,tag,result):
+        if tag=="status":
+            self._busy=False
+            if isinstance(result,Exception):self.connection.setText(f"● Connected • status unavailable: {result}");return
+            d,s=result
+            if s.get("type")!="device_status":return
+            self.connection.setText(f"●  Connected securely  •  {d.address}  •  AES-256-GCM");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
+            self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Encrypted Companion")
+            bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
+            self.network.value.setText(s.get("network","—"));self.network.detail.setText("Active connection")
+            total=s.get("storage_total",0);free=s.get("storage_free",0);used=max(0,total-free);self.storage.value.setText(gb(free));self.storage.bar.setValue(int(used*100/total) if total else 0);self.storage.detail.setText(f"free of {gb(total)}")
+            mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
+            self.android.value.setText(str(s.get("android_version","—")));self.android.detail.setText(f"SDK {s.get('sdk','—')}")
+            if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
+        elif tag=="apps":
+            self._apps_loading=False
+            if isinstance(result,Exception):self.app_count.setText(f"Apps unavailable: {result}");return
+            if result.get("type")=="apps":self._apps=result.get("apps",[]);self.app_count.setText(f"{len(self._apps)} installed");self.filter_apps()
 
     def filter_apps(self):
         if not hasattr(self,"app_table"):return
@@ -89,19 +114,8 @@ class Window(QMainWindow):
         ds=self.server.devices()
         if not ds:
             self.connection.setText("●  Waiting for PhoneHub Companion");self.updated.setText("Offline");return
-        d=ds[0]
-        try:
-            s=self.server.device_status(d)
-            if s.get("type")!="device_status":raise RuntimeError(s.get("message","status unavailable"))
-            self.connection.setText(f"●  Connected securely  •  {d.address}  •  AES-256-GCM");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
-            self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Encrypted Companion")
-            bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
-            self.network.value.setText(s.get("network","—"));self.network.detail.setText("Active connection")
-            total=s.get("storage_total",0);free=s.get("storage_free",0);used=max(0,total-free);self.storage.value.setText(gb(free));self.storage.bar.setValue(int(used*100/total) if total else 0);self.storage.detail.setText(f"free of {gb(total)}")
-            mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
-            self.android.value.setText(str(s.get("android_version","—")));self.android.detail.setText(f"SDK {s.get('sdk','—')}")
-            if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
-        except Exception as e:self.connection.setText(f"● Connected • status unavailable: {e}")
+        if self._busy:return
+        d=ds[0];self._busy=True;self.run_task("status",lambda:(d,self.server.device_status(d)))
 
     def apply_style(self):
         self.setStyleSheet("""
