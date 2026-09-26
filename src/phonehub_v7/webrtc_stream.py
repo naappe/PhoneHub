@@ -31,6 +31,7 @@ class WebRtcScreenClient:
         self._pc: RTCPeerConnection | None = None
         self._generation = 0
         self._last_frame = 0.0
+        self._terminal_error = False
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
@@ -63,6 +64,7 @@ class WebRtcScreenClient:
         if generation != self._generation:
             return
 
+        self._terminal_error = False
         self.on_state("Negotiating direct WebRTC screen…")
         config = RTCConfiguration(
             iceServers=[
@@ -77,12 +79,20 @@ class WebRtcScreenClient:
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
             state = pc.connectionState
-            if generation != self._generation:
+            if generation != self._generation or self._terminal_error:
                 return
             if state == "connected":
                 self.on_state("LIVE • WebRTC encrypted peer-to-peer")
-            elif state in ("failed", "closed", "disconnected"):
+            elif state in ("failed", "disconnected"):
                 self.on_state(f"WebRTC {state}")
+            elif state == "closed":
+                self.on_state("WebRTC closed")
+
+        @pc.on("iceconnectionstatechange")
+        async def on_iceconnectionstatechange():
+            if generation != self._generation or self._terminal_error:
+                return
+            self.on_state(f"ICE {pc.iceConnectionState} • establishing live media…")
 
         @pc.on("track")
         def on_track(track):
@@ -99,16 +109,20 @@ class WebRtcScreenClient:
             local = pc.localDescription
             if local is None:
                 raise RuntimeError("PC WebRTC offer was not created")
+            pc_ice = self._ice_summary(local.sdp)
 
-            self.on_state("Sending encrypted WebRTC offer to phone…")
+            self.on_state(f"Sending offer • PC ICE {pc_ice}")
             answer = await asyncio.to_thread(self.server.webrtc_offer, device, local.sdp)
             if generation != self._generation:
                 await pc.close()
                 return
             if answer.get("type") != "webrtc_answer":
                 raise RuntimeError(answer.get("message", "Phone did not return a WebRTC answer"))
+            phone_ice = self._ice_summary(answer.get("sdp", ""))
+            if phone_ice == "none":
+                raise RuntimeError("Phone WebRTC answer contained no ICE candidates")
 
-            self.on_state("Connecting live media path…")
+            self.on_state(f"ICE checking • PC {pc_ice} • Phone {phone_ice}")
             await pc.setRemoteDescription(
                 RTCSessionDescription(sdp=answer["sdp"], type="answer")
             )
@@ -117,11 +131,12 @@ class WebRtcScreenClient:
             while generation == self._generation and pc.connectionState not in ("connected", "failed", "closed"):
                 if time.monotonic() >= deadline:
                     raise TimeoutError(
-                        "WebRTC direct path timed out. This network may require a TURN relay."
+                        f"ICE timed out • PC {pc_ice} • Phone {phone_ice}"
                     )
                 await asyncio.sleep(0.25)
         except Exception as exc:
             if generation == self._generation:
+                self._terminal_error = True
                 self.on_state(f"Live screen failed: {exc}")
             try:
                 await pc.close()
@@ -148,3 +163,20 @@ class WebRtcScreenClient:
         except Exception as exc:
             if generation == self._generation:
                 self.on_state(f"Screen stream ended: {exc}")
+
+
+    @staticmethod
+    def _ice_summary(sdp: str) -> str:
+        counts = {"host": 0, "srflx": 0, "relay": 0, "prflx": 0}
+        for line in (sdp or "").splitlines():
+            if not line.startswith("a=candidate:"):
+                continue
+            parts = line.split()
+            try:
+                kind = parts[parts.index("typ") + 1]
+            except (ValueError, IndexError):
+                kind = "other"
+            if kind in counts:
+                counts[kind] += 1
+        shown = [f"{k}={v}" for k, v in counts.items() if v]
+        return ",".join(shown) if shown else "none"
