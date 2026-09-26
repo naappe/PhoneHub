@@ -47,3 +47,12 @@ class PhoneHubAgentService:
         except Exception:
             return b""
         return b""
+
+
+    def discover(self, peers, timeout: float = 1.5):
+        """Find the first Tailscale peer that is actually running PhoneHub Agent."""
+        for peer in peers:
+            health = self.health(peer.ip, timeout=timeout)
+            if health.get("service") == "phonehub-agent":
+                return peer, health
+        return None, {}
