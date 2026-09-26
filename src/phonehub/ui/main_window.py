@@ -187,9 +187,9 @@ class MainWindow(QMainWindow):
         script=root/"AUTO_BOOTSTRAP_PHONE.ps1"
         if not script.exists():
             return False,"PhoneHub bootstrap script is missing."
-        apk=root/"PhoneHub-Agent-6.2.1"/"PhoneHub-Agent-6.2.1-debug.apk"
+        apk=root/"runtime"/"agent"/"PhoneHub-Agent-6.2.1-debug.apk"
         if not apk.exists():
-            return False,"PhoneHub Agent 6.2.1 APK is missing. Extract PhoneHub-Agent-6.2.1.zip into C:\\PhoneHub first."
+            return False,"PhoneHub Agent 6.2.1 APK is missing from runtime\\agent. Copy the APK there, then run Auto Setup again."
         result=subprocess.run(
             ["powershell","-NoProfile","-ExecutionPolicy","Bypass","-File",str(script),"-ApkPath",str(apk),"-NoPause"],
             capture_output=True,text=True,timeout=90
