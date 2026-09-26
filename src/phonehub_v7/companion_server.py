@@ -1,5 +1,6 @@
 from __future__ import annotations
 import base64,hashlib,hmac,json,secrets,socket,threading,time
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dataclasses import dataclass
 from pathlib import Path
 PORT=47321;DEFAULT_COMMAND_PORT=47322;MAX_PACKET=8192
@@ -38,9 +39,15 @@ class CompanionServer:
         self._keys[d.device_id]=r["pair_key"];self._save_keys();return r
     def command(self,d,command_type):
         if d.device_id not in self._keys:self.enroll(d)
-        ts=int(time.time());nonce=secrets.token_hex(16);canonical=f"{command_type}|{ts}|{nonce}".encode()
+        ts=int(time.time());request_nonce=secrets.token_hex(16);canonical=f"{command_type}|{ts}|{request_nonce}".encode()
         key=base64.b64decode(self._keys[d.device_id]);sig=hmac.new(key,canonical,hashlib.sha256).hexdigest()
-        return self._raw_command(d,{"type":command_type,"version":1,"timestamp":ts,"nonce":nonce,"signature":sig})
+        plain=json.dumps({"type":command_type,"version":2,"timestamp":ts,"nonce":request_nonce,"signature":sig},separators=(",",":")).encode()
+        iv=secrets.token_bytes(12);cipher=AESGCM(key).encrypt(iv,plain,None)
+        wire={"type":"encrypted","version":2,"nonce":base64.b64encode(iv).decode(),"ciphertext":base64.b64encode(cipher).decode()}
+        response=self._raw_command(d,wire)
+        if response.get("type")!="encrypted":return response
+        riv=base64.b64decode(response["nonce"]);rc=base64.b64decode(response["ciphertext"])
+        return json.loads(AESGCM(key).decrypt(riv,rc,None).decode())
     def ping(self,d):return self.command(d,"ping")
     def _run(self):
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);sock.bind(("0.0.0.0",self.port))
