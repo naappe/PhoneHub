@@ -1,6 +1,7 @@
 from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 import os, subprocess, zipfile
 from PySide6.QtCore import QThreadPool,QTimer
 from PySide6.QtWidgets import QFrame,QHBoxLayout,QLabel,QLineEdit,QMainWindow,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QComboBox
@@ -69,7 +70,7 @@ class MainWindow(QMainWindow):
     def screen_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Optional engineering screen tool. ADB/scrcpy are only required when this feature is used.")
         c,cl=self.card("Remote screen"); row=QHBoxLayout()
-        for name,fn,obj in [("Open Screen",self.open_screen,"Primary"),("Wake",lambda:self.adb.key(self.cfg,224),""),("Home",lambda:self.adb.key(self.cfg,3),""),("Back",lambda:self.adb.key(self.cfg,4),""),("Close",self.stop_media,"Danger")]:
+        for name,fn,obj in [("Open Screen",self.open_screen,"Primary"),("Wake",lambda:self.adb.key(self._engineering_cfg(),224),""),("Home",lambda:self.adb.key(self._engineering_cfg(),3),""),("Back",lambda:self.adb.key(self._engineering_cfg(),4),""),("Close",self.stop_media,"Danger")]:
             b=QPushButton(name); b.setObjectName(obj); b.clicked.connect(fn); row.addWidget(b)
         cl.addLayout(row); self.screenmsg=QLabel("No active screen"); self.screenmsg.setObjectName("Muted"); cl.addWidget(self.screenmsg); l.addWidget(c); l.addStretch(); return w
     def camera_page(self):
@@ -453,52 +454,70 @@ class MainWindow(QMainWindow):
             transport="Tailscale / USB",
             detail="No online Tailscale phone and no authorized USB service link"
         )
+    def _engineering_cfg(self):
+        """Use Tailscale ADB if connected; otherwise use the authorized USB ADB serial."""
+        devices=self.adb.devices()
+        if self.cfg.serial and devices.get(self.cfg.serial)=="device":
+            return self.cfg
+        usb_serial=next((serial for serial,state in devices.items() if ":" not in serial and state=="device"),"")
+        if usb_serial:
+            return SimpleNamespace(serial=usb_serial)
+        return self.cfg
+
     def ready(self):
-        snap=self.adb.snapshot(self.cfg)
+        cfg=self._engineering_cfg()
+        snap=self.adb.snapshot(cfg)
         if snap.state!=ConnectionState.ONLINE: self.state.set_device(snap); return False
         return True
     def open_screen(self):
         self.screen_user_closed=False
         self.screen_wanted=True
         self.screenmsg.setText("Opening screen…")
-        self.work(lambda:self.adb.snapshot(self.cfg),self._open_screen_ready)
-    def _open_screen_ready(self,snap):
-        self.state.set_device(snap)
+        cfg=self._engineering_cfg()
+        self.work(lambda:self.adb.snapshot(cfg),lambda snap:self._open_screen_ready(cfg,snap))
+    def _open_screen_ready(self,cfg,snap):
         if snap.state!=ConnectionState.ONLINE:
-            self.screenmsg.setText("Phone unavailable • waiting to reconnect…")
+            self.screenmsg.setText("Screen link unavailable • connect authorized USB or ADB transport.")
             if not self.screen_watch.isActive(): self.screen_watch.start()
             return
-        ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText()))
+        ok,msg=self.media.screen(cfg,int(self.quality.currentText()),int(self.fps.currentText()))
         self.screen_started_once=ok
         self.screenmsg.setText("Remote screen active" if ok else msg)
         if ok and not self.screen_watch.isActive(): self.screen_watch.start()
     def _watch_screen(self):
         if not self.screen_wanted or self.screen_user_closed or self.screen_watch_busy: return
         self.screen_watch_busy=True
-        self.work(lambda:(self.adb.snapshot(self.cfg),self.adb.display_state(self.cfg)),self._screen_health)
+        cfg=self._engineering_cfg()
+        self.work(lambda:(cfg,self.adb.snapshot(cfg),self.adb.display_state(cfg)),self._screen_health)
     def _screen_health(self,result):
         self.screen_watch_busy=False
-        snap,display=result
-        self.state.set_device(snap)
+        cfg,snap,display=result
         if not self.screen_wanted or self.screen_user_closed: return
-        if snap.state!=ConnectionState.ONLINE or display in {"offline","screen_off","locked"}:
-            self.screenmsg.setText("Phone locked/asleep • waiting for unlock…")
+        if snap.state!=ConnectionState.ONLINE or display=="offline":
+            self.screenmsg.setText("ADB screen link unavailable • USB/Tailscale network may still be online.")
+            return
+        if display=="screen_off":
+            self.screenmsg.setText("Phone screen is off • waiting for wake…")
+            return
+        if display=="locked":
+            self.screenmsg.setText("Phone is locked • waiting for unlock…")
             return
         if not self.media.active and not self.screen_restarting:
             self.screen_restarting=True
             self.screenmsg.setText("Phone unlocked • restoring screen…")
-            ok,msg=self.media.screen(self.cfg,int(self.quality.currentText()),int(self.fps.currentText()))
+            ok,msg=self.media.screen(cfg,int(self.quality.currentText()),int(self.fps.currentText()))
             self.screen_restarting=False
             self.screenmsg.setText("Screen restored" if ok else msg)
     def open_camera(self,face):
         if not self.ready(): self.cameramsg.setText("Connect Device first"); return
-        ok,msg=self.media.camera(self.cfg,face); self.cameramsg.setText(msg)
+        ok,msg=self.media.camera(self._engineering_cfg(),face); self.cameramsg.setText(msg)
     def stop_media(self):
         self.screen_user_closed=True; self.screen_wanted=False; self.screen_watch.stop(); self.screen_watch_busy=False; self.screen_restarting=False; self.screen_started_once=False
         self.media.stop(); self.screenmsg.setText("Closed"); self.cameramsg.setText("Closed")
     def capture(self):
         if not self.ready(): self.filemsg.setText("Connect Device first"); return
-        p=Path.home()/"Pictures"/"PhoneHub"/f"capture_{datetime.now():%Y%m%d_%H%M%S}.png"; self.work(lambda:self.adb.screenshot(self.cfg,p),lambda r:self.filemsg.setText(r[1]))
+        cfg=self._engineering_cfg()
+        p=Path.home()/"Pictures"/"PhoneHub"/f"capture_{datetime.now():%Y%m%d_%H%M%S}.png"; self.work(lambda:self.adb.screenshot(cfg,p),lambda r:self.filemsg.setText(r[1]))
     def diagnostics(self):
         snap=self.adb.snapshot(self.cfg); scr="Found" if self.media.scrcpy else "Missing"; self.secmsg.setText(f"ADB target: {self.cfg.serial or '-'}\nState: {snap.state.value}\nTransport: {snap.transport}\nscrcpy: {scr}")
     def render(self,s:DeviceSnapshot):
