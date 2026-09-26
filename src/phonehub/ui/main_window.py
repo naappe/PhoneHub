@@ -172,7 +172,7 @@ class MainWindow(QMainWindow):
             return
         ip = self.peer.ip
         self.test_result.setText(f"Testing Tailscale reachability to {ip}…")
-        self.work(lambda: self.runner.run(["tailscale", "ping", "--c", "1", "--timeout", "5s", ip], 8), self._ping_done)
+        self.work(lambda: self.runner.run(["tailscale", "ping", "--c", "1", ip], 12), self._ping_done)
 
     def _ping_done(self, result):
         if result.ok:
