@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import socket
 import re
-import webbrowser
 import subprocess
 from datetime import datetime
 from PySide6.QtCore import QThreadPool, QTimer
@@ -102,10 +101,6 @@ class MainWindow(QMainWindow):
         copy_ip.setMinimumWidth(90)
         copy_ip.clicked.connect(self.copy_ip)
         actions.addWidget(copy_ip)
-        http = QPushButton("HTTP 8080")
-        http.setMinimumWidth(100)
-        http.clicked.connect(self.open_http)
-        actions.addWidget(http)
         ssh = QPushButton("SSH 22")
         ssh.setMinimumWidth(90)
         ssh.clicked.connect(self.open_ssh)
@@ -123,18 +118,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(tools)
 
         camera, cam = self.card("Camera")
-        self.camera_status = QLabel("Not configured")
+        self.camera_status = QLabel(
+            "Not available yet • Tailscale is connected, but no camera service is running on the phone."
+        )
         self.camera_status.setObjectName("Muted")
+        self.camera_status.setWordWrap(True)
         cam.addWidget(self.camera_status)
-        camrow = QHBoxLayout()
-        self.camera_url = QLineEdit()
-        self.camera_url.setPlaceholderText("Existing camera stream URL, e.g. http://100.x.x.x:8080/video")
-        camrow.addWidget(self.camera_url)
-        open_camera = QPushButton("Open Stream")
-        open_camera.setMinimumWidth(110)
-        open_camera.clicked.connect(self.open_camera_stream)
-        camrow.addWidget(open_camera)
-        cam.addLayout(camrow)
         layout.addWidget(camera)
 
         guide, gl = self.card("Setup")
@@ -258,30 +247,12 @@ class MainWindow(QMainWindow):
             detail = output.splitlines()[-1] if output else "No pong received."
             self.test_result.setText(f"✕ Tailscale ping failed • {detail}")
 
-    def open_camera_stream(self):
-        url = self.camera_url.text().strip()
-        if not url:
-            self.camera_status.setText("Not configured • enter a camera stream URL from an existing phone service.")
-            return
-        if not (url.startswith("http://") or url.startswith("https://")):
-            self.camera_status.setText("Use an http:// or https:// camera stream URL.")
-            return
-        webbrowser.open(url)
-        self.camera_status.setText("Opened camera stream in browser.")
-
     def copy_ip(self):
         if self.peer is None:
             self.test_result.setText("No online Android Tailscale device found.")
             return
         QApplication.clipboard().setText(self.peer.ip)
         self.test_result.setText("✓ IP copied.")
-
-    def open_http(self):
-        if self.peer is None:
-            self.test_result.setText("No online Android Tailscale device found.")
-            return
-        webbrowser.open(f"http://{self.peer.ip}:8080")
-        self.test_result.setText("Opened HTTP 8080 in your browser.")
 
     def open_ssh(self):
         if self.peer is None:
