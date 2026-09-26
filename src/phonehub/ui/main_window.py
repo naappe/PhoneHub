@@ -64,7 +64,7 @@ class MainWindow(QMainWindow):
         row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
         sc,sl=self.card("PhoneHub 6.2 Auto Setup","USB and Tailscale are tracked separately. Auto Setup supports compatible Android devices without OEM-specific model rules, prepares the phone over USB, then waits for Tailscale.")
-        self.setupstep=QLabel("Run Auto Setup once. PhoneHub will handle the PC and phone setup sequence automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
+        self.setupstep=QLabel("First setup: connect USB once, run Auto Setup, approve Android/Tailscale prompts, then disconnect USB. Normal use continues over Tailscale on any network."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
         sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk)
         agent=QPushButton("Install / Update Agent"); agent.setObjectName("Primary"); agent.clicked.connect(self.install_agent_to_phone); sr.addWidget(agent)
         tailscale=QPushButton("Install Tailscale to Phone"); tailscale.setObjectName("Primary"); tailscale.clicked.connect(self.install_tailscale_to_phone); sr.addWidget(tailscale)
@@ -158,7 +158,7 @@ class MainWindow(QMainWindow):
             self.setupstep.setText("Tailscale installed. Open it on the phone once, then press Auto Detect.")
 
     def install_agent_to_phone(self):
-        self.agentmsg.setText("Sending PhoneHub Agent 6.1 to the connected phone…")
+        self.agentmsg.setText("Sending PhoneHub Agent 6.2 to the connected phone…")
         self.work(self._run_agent_bootstrap,self._agent_bootstrap_done)
 
     def _run_agent_bootstrap(self):
@@ -166,9 +166,9 @@ class MainWindow(QMainWindow):
         script=root/"AUTO_BOOTSTRAP_PHONE.ps1"
         if not script.exists():
             return False,"PhoneHub bootstrap script is missing."
-        apk=root/"PhoneHub-Agent-6.1.0"/"PhoneHub-Agent-6.1.0-debug.apk"
+        apk=root/"PhoneHub-Agent-6.2.0"/"PhoneHub-Agent-6.2.0-debug.apk"
         if not apk.exists():
-            return False,"PhoneHub Agent APK is missing. Extract PhoneHub-Agent-6.1.0.zip into C:\\PhoneHub first."
+            return False,"PhoneHub Agent 6.2 APK is missing. Extract PhoneHub-Agent-6.2.0.zip into C:\\PhoneHub first."
         result=subprocess.run(
             ["powershell","-NoProfile","-ExecutionPolicy","Bypass","-File",str(script),"-ApkPath",str(apk),"-NoPause"],
             capture_output=True,text=True,timeout=90
@@ -302,7 +302,7 @@ class MainWindow(QMainWindow):
             ))
             self.devmsg.setText(f"Connected automatically • {peer.name} • {peer.ip}")
             self.auto_setup_running=False
-            self.setupstep.setText("✓ Auto Setup complete • PhoneHub connected to the phone.")
+            self.setupstep.setText("✓ Auto Setup complete • Tailscale is online. You can disconnect USB; normal PhoneHub use now works over any network.")
             return
 
         if getattr(self,"_auto_wait_attempts",0) < 24:
