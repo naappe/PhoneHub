@@ -40,7 +40,7 @@ class PhoneHubRemoteService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startRemoteForeground("PhoneHub remote service ready")
+        startIdleForeground("PhoneHub remote service ready")
         startServer()
     }
 
@@ -70,18 +70,46 @@ class PhoneHubRemoteService : Service() {
         }
     }
 
-    private fun startRemoteForeground(text: String) {
-        val openApp = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val notification = Notification.Builder(this, CHANNEL_ID)
+    private fun buildNotification(text: String): Notification {
+        val openApp = PendingIntent.getActivity(
+            this,
+            1,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentTitle("PhoneHub Agent")
             .setContentText(text)
             .setContentIntent(openApp)
             .setOngoing(true)
             .build()
+    }
+
+    private fun startIdleForeground(text: String) {
+        val notification = buildNotification(text)
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else startForeground(NOTIFICATION_ID, notification)
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun startProjectionForeground(text: String) {
+        val notification = buildNotification(text)
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun startServer() {
@@ -149,7 +177,10 @@ class PhoneHubRemoteService : Service() {
     }
 
     private fun startCapture(resultCode: Int, data: Intent) {
-        stopCapture()
+        stopCaptureInternal(returnToIdle = false)
+        // Android 14+ requires the service to enter the mediaProjection
+        // foreground-service type only after the user has granted capture consent.
+        startProjectionForeground("Starting remote screen…")
         val mgr = getSystemService(MediaProjectionManager::class.java)
         val projection = mgr.getMediaProjection(resultCode, data) ?: return
         mediaProjection = projection
@@ -182,16 +213,20 @@ class PhoneHubRemoteService : Service() {
             } finally { image.close() }
         }, null)
         virtualDisplay = projection.createVirtualDisplay("PhoneHubRemoteScreen", width, height, density, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader.surface, null, null)
-        startRemoteForeground("Remote screen active")
+        startProjectionForeground("Remote screen active")
     }
 
     private fun stopCapture() {
+        stopCaptureInternal(returnToIdle = true)
+    }
+
+    private fun stopCaptureInternal(returnToIdle: Boolean) {
         latestFrame = null
         virtualDisplay?.release(); virtualDisplay = null
         imageReader?.close(); imageReader = null
         val p = mediaProjection; mediaProjection = null
         if (p != null) try { p.stop() } catch (_: Throwable) {}
-        startRemoteForeground("PhoneHub remote service ready")
+        if (returnToIdle) startIdleForeground("PhoneHub remote service ready")
     }
 
     private fun readLine(input: BufferedInputStream): String? {
@@ -214,7 +249,7 @@ class PhoneHubRemoteService : Service() {
     override fun onDestroy() {
         try { server?.close() } catch (_: Throwable) {}
         server = null
-        stopCapture()
+        stopCaptureInternal(returnToIdle = false)
         pool.shutdownNow()
         super.onDestroy()
     }
