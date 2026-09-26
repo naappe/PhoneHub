@@ -27,8 +27,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PhoneHub 6.3 — Tailscale")
-        self.resize(1040, 720)
-        self.setMinimumSize(760, 540)
+        # Keep the default window comfortably above the Windows taskbar.
+        self.resize(1000, 650)
+        self.setMinimumSize(720, 480)
         self.setStyleSheet(APP_STYLE)
 
         self.runner = SubprocessRunner()
@@ -50,8 +51,8 @@ class MainWindow(QMainWindow):
         root.setObjectName("Root")
         scroll.setWidget(root)
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(32, 26, 32, 28)
-        layout.setSpacing(16)
+        layout.setContentsMargins(28, 20, 28, 34)
+        layout.setSpacing(12)
 
         brand = QLabel("PhoneHub 6.3")
         brand.setObjectName("PageTitle")
@@ -157,8 +158,8 @@ class MainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName("Card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 14, 18, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(18, 12, 18, 14)
+        layout.setSpacing(7)
         heading = QLabel(title)
         heading.setObjectName("CardTitle")
         layout.addWidget(heading)
