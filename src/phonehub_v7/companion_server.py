@@ -13,7 +13,7 @@ class Companion:
 class CompanionServer:
     def __init__(self,port=PORT):
         self.port=port;self._devices={};self._lock=threading.Lock();self._thread=None
-        self._keyfile=Path.home()/".phonehub"/"paired_devices.json";self._keys=self._load_keys();self._remote_status={};self._remote_thread=None
+        self._keyfile=Path.home()/".phonehub"/"paired_devices.json";self._keys=self._load_keys();self._remote_status={};self._remote_thread=None;self._remote_responses={};self._remote_cv=threading.Condition()
     def _load_keys(self):
         try:return json.loads(self._keyfile.read_text())
         except Exception:return {}
@@ -49,7 +49,7 @@ class CompanionServer:
         plain=json.dumps(payload,separators=(",",":")).encode()
         iv=secrets.token_bytes(12);cipher=AESGCM(key).encrypt(iv,plain,None)
         wire={"type":"encrypted","version":2,"nonce":base64.b64encode(iv).decode(),"ciphertext":base64.b64encode(cipher).decode()}
-        response=self._raw_command(d,wire)
+        response=self._remote_command(d,key,payload) if d.address=="REMOTE" else self._raw_command(d,wire)
         if response.get("type")!="encrypted":return response
         riv=base64.b64decode(response["nonce"]);rc=base64.b64decode(response["ciphertext"])
         return json.loads(AESGCM(key).decrypt(riv,rc,None).decode())
@@ -72,6 +72,18 @@ class CompanionServer:
     def _relay(self,body):
         req=urllib.request.Request(RELAY_URL,data=json.dumps(body,separators=(",",":")).encode(),headers={"Content-Type":"application/json"},method="POST")
         with urllib.request.urlopen(req,timeout=10) as r:return json.loads(r.read().decode())
+    def _remote_command(self,d,key,payload,timeout=25):
+        request_id=secrets.token_hex(16);payload=dict(payload);payload["_request_id"]=request_id
+        iv=secrets.token_bytes(12);cipher=AESGCM(key).encrypt(iv,json.dumps(payload,separators=(",",":")).encode(),None)
+        wire={"type":"encrypted","version":2,"nonce":base64.b64encode(iv).decode(),"ciphertext":base64.b64encode(cipher).decode()}
+        self._relay({"action":"send","mailbox":self._mailbox(d.device_id,key),"direction":"to_phone","payload":wire})
+        deadline=time.time()+timeout
+        with self._remote_cv:
+            while request_id not in self._remote_responses:
+                remaining=deadline-time.time()
+                if remaining<=0:raise TimeoutError("Remote Companion command timed out")
+                self._remote_cv.wait(min(remaining,1))
+            return self._remote_responses.pop(request_id)
     def _remote_run(self):
         while True:
             for did,key64 in list(self._keys.items()):
@@ -82,6 +94,8 @@ class CompanionServer:
                         if w.get("type")!="encrypted":continue
                         plain=AESGCM(key).decrypt(base64.b64decode(w["nonce"]),base64.b64decode(w["ciphertext"]),None);s=json.loads(plain.decode())
                         if s.get("type")=="remote_presence" and s.get("device_id")==did:s["_seen"]=time.time();self._remote_status[did]=s
+                        elif s.get("_request_id"):
+                            with self._remote_cv:self._remote_responses[s["_request_id"]]=s;self._remote_cv.notify_all()
                 except Exception:pass
             time.sleep(5)
     def _run(self):
