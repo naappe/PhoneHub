@@ -37,11 +37,12 @@ class CompanionServer:
         r=self._raw_command(d,{"type":"enroll","version":1})
         if r.get("type")!="enrolled" or not r.get("pair_key"):raise RuntimeError(r.get("message","enrollment failed"))
         self._keys[d.device_id]=r["pair_key"];self._save_keys();return r
-    def command(self,d,command_type):
+    def command(self,d,command_type,extra=None):
         if d.device_id not in self._keys:self.enroll(d)
         ts=int(time.time());request_nonce=secrets.token_hex(16);canonical=f"{command_type}|{ts}|{request_nonce}".encode()
         key=base64.b64decode(self._keys[d.device_id]);sig=hmac.new(key,canonical,hashlib.sha256).hexdigest()
-        plain=json.dumps({"type":command_type,"version":2,"timestamp":ts,"nonce":request_nonce,"signature":sig},separators=(",",":")).encode()
+        payload={"type":command_type,"version":2,"timestamp":ts,"nonce":request_nonce,"signature":sig};payload.update(extra or {})
+        plain=json.dumps(payload,separators=(",",":")).encode()
         iv=secrets.token_bytes(12);cipher=AESGCM(key).encrypt(iv,plain,None)
         wire={"type":"encrypted","version":2,"nonce":base64.b64encode(iv).decode(),"ciphertext":base64.b64encode(cipher).decode()}
         response=self._raw_command(d,wire)
@@ -50,7 +51,15 @@ class CompanionServer:
         return json.loads(AESGCM(key).decrypt(riv,rc,None).decode())
     def ping(self,d):return self.command(d,"ping")
     def device_status(self,d):return self.command(d,"device_status")
-    def apps(self,d):return self.command(d,"apps")
+    def apps_page(self,d,offset=0,limit=50):return self.command(d,"apps",{"offset":offset,"limit":limit})
+    def apps(self,d):
+        items=[];offset=0
+        while True:
+            page=self.apps_page(d,offset,50)
+            if page.get("type")!="apps_page":return page
+            items.extend(page.get("apps",[]))
+            if not page.get("has_more"):return {"type":"apps","apps":items,"count":len(items)}
+            offset=int(page.get("next_offset",offset+50))
     def capabilities(self,d):return self.command(d,"capabilities")
     def _run(self):
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);sock.bind(("0.0.0.0",self.port))
