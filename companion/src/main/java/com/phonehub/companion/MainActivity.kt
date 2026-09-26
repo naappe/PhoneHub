@@ -2,6 +2,7 @@ package com.phonehub.companion
 
 import android.Manifest
 import android.app.Activity
+import android.media.projection.MediaProjectionManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -15,6 +16,7 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : Activity() {
     private lateinit var status: TextView
+    private val screenRequest = 8
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,6 +28,20 @@ class MainActivity : Activity() {
             text = "Enable automatic service"
             setOnClickListener { enableCompanion() }
         }
+        val screen = Button(this).apply {
+            text = "Start screen sharing"
+            setOnClickListener {
+                val m = getSystemService(MediaProjectionManager::class.java)
+                startActivityForResult(m.createScreenCaptureIntent(), screenRequest)
+            }
+        }
+        val stopScreen = Button(this).apply {
+            text = "Stop screen sharing"
+            setOnClickListener {
+                ScreenCaptureService.stop(this@MainActivity)
+                status.text = "PhoneHub Companion\n\nScreen sharing stopped."
+            }
+        }
         val battery = Button(this).apply {
             text = "Background settings"
             setOnClickListener { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
@@ -35,6 +51,8 @@ class MainActivity : Activity() {
             setPadding(32, 32, 32, 32)
             addView(status)
             addView(start)
+            addView(screen)
+            addView(stopScreen)
             addView(battery)
         })
         if (CompanionService.isEnabled(this)) {
@@ -42,6 +60,18 @@ class MainActivity : Activity() {
             status.text = "PhoneHub Companion\n\nAutomatic service is enabled."
         } else {
             status.text = "PhoneHub Companion\n\nReady for one-time enrollment."
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == screenRequest) {
+            if (resultCode == RESULT_OK && data != null) {
+                ScreenCaptureService.start(this, resultCode, data)
+                status.text = "PhoneHub Companion\n\nScreen sharing active. You can return to the PC."
+            } else {
+                status.text = "PhoneHub Companion\n\nScreen sharing permission was not granted."
+            }
         }
     }
 
