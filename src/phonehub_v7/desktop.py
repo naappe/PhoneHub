@@ -1,5 +1,5 @@
 from __future__ import annotations
-import sys, json
+import sys, json, socket, subprocess, shutil
 from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, QDateTime, QObject, Signal, QRunnable, QThreadPool
 from PySide6.QtGui import QImage, QPixmap
@@ -34,7 +34,7 @@ class Task(QRunnable):
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False
+        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False;self._scrcpy_process=None;self._screen_device=None
         self.setWindowTitle("PhoneHub 7");self.resize(1100,700);self.setMinimumSize(820,560)
         root=QWidget();self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         nav=QFrame();nav.setObjectName("nav");nav.setFixedWidth(220);nl=QVBoxLayout(nav);nl.setContentsMargins(18,24,18,24)
@@ -69,7 +69,7 @@ class Window(QMainWindow):
     def screen_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Ready for live screen");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
-        self.screen_help=QLabel("Live WebRTC screen uses Android's approved MediaProjection session. Video travels peer-to-peer when the network permits; the encrypted PhoneHub relay is used only for signaling.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
+        self.screen_help=QLabel("PhoneHub automatically uses high-performance scrcpy control on a reachable local wireless-ADB connection. Remote networks fall back to encrypted WebRTC.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
         self.screen_view=QLabel("Open this page to connect the live screen");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
         self.screen_button=QPushButton("Reconnect live screen");self.screen_button.clicked.connect(self.start_live_screen);l.addWidget(self.screen_button)
         return p
@@ -78,15 +78,52 @@ class Window(QMainWindow):
         if index==1:
             self.start_live_screen()
         elif self._screen_active:
-            ds=self.server.devices();self._screen_active=False
-            self.screen_client.stop(ds[0] if ds else None)
+            self.stop_live_screen()
+
+    def stop_live_screen(self):
+        self._screen_active=False
+        if self._scrcpy_process is not None:
+            try:
+                if self._scrcpy_process.poll() is None:self._scrcpy_process.terminate()
+            except Exception:pass
+            self._scrcpy_process=None
+        if self._screen_device is not None:
+            self.screen_client.stop(self._screen_device)
+        self._screen_device=None
 
     def start_live_screen(self):
         if self._screen_active:return
         ds=self.server.devices()
         if not ds:self.screen_status.setText("Phone offline");return
-        self._screen_active=True;self.screen_status.setText("Starting live WebRTC screen…");self.screen_view.setText("Connecting live screen…");self.screen_view.setPixmap(QPixmap())
-        self.screen_client.start(ds[0])
+        d=ds[0];self._screen_device=d;self._screen_active=True;self.screen_view.setPixmap(QPixmap())
+        if d.address!="REMOTE":
+            self.screen_status.setText("Checking local high-performance screen…")
+            self.screen_view.setText("Connecting wireless ADB / scrcpy…")
+            self.run_task("screen_local",lambda:self._start_scrcpy_local(d))
+        else:
+            self._start_webrtc(d)
+
+    def _start_webrtc(self,d):
+        self.screen_status.setText("Starting remote WebRTC screen…");self.screen_view.setText("Connecting remote live screen…")
+        self.screen_client.start(d)
+
+    def _start_scrcpy_local(self,d):
+        if not shutil.which("adb"):return {"ok":False,"reason":"ADB is not installed"}
+        if not shutil.which("scrcpy"):return {"ok":False,"reason":"scrcpy is not installed"}
+        target=f"{d.address}:5555"
+        try:
+            with socket.create_connection((d.address,5555),timeout=1.5):pass
+        except OSError:
+            return {"ok":False,"reason":"wireless ADB port 5555 is not reachable"}
+        connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+        output=((connect.stdout or "")+" "+(connect.stderr or "")).strip().lower()
+        if connect.returncode!=0 or ("connected to" not in output and "already connected" not in output):
+            return {"ok":False,"reason":output or "ADB connection failed"}
+        args=["scrcpy","-s",target,"--window-title=PhoneHub Screen - Local Control","--max-size=1600","--max-fps=60","--video-bit-rate=8M","--no-audio","--stay-awake"]
+        flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+        process=subprocess.Popen(args,creationflags=flags)
+        return {"ok":True,"process":process,"target":target}
+
 
     def show_screen_state(self,state):
         self.screen_status.setText(state)
@@ -149,6 +186,17 @@ class Window(QMainWindow):
             mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
             self.android.value.setText(str(s.get("android_version","—")));self.android.detail.setText(f"SDK {s.get('sdk','—')}")
             if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
+        elif tag=="screen_local":
+            if isinstance(result,Exception):
+                result={"ok":False,"reason":str(result)}
+            if result.get("ok"):
+                self._scrcpy_process=result["process"];self.screen_status.setText("LOCAL LIVE CONTROL • scrcpy • up to 60 FPS")
+                self.screen_view.setText("PhoneHub Screen is open in the high-performance scrcpy control window.\n\nMouse, keyboard and touch control are active through wireless ADB.\nNo screenshot loop and no WebRTC relay are being used.")
+            else:
+                d=self._screen_device
+                reason=result.get("reason","local scrcpy unavailable")
+                self.screen_status.setText(f"Local scrcpy unavailable • {reason} • trying WebRTC")
+                if d is not None:self._start_webrtc(d)
         elif tag=="policy_get":
             if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
             p=result.get("policy",{})
