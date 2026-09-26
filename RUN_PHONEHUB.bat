@@ -30,10 +30,18 @@ if errorlevel 1 (
 
 echo [PhoneHub Setup] Tailscale available.
 
-rem ADB and scrcpy are optional engineering tools in PhoneHub 6.
-rem They are not required for normal PhoneHub startup or device-online status.
+rem Install PC-side Android tools once. Normal startup remains automatic.
+where adb >nul 2>&1 || (
+  echo [PhoneHub Setup] Installing Android platform tools...
+  winget install --id Google.PlatformTools -e --accept-package-agreements --accept-source-agreements || goto :failed
+)
 
-echo [PhoneHub] Starting PhoneHub 6.2...
+where scrcpy >nul 2>&1 || (
+  echo [PhoneHub Setup] Installing scrcpy...
+  winget install --id Genymobile.scrcpy -e --accept-package-agreements --accept-source-agreements || goto :failed
+)
+
+echo [PhoneHub] Starting PhoneHub 6.3...
 python -m phonehub
 exit /b %errorlevel%
 
