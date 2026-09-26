@@ -68,7 +68,8 @@ class CompanionServer:
             offset=int(page.get("next_offset",offset+50))
     def capabilities(self,d):return self.command(d,"capabilities")
     def screen_status(self,d):return self.command(d,"screen_status")
-    def screen_snapshot(self,d):return self.command(d,"screen_snapshot")
+    def webrtc_offer(self,d,sdp):return self.command(d,"webrtc_offer",{"sdp":sdp})
+    def webrtc_stop(self,d):return self.command(d,"webrtc_stop")
     def policy_get(self,d,package):return self.command(d,"policy_get",{"package":package})
     def policy_set(self,d,package,policy):return self.command(d,"policy_set",{"package":package,"policy":policy})
     def _mailbox(self,did,key):
