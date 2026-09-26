@@ -23,17 +23,23 @@ class CompanionServer:
         if self._thread and self._thread.is_alive():return
         self._thread=threading.Thread(target=self._run,name="phonehub-companion",daemon=True);self._thread.start();self._remote_thread=threading.Thread(target=self._remote_run,name="phonehub-remote",daemon=True);self._remote_thread.start()
     def devices(self):
-        with self._lock:\n            local=[d for d in self._devices.values() if d.online]\n            if local:return sorted(local,key=lambda d:d.last_seen,reverse=True)\n            return [Companion(did,s.get("device_name","Android"),"REMOTE",s.get("_seen",0)) for did,s in self._remote_status.items() if time.time()-s.get("_seen",0)<30]
+        with self._lock:
+            local=[d for d in self._devices.values() if d.online]
+            if local:return sorted(local,key=lambda d:d.last_seen,reverse=True)
+            return [Companion(did,s.get("device_name","Android"),"REMOTE",s.get("_seen",0)) for did,s in self._remote_status.items() if time.time()-s.get("_seen",0)<30]
     def _raw_command(self,d,payload,timeout=20):
-        raw=(json.dumps(payload,separators=(",",":"))+"\n").encode()
+        raw=(json.dumps(payload,separators=(",",":"))+"
+").encode()
         with socket.create_connection((d.address,d.command_port),timeout=timeout) as s:
             s.sendall(raw);data=b""
-            while b"\n" not in data:
+            while b"
+" not in data:
                 chunk=s.recv(65536)
                 if not chunk:break
                 data+=chunk
                 if len(data)>MAX_PACKET:raise ValueError("Companion response too large")
-        return json.loads(data.split(b"\n",1)[0].decode())
+        return json.loads(data.split(b"
+",1)[0].decode())
     def enroll(self,d):
         r=self._raw_command(d,{"type":"enroll","version":1})
         if r.get("type")!="enrolled" or not r.get("pair_key"):raise RuntimeError(r.get("message","enrollment failed"))
@@ -51,7 +57,9 @@ class CompanionServer:
         riv=base64.b64decode(response["nonce"]);rc=base64.b64decode(response["ciphertext"])
         return json.loads(AESGCM(key).decrypt(riv,rc,None).decode())
     def ping(self,d):return self.command(d,"ping")
-    def device_status(self,d):\n        if d.address=="REMOTE":return dict(self._remote_status.get(d.device_id,{}),type="device_status")\n        return self.command(d,"device_status")
+    def device_status(self,d):
+        if d.address=="REMOTE":return dict(self._remote_status.get(d.device_id,{}),type="device_status")
+        return self.command(d,"device_status")
     def apps_page(self,d,offset=0,limit=50):return self.command(d,"apps",{"offset":offset,"limit":limit})
     def apps(self,d):
         items=[];offset=0
@@ -62,7 +70,24 @@ class CompanionServer:
             if not page.get("has_more"):return {"type":"apps","apps":items,"count":len(items)}
             offset=int(page.get("next_offset",offset+50))
     def capabilities(self,d):return self.command(d,"capabilities")
-    def _mailbox(self,did,key):\n        return hashlib.sha256((did+":"+base64.b64encode(key).decode()).encode()).hexdigest()\n    def _relay(self,body):\n        req=urllib.request.Request(RELAY_URL,data=json.dumps(body,separators=(",",":")).encode(),headers={"Content-Type":"application/json"},method="POST")\n        with urllib.request.urlopen(req,timeout=10) as r:return json.loads(r.read().decode())\n    def _remote_run(self):\n        while True:\n            for did,key64 in list(self._keys.items()):\n                try:\n                    key=base64.b64decode(key64);box=self._mailbox(did,key);r=self._relay({"action":"receive","mailbox":box,"direction":"to_pc"})\n                    for m in r.get("messages",[]):\n                        w=m.get("payload",{})\n                        if w.get("type")!="encrypted":continue\n                        plain=AESGCM(key).decrypt(base64.b64decode(w["nonce"]),base64.b64decode(w["ciphertext"]),None);s=json.loads(plain.decode())\n                        if s.get("type")=="remote_presence" and s.get("device_id")==did:s["_seen"]=time.time();self._remote_status[did]=s\n                except Exception:pass\n            time.sleep(5)\n    def _run(self):
+    def _mailbox(self,did,key):
+        return hashlib.sha256((did+":"+base64.b64encode(key).decode()).encode()).hexdigest()
+    def _relay(self,body):
+        req=urllib.request.Request(RELAY_URL,data=json.dumps(body,separators=(",",":")).encode(),headers={"Content-Type":"application/json"},method="POST")
+        with urllib.request.urlopen(req,timeout=10) as r:return json.loads(r.read().decode())
+    def _remote_run(self):
+        while True:
+            for did,key64 in list(self._keys.items()):
+                try:
+                    key=base64.b64decode(key64);box=self._mailbox(did,key);r=self._relay({"action":"receive","mailbox":box,"direction":"to_pc"})
+                    for m in r.get("messages",[]):
+                        w=m.get("payload",{})
+                        if w.get("type")!="encrypted":continue
+                        plain=AESGCM(key).decrypt(base64.b64decode(w["nonce"]),base64.b64decode(w["ciphertext"]),None);s=json.loads(plain.decode())
+                        if s.get("type")=="remote_presence" and s.get("device_id")==did:s["_seen"]=time.time();self._remote_status[did]=s
+                except Exception:pass
+            time.sleep(5)
+    def _run(self):
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);sock.bind(("0.0.0.0",self.port))
         while True:
             try:
