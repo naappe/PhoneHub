@@ -123,8 +123,8 @@ class MainWindow(QMainWindow):
         output=(result.stdout or "")+"\n"+(result.stderr or "")
         if result.returncode==0:
             if "installed/updated successfully" in output.lower():
-            return True,"PhoneHub Agent installed/updated directly."
-        return True,"Agent copied to the phone. Android still requires one Update / Install confirmation because only USB file transfer is available."
+                return True,"PhoneHub Agent installed/updated directly."
+            return True,"Agent copied to the phone. Android still requires one Update / Install confirmation because only USB file transfer is available."
         return False,output.strip() or "Could not send PhoneHub Agent to the phone."
 
     def _agent_bootstrap_done(self,result):
