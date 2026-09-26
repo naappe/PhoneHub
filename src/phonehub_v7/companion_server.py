@@ -49,6 +49,7 @@ class CompanionServer:
         riv=base64.b64decode(response["nonce"]);rc=base64.b64decode(response["ciphertext"])
         return json.loads(AESGCM(key).decrypt(riv,rc,None).decode())
     def ping(self,d):return self.command(d,"ping")
+    def device_status(self,d):return self.command(d,"device_status")
     def _run(self):
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);sock.bind(("0.0.0.0",self.port))
         while True:
