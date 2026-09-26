@@ -172,13 +172,21 @@ class MainWindow(QMainWindow):
             return
         ip = self.peer.ip
         self.test_result.setText(f"Testing Tailscale reachability to {ip}…")
-        self.work(lambda: self.runner.run(["tailscale", "ping", "--c", "1", ip], 12), self._ping_done)
+        self.work(lambda: self.runner.run(["tailscale", "ping", ip], 12), self._ping_done)
 
     def _ping_done(self, result):
-        if result.ok:
+        output = (result.stdout or result.stderr or "").strip()
+        # tailscale ping may continue probing for a direct path and be killed by
+        # our UI timeout even after successful DERP pongs. A pong is proof of
+        # reachability regardless of the eventual process return code.
+        if "pong from" in output.lower():
+            first = next((line.strip() for line in output.splitlines() if "pong from" in line.lower()), "")
+            self.test_result.setText("✓ Phone reachable over Tailscale" + (f" • {first}" if first else "."))
+        elif result.ok:
             self.test_result.setText("✓ Phone reachable over Tailscale.")
         else:
-            self.test_result.setText("✕ Phone not reachable over Tailscale. Check Tailscale on the phone.")
+            detail = output.splitlines()[-1] if output else "No pong received."
+            self.test_result.setText(f"✕ Tailscale ping failed • {detail}")
 
     def test_port(self):
         if self.peer is None:
