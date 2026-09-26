@@ -41,7 +41,27 @@ class CompanionService : Service() {
     private fun encrypt(key:ByteArray,value:JSONObject):JSONObject{val nonce=ByteArray(12);java.security.SecureRandom().nextBytes(nonce);val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,SecretKeySpec(key,"AES"),GCMParameterSpec(128,nonce));val out=cipher.doFinal(value.toString().toByteArray(Charsets.UTF_8));return JSONObject().put("type","encrypted").put("version",2).put("nonce",android.util.Base64.encodeToString(nonce,android.util.Base64.NO_WRAP)).put("ciphertext",android.util.Base64.encodeToString(out,android.util.Base64.NO_WRAP))}
     private fun hex(b:ByteArray)=b.joinToString(""){"%02x".format(it)}
     private fun remoteMailbox(key:ByteArray)=hex(MessageDigest.getInstance("SHA-256").digest((deviceId()+":"+android.util.Base64.encodeToString(key,android.util.Base64.NO_WRAP)).toByteArray()))
-    private fun statusJson():JSONObject{val bm=getSystemService(BATTERY_SERVICE) as android.os.BatteryManager;val stat=StatFs(filesDir.absolutePath);val am=getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager;val mi=android.app.ActivityManager.MemoryInfo();am.getMemoryInfo(mi);val cm=getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager;val caps=cm.getNetworkCapabilities(cm.activeNetwork);val network=when{caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true->"Wi-Fi";caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)==true->"Cellular";caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)==true->"Ethernet";else->"Offline"};return JSONObject().put("type","remote_presence").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("battery_percent",bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)).put("charging",bm.isCharging).put("storage_total",stat.totalBytes).put("storage_free",stat.availableBytes).put("memory_total",mi.totalMem).put("memory_free",mi.availMem).put("network",network).put("timestamp",System.currentTimeMillis()/1000)}
+    private fun localIpv4():String{
+        var fallback=""
+        try{
+            val interfaces=NetworkInterface.getNetworkInterfaces()
+            while(interfaces.hasMoreElements()){
+                val nif=interfaces.nextElement()
+                if(!nif.isUp||nif.isLoopback)continue
+                val addresses=nif.inetAddresses
+                while(addresses.hasMoreElements()){
+                    val address=addresses.nextElement()
+                    if(address is Inet4Address&&!address.isLoopbackAddress&&address.isSiteLocalAddress){
+                        val value=address.hostAddress?:""
+                        if(nif.name.startsWith("wlan",true)||nif.name.startsWith("wifi",true))return value
+                        if(fallback.isBlank())fallback=value
+                    }
+                }
+            }
+        }catch(_:Exception){}
+        return fallback
+    }
+    private fun statusJson():JSONObject{val bm=getSystemService(BATTERY_SERVICE) as android.os.BatteryManager;val stat=StatFs(filesDir.absolutePath);val am=getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager;val mi=android.app.ActivityManager.MemoryInfo();am.getMemoryInfo(mi);val cm=getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager;val caps=cm.getNetworkCapabilities(cm.activeNetwork);val network=when{caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true->"Wi-Fi";caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)==true->"Cellular";caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)==true->"Ethernet";else->"Offline"};return JSONObject().put("type","remote_presence").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("local_ipv4",localIpv4()).put("command_port",COMMAND_PORT).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("battery_percent",bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)).put("charging",bm.isCharging).put("storage_total",stat.totalBytes).put("storage_free",stat.availableBytes).put("memory_total",mi.totalMem).put("memory_free",mi.availMem).put("network",network).put("timestamp",System.currentTimeMillis()/1000)}
     private fun policies():JSONObject{val raw=getSharedPreferences(PREFS,0).getString(POLICIES,"{}")?:"{}";return try{JSONObject(raw)}catch(_:Exception){JSONObject()}}
     private fun savePolicies(value:JSONObject){getSharedPreferences(PREFS,0).edit().putString(POLICIES,value.toString()).apply()}
     private fun policyDefaults(pkg:String)=JSONObject().put("package",pkg).put("keep_installed",true).put("allow_usage",true).put("suspend",false).put("show_notifications",true).put("forward_notifications",false).put("protect_changes",false).put("auto_apply",true)
