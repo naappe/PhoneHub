@@ -100,12 +100,9 @@ class Window(QMainWindow):
         ds=self.server.devices()
         if not ds:self.screen_status.setText("Phone offline");return
         d=ds[0];self._screen_device=d;self._screen_active=True;self.screen_view.setPixmap(QPixmap())
-        if d.address!="REMOTE":
-            self.screen_status.setText("Checking local high-performance screen…")
-            self.screen_view.setText("Connecting wireless ADB / scrcpy…")
-            self.run_task("screen_local",lambda:self._start_scrcpy_local(d))
-        else:
-            self._start_webrtc(d)
+        self.screen_status.setText("Checking high-performance wireless screen…")
+        self.screen_view.setText("Looking for authorized wireless ADB / scrcpy…")
+        self.run_task("screen_local",lambda:self._start_scrcpy_local(d))
 
     def _start_webrtc(self,d):
         self.screen_status.setText("Starting remote WebRTC screen…");self.screen_view.setText("Connecting remote live screen…")
@@ -114,15 +111,26 @@ class Window(QMainWindow):
     def _start_scrcpy_local(self,d):
         if not shutil.which("adb"):return {"ok":False,"reason":"ADB is not installed"}
         if not shutil.which("scrcpy"):return {"ok":False,"reason":"scrcpy is not installed"}
-        target=f"{d.address}:5555"
-        try:
-            with socket.create_connection((d.address,5555),timeout=1.5):pass
-        except OSError:
-            return {"ok":False,"reason":"wireless ADB port 5555 is not reachable"}
-        connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
-        output=((connect.stdout or "")+" "+(connect.stderr or "")).strip().lower()
-        if connect.returncode!=0 or ("connected to" not in output and "already connected" not in output):
-            return {"ok":False,"reason":output or "ADB connection failed"}
+        flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+        devices=subprocess.run(["adb","devices"],capture_output=True,text=True,timeout=5,creationflags=flags)
+        tcp_targets=[]
+        for line in (devices.stdout or "").splitlines()[1:]:
+            parts=line.split()
+            if len(parts)>=2 and parts[1]=="device" and ":" in parts[0]:
+                tcp_targets.append(parts[0])
+        target=tcp_targets[0] if len(tcp_targets)==1 else None
+        if target is None and d.address!="REMOTE":
+            target=f"{d.address}:5555"
+            try:
+                with socket.create_connection((d.address,5555),timeout=1.5):pass
+            except OSError:
+                return {"ok":False,"reason":"wireless ADB port 5555 is not reachable"}
+            connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
+            output=((connect.stdout or "")+" "+(connect.stderr or "")).strip().lower()
+            if connect.returncode!=0 or ("connected to" not in output and "already connected" not in output):
+                return {"ok":False,"reason":output or "ADB connection failed"}
+        if target is None:
+            return {"ok":False,"reason":"no authorized wireless ADB target discovered"}
         args=["scrcpy","-s",target,"--window-title=PhoneHub Screen - Local Control","--max-size=1600","--max-fps=60","--video-bit-rate=8M","--no-audio","--stay-awake"]
         flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
         process=subprocess.Popen(args,creationflags=flags)
