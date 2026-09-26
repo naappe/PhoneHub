@@ -39,9 +39,13 @@ if ($null -ne $adb) {
     $authorized = @($devices | Select-String -Pattern "\tdevice$")
 
     if ($authorized.Count -gt 0) {
-        Write-Host "[PhoneHub] Authorized Android service link found." -ForegroundColor Green
+        $serial = (($authorized[0].ToString() -split "\s+")[0]).Trim()
+        $model = (& adb -s $serial shell getprop ro.product.model 2>$null).Trim()
+        $android = (& adb -s $serial shell getprop ro.build.version.release 2>$null).Trim()
+        Write-Host "[PhoneHub] Authorized Android phone found: $($model)" -ForegroundColor Green
+        if ($android) { Write-Host "[PhoneHub] Android: $android" -ForegroundColor DarkGray }
         Write-Host "[PhoneHub] Installing PhoneHub Agent directly..." -ForegroundColor Cyan
-        & adb install -r "$ApkPath"
+        & adb -s $serial install -r "$ApkPath"
         if ($LASTEXITCODE -eq 0) {
             Write-Host ""
             Write-Host "[PhoneHub] PhoneHub Agent installed/updated successfully." -ForegroundColor Green
@@ -61,29 +65,42 @@ if ($null -eq $thisPc) {
 Write-Host "[PhoneHub] Looking for connected Android phone..." -ForegroundColor Cyan
 
 $phone = $null
+$storageItem = $null
+
+# Generic MTP discovery: inspect portable devices and select the first one
+# that exposes an Android-style internal storage root. No OEM/model names.
 foreach ($item in @($thisPc.Items())) {
-    $name = [string]$item.Name
-    if ($name -match "OnePlus|Android|Nord") {
-        $phone = $item
-        break
+    try {
+        $folder = $item.GetFolder
+        if ($null -eq $folder) { continue }
+
+        $candidateStorage = Find-ChildByName -Folder $folder -Names @(
+            "Internal shared storage",
+            "Internal storage",
+            "Shared internal storage",
+            "Phone storage",
+            "Internal Storage"
+        )
+
+        if ($null -ne $candidateStorage) {
+            $phone = $item
+            $storageItem = $candidateStorage
+            break
+        }
+    } catch {
+        continue
     }
 }
 
 if ($null -eq $phone) {
-    Write-Host "[PhoneHub] Phone not found." -ForegroundColor Red
-    Write-Host "Connect the phone by USB, unlock it, and select File Transfer / MTP." -ForegroundColor Yellow
+    Write-Host "[PhoneHub] No Android MTP storage found." -ForegroundColor Red
+    Write-Host "Connect any Android phone by USB, unlock it, and select File Transfer / MTP." -ForegroundColor Yellow
     exit 2
 }
 
-Write-Host "[PhoneHub] Found: $($phone.Name)" -ForegroundColor Green
+Write-Host "[PhoneHub] Found Android device: $($phone.Name)" -ForegroundColor Green
 
 $phoneFolder = $phone.GetFolder
-$storageItem = Find-ChildByName -Folder $phoneFolder -Names @(
-    "Internal shared storage",
-    "Internal storage",
-    "Shared internal storage",
-    "Phone storage"
-)
 
 if ($null -eq $storageItem) {
     Write-Host "[PhoneHub] Internal storage is not visible yet." -ForegroundColor Red
@@ -109,7 +126,7 @@ if ($null -eq $sourceItem) {
     throw "Unable to open APK source file."
 }
 
-Write-Host "[PhoneHub] Copying PhoneHub 6.1 APK to phone Download..." -ForegroundColor Cyan
+Write-Host "[PhoneHub] Copying PhoneHub Agent APK to Android Download..." -ForegroundColor Cyan
 $downloadFolder.CopyHere($sourceItem, 16)
 
 $deadline = (Get-Date).AddSeconds(30)
