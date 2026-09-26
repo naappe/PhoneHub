@@ -29,6 +29,15 @@ if ($null -eq $deviceLine) {
 $serial = (($deviceLine.ToString() -split "\s+")[0]).Trim()
 Write-Host "[PhoneHub] Phone authorized: $serial" -ForegroundColor Green
 
+$installedPath = & adb -s $serial shell pm path com.tailscale.ipn 2>$null
+if ($LASTEXITCODE -eq 0 -and ($installedPath -match "package:")) {
+    Write-Host "[PhoneHub] Tailscale is already installed on the phone." -ForegroundColor Green
+    Write-Host "[PhoneHub] Opening Tailscale..." -ForegroundColor Cyan
+    & adb -s $serial shell monkey -p com.tailscale.ipn 1 | Out-Null
+    Write-Host "[PhoneHub] Tailscale already installed and opened successfully." -ForegroundColor Green
+    exit 0
+}
+
 $stable = "https://pkgs.tailscale.com/stable/"
 Write-Host "[PhoneHub] Finding latest official Tailscale APK..." -ForegroundColor Cyan
 $page = (Invoke-WebRequest -UseBasicParsing -Uri $stable).Content
@@ -43,28 +52,43 @@ $version = $match.Groups[2].Value
 $apkUrl = if ($rel -match '^https?://') { $rel } else { ([uri]::new([uri]$stable, $rel)).AbsoluteUri }
 $shaUrl = "$apkUrl.sha256"
 
-$tmp = Join-Path $env:TEMP ("phonehub-tailscale-{0}-{1}.apk" -f $version, [guid]::NewGuid().ToString("N"))
+$cacheDir = Join-Path $PSScriptRoot "runtime\tailscale"
+New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+$cacheApk = Join-Path $cacheDir ("tailscale-android-universal-{0}.apk" -f $version)
+$tmp = $cacheApk
 
-Write-Host "[PhoneHub] Downloading Tailscale $version..." -ForegroundColor Cyan
-Invoke-WebRequest -UseBasicParsing -Uri $apkUrl -OutFile $tmp
+Write-Host "[PhoneHub] Getting official SHA-256..." -ForegroundColor Cyan
+$expected = ((Invoke-WebRequest -UseBasicParsing -Uri $shaUrl).Content.Trim() -split "\s+")[0].ToLowerInvariant()
+
+$useCache = $false
+if (Test-Path $cacheApk) {
+    $cachedHash = (Get-FileHash -Algorithm SHA256 $cacheApk).Hash.ToLowerInvariant()
+    if ($cachedHash -eq $expected) {
+        $useCache = $true
+        Write-Host "[PhoneHub] Using verified cached Tailscale APK from PhoneHub folder." -ForegroundColor Green
+    } else {
+        Remove-Item $cacheApk -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if (-not $useCache) {
+    Write-Host "[PhoneHub] Downloading Tailscale $version once..." -ForegroundColor Cyan
+    Invoke-WebRequest -UseBasicParsing -Uri $apkUrl -OutFile $cacheApk
+}
 
 Write-Host "[PhoneHub] Verifying SHA-256..." -ForegroundColor Cyan
-$expected = ((Invoke-WebRequest -UseBasicParsing -Uri $shaUrl).Content.Trim() -split "\s+")[0].ToLowerInvariant()
-$actual = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLowerInvariant()
+$actual = (Get-FileHash -Algorithm SHA256 $cacheApk).Hash.ToLowerInvariant()
 
 if ($actual -ne $expected) {
-    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    Remove-Item $cacheApk -Force -ErrorAction SilentlyContinue
     throw "Tailscale checksum verification failed."
 }
 
 Write-Host "[PhoneHub] Installing Tailscale to phone..." -ForegroundColor Cyan
 & adb -s $serial install -r $tmp
 if ($LASTEXITCODE -ne 0) {
-    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     throw "Tailscale APK installation failed."
 }
-
-Remove-Item $tmp -Force -ErrorAction SilentlyContinue
 
 Write-Host "[PhoneHub] Starting Tailscale..." -ForegroundColor Cyan
 & adb -s $serial shell monkey -p com.tailscale.ipn 1 | Out-Null
@@ -74,9 +98,6 @@ Write-Host "[PhoneHub] Tailscale installed and opened successfully." -Foreground
 Write-Host "Approve VPN/sign-in on the phone if Android asks." -ForegroundColor Yellow
 }
 finally {
-    if ($tmp -and (Test-Path $tmp)) {
-        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-    }
     if ($hasMutex) {
         $mutex.ReleaseMutex() | Out-Null
     }
