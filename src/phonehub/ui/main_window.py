@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
             return
         serial=status.serial
         self.setupstep.setText("Downloading official Tailscale APK, verifying it, and installing to phone…")
-        self.work(lambda:self.setup.install_tailscale(serial),lambda result:self._tailscale_phone_done(serial,result))
+        self.work(self._run_tailscale_installer_script,lambda result:self._tailscale_phone_done(serial,result))
 
     def _tailscale_phone_done(self,serial,result):
         ok,msg=result
