@@ -174,10 +174,13 @@ class MainWindow(QMainWindow):
         self.pool.start(worker)
 
     def refresh(self):
-        self.pc_status.setText("PC Tailscale: checking…")
-        self.phone_status.setText("Android: searching tailnet…")
-        if not self.latencies:
-            self.quality_status.setText("Latency —   •   Route —")
+        # Keep the last confirmed state visible while the background refresh runs.
+        # This avoids flashing "checking/searching" over a healthy connection.
+        if self.peer is None:
+            self.pc_status.setText("PC Tailscale: checking…")
+            self.phone_status.setText("Android: searching tailnet…")
+            if not self.latencies:
+                self.quality_status.setText("Latency —   •   Route —")
         self.work(self._snapshot, self._render_snapshot)
 
     def _snapshot(self):
