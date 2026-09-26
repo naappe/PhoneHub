@@ -4,10 +4,10 @@ import socket
 import re
 import subprocess
 from datetime import datetime
-from PySide6.QtCore import QThreadPool, QTimer
+from PySide6.QtCore import QThreadPool, QTimer, Qt
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QPushButton, QVBoxLayout, QWidget, QApplication
+    QPushButton, QVBoxLayout, QWidget, QApplication, QScrollArea
 )
 
 from phonehub.core.command import SubprocessRunner
@@ -27,15 +27,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PhoneHub 6.3 — Tailscale")
-        self.resize(1000, 760)
-        self.setMinimumSize(860, 650)
+        self.resize(1040, 720)
+        self.setMinimumSize(760, 540)
         self.setStyleSheet(APP_STYLE)
-
-        # Size interactive controls only. Labels/cards size naturally so text never clips.
-        self.setStyleSheet(self.styleSheet() + """
-            QPushButton { min-height: 34px; padding: 0 14px; }
-            QLineEdit { min-height: 38px; padding: 0 12px; }
-        """)
 
         self.runner = SubprocessRunner()
         self.discovery = DiscoveryService(self.runner)
@@ -46,17 +40,24 @@ class MainWindow(QMainWindow):
         self.last_good = None
         self.adb_ready_ip = None
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setCentralWidget(scroll)
+
         root = QWidget()
-        self.setCentralWidget(root)
+        root.setObjectName("Root")
+        scroll.setWidget(root)
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(14)
+        layout.setContentsMargins(32, 26, 32, 28)
+        layout.setSpacing(16)
 
         brand = QLabel("PhoneHub 6.3")
         brand.setObjectName("PageTitle")
         layout.addWidget(brand)
 
-        subtitle = QLabel("Private phone connection over Tailscale")
+        subtitle = QLabel("Secure wireless Android control")
         subtitle.setObjectName("Muted")
         layout.addWidget(subtitle)
 
@@ -64,7 +65,7 @@ class MainWindow(QMainWindow):
         self.pc_status = QLabel("PC Tailscale: checking…")
         self.phone_status = QLabel("Android: searching…")
         self.path_status = QLabel("PC  →  Tailscale  →  Phone")
-        self.path_status.setStyleSheet("font-size:18px;font-weight:700;color:#ffffff;")
+        self.path_status.setObjectName("Status")
         sl.addWidget(self.pc_status)
         sl.addWidget(self.phone_status)
         sl.addWidget(self.path_status)
@@ -77,12 +78,10 @@ class MainWindow(QMainWindow):
         refresh = QPushButton("Refresh")
         refresh.setMinimumWidth(90)
         refresh.setObjectName("Primary")
-        refresh.setStyleSheet("QPushButton{background:#2869ed;color:white;border:1px solid #2869ed;border-radius:10px;padding:8px 16px;font-weight:700;} QPushButton:hover{background:#3478f6;}")
         refresh.clicked.connect(self.refresh)
         buttons.addWidget(refresh)
         ping = QPushButton("Ping Phone")
         ping.setMinimumWidth(110)
-        ping.setStyleSheet("QPushButton{background:#15213a;color:#eef4ff;border:1px solid #355078;border-radius:10px;padding:8px 16px;} QPushButton:hover{background:#1b2b4a;}")
         ping.clicked.connect(self.ping_phone)
         buttons.addWidget(ping)
         buttons.addStretch()
@@ -96,19 +95,16 @@ class MainWindow(QMainWindow):
         row.addWidget(self.port)
         test = QPushButton("Test Port")
         test.setMinimumWidth(90)
-        test.setStyleSheet("QPushButton{background:#15213a;color:#eef4ff;border:1px solid #355078;border-radius:10px;padding:8px 16px;} QPushButton:hover{background:#1b2b4a;}")
         test.clicked.connect(self.test_port)
         row.addWidget(test)
         tl.addLayout(row)
         actions = QHBoxLayout()
         copy_ip = QPushButton("Copy IP")
         copy_ip.setMinimumWidth(90)
-        copy_ip.setStyleSheet("QPushButton{background:#15213a;color:#eef4ff;border:1px solid #355078;border-radius:10px;padding:8px 16px;} QPushButton:hover{background:#1b2b4a;}")
         copy_ip.clicked.connect(self.copy_ip)
         actions.addWidget(copy_ip)
         ssh = QPushButton("SSH 22")
         ssh.setMinimumWidth(90)
-        ssh.setStyleSheet("QPushButton{background:#15213a;color:#eef4ff;border:1px solid #355078;border-radius:10px;padding:8px 16px;} QPushButton:hover{background:#1b2b4a;}")
         ssh.clicked.connect(self.open_ssh)
         actions.addWidget(ssh)
         actions.addStretch()
@@ -143,13 +139,6 @@ class MainWindow(QMainWindow):
         rl.addLayout(remote_actions)
         layout.addWidget(remote)
 
-        guide, gl = self.card("Setup")
-        instructions = QLabel(
-            "Normal use is automatic. A new phone needs one-time Android USB-debugging authorization; PhoneHub handles wireless reconnects afterward."
-        )
-        instructions.setWordWrap(True)
-        gl.addWidget(instructions)
-        layout.addWidget(guide)
         layout.addStretch()
 
         self.timer = QTimer(self)
@@ -171,7 +160,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(18, 14, 18, 16)
         layout.setSpacing(8)
         heading = QLabel(title)
-        heading.setStyleSheet("font-size:16px;font-weight:750;")
+        heading.setObjectName("CardTitle")
         layout.addWidget(heading)
         return card, layout
 
