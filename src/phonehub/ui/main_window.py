@@ -17,11 +17,11 @@ from phonehub.ui.theme import APP_STYLE
 
 
 class MainWindow(QMainWindow):
-    """Tailscale-only PhoneHub.
+    """PhoneHub desktop controller.
 
-    PhoneHub does not install an Android agent and does not use ADB.
-    It discovers Android peers already authenticated to the same tailnet,
-    verifies network reachability, and provides connection helpers.
+    Tailscale provides private discovery/networking. When Android ADB-over-TCP
+    has been authorized once, PhoneHub reconnects it quietly and launches
+    scrcpy on demand. Android security still requires first-time authorization.
     """
 
     def __init__(self):
@@ -44,6 +44,7 @@ class MainWindow(QMainWindow):
         self.peer = None
         self.latencies = []
         self.last_good = None
+        self.adb_ready_ip = None
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -122,18 +123,29 @@ class MainWindow(QMainWindow):
         tl.addWidget(self.quick)
         layout.addWidget(tools)
 
-        camera, cam = self.card("Camera")
-        self.camera_status = QLabel(
-            "Not available yet • Tailscale is connected, but no camera service is running on the phone."
-        )
-        self.camera_status.setObjectName("Muted")
-        self.camera_status.setWordWrap(True)
-        cam.addWidget(self.camera_status)
-        layout.addWidget(camera)
+        remote, rl = self.card("Phone")
+        self.remote_status = QLabel("Wireless control: checking…")
+        self.remote_status.setObjectName("Muted")
+        self.remote_status.setWordWrap(True)
+        rl.addWidget(self.remote_status)
+        remote_actions = QHBoxLayout()
+        screen = QPushButton("Open Screen")
+        screen.setObjectName("Primary")
+        screen.clicked.connect(self.open_screen)
+        remote_actions.addWidget(screen)
+        front = QPushButton("Front Camera")
+        front.clicked.connect(lambda: self.open_camera("front"))
+        remote_actions.addWidget(front)
+        back = QPushButton("Back Camera")
+        back.clicked.connect(lambda: self.open_camera("back"))
+        remote_actions.addWidget(back)
+        remote_actions.addStretch()
+        rl.addLayout(remote_actions)
+        layout.addWidget(remote)
 
         guide, gl = self.card("Setup")
         instructions = QLabel(
-            "Tailscale ON on both devices • Same tailnet • Refresh"
+            "Normal use is automatic. A new phone needs one-time Android USB-debugging authorization; PhoneHub handles wireless reconnects afterward."
         )
         instructions.setWordWrap(True)
         gl.addWidget(instructions)
@@ -214,6 +226,63 @@ class MainWindow(QMainWindow):
         }:
             self.test_result.setText("Ready")
         self.quick.setText(f"Phone IP: {peer.ip}")
+        self.ensure_wireless_adb(peer.ip)
+
+    def ensure_wireless_adb(self, ip):
+        """Quietly reconnect an already-authorized Android ADB-over-TCP endpoint."""
+        if self.adb_ready_ip == ip:
+            return
+        self.remote_status.setText("Wireless control: connecting…")
+        self.work(lambda: self._adb_connect(ip), lambda result: self._adb_done(ip, result))
+
+    def _adb_connect(self, ip):
+        check = self.runner.run(["adb", "connect", f"{ip}:5555"], 8)
+        output = ((check.stdout or "") + " " + (check.stderr or "")).strip()
+        ok = check.ok and ("connected to" in output.lower() or "already connected" in output.lower())
+        return ok, output
+
+    def _adb_done(self, ip, result):
+        ok, output = result
+        if ok:
+            self.adb_ready_ip = ip
+            self.remote_status.setText("Wireless screen/control: ✓ Ready")
+        else:
+            self.adb_ready_ip = None
+            detail = output.splitlines()[-1] if output else "ADB 5555 is not available."
+            self.remote_status.setText(
+                "Wireless control needs one-time setup on this phone. "
+                "Connect USB, allow USB debugging, then run: adb tcpip 5555"
+            )
+            self.test_result.setText(detail)
+
+    def open_screen(self):
+        if self.peer is None:
+            self.test_result.setText("No online Android Tailscale device found.")
+            return
+        target = f"{self.peer.ip}:5555"
+        try:
+            subprocess.Popen(["scrcpy", "-s", target])
+            self.test_result.setText("Opening wireless phone screen…")
+        except FileNotFoundError:
+            self.test_result.setText("scrcpy is not installed. RUN_PHONEHUB.bat can install it automatically.")
+        except Exception as exc:
+            self.test_result.setText(f"Could not open screen: {exc}")
+
+    def open_camera(self, facing):
+        if self.peer is None:
+            self.test_result.setText("No online Android Tailscale device found.")
+            return
+        target = f"{self.peer.ip}:5555"
+        # scrcpy 4.x camera capture uses Android camera2 through the scrcpy server.
+        # Camera permission/availability is still controlled by Android.
+        args = ["scrcpy", "-s", target, "--video-source=camera", f"--camera-facing={facing}", "--no-audio"]
+        try:
+            subprocess.Popen(args)
+            self.test_result.setText(f"Opening {facing} camera…")
+        except FileNotFoundError:
+            self.test_result.setText("scrcpy is not installed.")
+        except Exception as exc:
+            self.test_result.setText(f"Could not open {facing} camera: {exc}")
 
     def ping_phone(self):
         if self.peer is None:
