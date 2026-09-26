@@ -1,5 +1,6 @@
 param()
 $ErrorActionPreference="Stop"
+$PSNativeCommandUseErrorActionPreference = $false
 $Root=Split-Path -Parent $MyInvocation.MyCommand.Path
 $Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev3.apk"
 $Pkg="com.phonehub.companion"
@@ -26,7 +27,7 @@ else {
 Write-Host "Using device: $serial"
 
 Write-Host "[1/3] Installing PhoneHub Companion..."
-$out=(& adb -s $serial install -r $Apk 2>&1 | Out-String)
+$out = cmd /c "adb -s $serial install -r `"$Apk`" 2>&1" | Out-String
 if($out -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE"){
   Write-Host ""
   Write-Host "One-time signing migration required."
@@ -35,7 +36,7 @@ if($out -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE"){
   if($answer -notmatch '^[Yy]'){throw "Installation cancelled."}
   & adb -s $serial uninstall $Pkg
   if($LASTEXITCODE -ne 0){throw "Could not remove old Companion."}
-  $out=(& adb -s $serial install $Apk 2>&1 | Out-String)
+  $out = cmd /c "adb -s $serial install `"$Apk`" 2>&1" | Out-String
 }
 Write-Host $out.Trim()
 if($out -notmatch "Success"){throw "APK installation failed."}
