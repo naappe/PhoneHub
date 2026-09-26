@@ -4,6 +4,9 @@ import android.app.*
 import android.content.*
 import android.os.*
 import android.provider.Settings
+import android.os.StatFs
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
@@ -46,7 +49,20 @@ class CompanionService : Service() {
         commandThread=Thread({try{ServerSocket(COMMAND_PORT).use{server->server.soTimeout=2000;while(running.get()){try{server.accept().use{client->client.soTimeout=5000;val line=client.getInputStream().bufferedReader().readLine()?:return@use;val wireReq=JSONObject(line);val key=keyBytes();val encrypted=wireReq.optString("type")=="encrypted"&&wireReq.optInt("version")==2;val req=if(encrypted&&key!=null)decrypt(key,wireReq.optString("nonce"),wireReq.optString("ciphertext")) else wireReq;val response=JSONObject().put("version",2);val ts=req.optLong("timestamp",0);val nonce=req.optString("nonce");val sig=req.optString("signature");val now=System.currentTimeMillis()/1000;val canonical=req.optString("type")+"|"+ts+"|"+nonce;val authorized=key!=null&&encrypted&&nonce.isNotBlank()&&kotlin.math.abs(now-ts)<=30&&secureEquals(hmac(key,canonical),sig)
             if(req.optString("type")=="enroll"){if(key==null)response.put("type","error").put("message","companion not enabled") else response.put("type","enrolled").put("device_id",deviceId()).put("pair_key",android.util.Base64.encodeToString(key,android.util.Base64.NO_WRAP))}
             else if(!authorized)response.put("type","error").put("message","unauthorized")
-            else when(req.optString("type")){"ping"->response.put("type","pong").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("timestamp",now);else->response.put("type","error").put("message","unsupported command")}
+            else when(req.optString("type")){
+                "ping"->response.put("type","pong").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("timestamp",now)
+                "device_status"->{
+                    val bm=getSystemService(BATTERY_SERVICE) as android.os.BatteryManager
+                    val level=bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                    val charging=bm.isCharging
+                    val stat=StatFs(filesDir.absolutePath);val total=stat.totalBytes;val free=stat.availableBytes
+                    val am=getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager;val mi=android.app.ActivityManager.MemoryInfo();am.getMemoryInfo(mi)
+                    val cm=getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager;val caps=cm.getNetworkCapabilities(cm.activeNetwork)
+                    val network=when{caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true->"Wi-Fi";caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)==true->"Cellular";caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)==true->"Ethernet";else->"Offline"}
+                    response.put("type","device_status").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("manufacturer",Build.MANUFACTURER).put("model",Build.MODEL).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("battery_percent",level).put("charging",charging).put("storage_total",total).put("storage_free",free).put("memory_total",mi.totalMem).put("memory_free",mi.availMem).put("network",network).put("uptime_seconds",SystemClock.elapsedRealtime()/1000).put("timestamp",now)
+                }
+                else->response.put("type","error").put("message","unsupported command")
+            }
             val wireResponse=if(encrypted&&key!=null)encrypt(key,response) else response;client.getOutputStream().bufferedWriter().use{w->w.write(wireResponse.toString());w.newLine();w.flush()}
         }}catch(_:SocketTimeoutException){}catch(_:Exception){}}}}catch(_:Exception){}},"phonehub-command").apply{isDaemon=true;start()}
     }
