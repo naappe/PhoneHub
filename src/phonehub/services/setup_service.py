@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-import hashlib, re, tempfile, urllib.request
+import hashlib, re, tempfile, urllib.request, urllib.parse
 
 TAILSCALE_PACKAGE="com.tailscale.ipn"
 TAILSCALE_STABLE="https://pkgs.tailscale.com/stable/"
