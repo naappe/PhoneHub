@@ -1,7 +1,8 @@
 from __future__ import annotations
-import sys
+import sys, json
+from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, QDateTime, QObject, Signal, QRunnable, QThreadPool
-from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QComboBox,QCheckBox,QAbstractItemView
+from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QComboBox,QCheckBox,QAbstractItemView,QMenu
 from .companion_server import CompanionServer
 
 def gb(n): return f"{n/1073741824:.1f} GB"
@@ -64,17 +65,26 @@ class Window(QMainWindow):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(14)
         top=QHBoxLayout();h=QLabel("Apps");h.setObjectName("heading");self.app_count=QLabel("Waiting for phone");self.app_count.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.app_count);l.addLayout(top)
         tools=QHBoxLayout();self.app_search=QLineEdit();self.app_search.setPlaceholderText("Search apps or package…");self.app_search.textChanged.connect(self.filter_apps);self.app_filter=QComboBox();self.app_filter.addItems(["All apps","User apps","System apps"]);self.app_filter.currentIndexChanged.connect(self.filter_apps);tools.addWidget(self.app_search,1);tools.addWidget(self.app_filter);l.addLayout(tools)
-        self.app_table=QTableWidget(0,4);self.app_table.setHorizontalHeaderLabels(["App","Package","Type","State"]);self.app_table.verticalHeader().setVisible(False);self.app_table.setSelectionBehavior(QAbstractItemView.SelectItems);self.app_table.setSelectionMode(QAbstractItemView.ExtendedSelection);self.app_table.setEditTriggers(QAbstractItemView.NoEditTriggers);self.app_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);l.addWidget(self.app_table,1)
-        self._apps=[];return p
+        self.app_table=QTableWidget(0,4);self.app_table.setHorizontalHeaderLabels(["App","Package","Type","State"]);self.app_table.verticalHeader().setVisible(False);self.app_table.setSelectionBehavior(QAbstractItemView.SelectItems);self.app_table.setSelectionMode(QAbstractItemView.ExtendedSelection);self.app_table.setEditTriggers(QAbstractItemView.NoEditTriggers);self.app_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeToContents);self.app_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);self.app_table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeToContents);self.app_table.horizontalHeader().setSectionResizeMode(3,QHeaderView.ResizeToContents);self.app_table.setContextMenuPolicy(Qt.CustomContextMenu);self.app_table.customContextMenuRequested.connect(self.app_menu);self.app_table.cellDoubleClicked.connect(self.open_policy);l.addWidget(self.app_table,1)
+        self._apps=[];self.load_app_cache();return p
 
     def policy_page(self):
-        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);h=QLabel("App Policy");h.setObjectName("heading");l.addWidget(h);d=QLabel("Policy controls are staged for the next Android capability layer. Current Companion does not silently suspend or alter other apps.");d.setWordWrap(True);l.addWidget(d)
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);h=QLabel("App Policy");h.setObjectName("heading");l.addWidget(h);self.policy_title=QLabel("Select an app");self.policy_title.setObjectName("policyTitle");self.policy_package=QLabel("Choose an app from Apps, then double-click it or use Open App Policy.");self.policy_package.setObjectName("updated");l.addWidget(self.policy_title);l.addWidget(self.policy_package);d=QLabel("Policy controls are staged for the next Android capability layer. Current Companion does not silently suspend or alter other apps.");d.setWordWrap(True);l.addWidget(d)
         for text,on in [("Keep installed",True),("Allow usage",True),("Suspend",False),("Show notifications",True),("Forward to PhoneHub",False),("Protect from changes",False),("Auto apply on sync",True)]:
             cb=QCheckBox(text);cb.setChecked(on);cb.setEnabled(False);l.addWidget(cb)
         l.addStretch();return p
 
     def run_task(self,tag,fn):
         t=Task(fn,tag);t.signals.done.connect(self.task_done);self.pool.start(t)
+    def cache_path(self):
+        p=Path.home()/".phonehub";p.mkdir(parents=True,exist_ok=True);return p/"apps_cache.json"
+    def load_app_cache(self):
+        try:
+            self._apps=json.loads(self.cache_path().read_text(encoding="utf-8"));self.app_count.setText(f"{len(self._apps)} cached • refreshing…");self.filter_apps()
+        except Exception:pass
+    def save_app_cache(self):
+        try:self.cache_path().write_text(json.dumps(self._apps,ensure_ascii=False),encoding="utf-8")
+        except Exception:pass
     def load_apps(self,d):
         if self._apps_loading:return
         self._apps_loading=True;self.app_count.setText("Loading apps…");self.run_task("apps",lambda:self.server.apps(d))
@@ -95,7 +105,7 @@ class Window(QMainWindow):
         elif tag=="apps":
             self._apps_loading=False
             if isinstance(result,Exception):self.app_count.setText(f"Apps unavailable: {result}");return
-            if result.get("type")=="apps":self._apps=result.get("apps",[]);self.app_count.setText(f"{len(self._apps)} installed");self.filter_apps()
+            if result.get("type")=="apps":self._apps=result.get("apps",[]);self.app_count.setText(f"{len(self._apps)} installed");self.filter_apps();self.save_app_cache()
 
     def filter_apps(self):
         if not hasattr(self,"app_table"):return
@@ -110,6 +120,21 @@ class Window(QMainWindow):
             vals=[a.get("name",""),a.get("package",""),"System" if a.get("system") else "User","Enabled" if a.get("enabled") else "Disabled"]
             for col,val in enumerate(vals):self.app_table.setItem(row,col,QTableWidgetItem(str(val)))
 
+    def app_menu(self,pos):
+        item=self.app_table.itemAt(pos)
+        if not item:return
+        row=item.row();menu=QMenu(self)
+        a1=menu.addAction("Copy App Name");a2=menu.addAction("Copy Package");a3=menu.addAction("Copy Row");menu.addSeparator();a4=menu.addAction("Open App Policy")
+        chosen=menu.exec(self.app_table.viewport().mapToGlobal(pos))
+        app=self.app_table.item(row,0).text();pkg=self.app_table.item(row,1).text()
+        if chosen==a1:QApplication.clipboard().setText(app)
+        elif chosen==a2:QApplication.clipboard().setText(pkg)
+        elif chosen==a3:QApplication.clipboard().setText("\t".join(self.app_table.item(row,i).text() for i in range(4)))
+        elif chosen==a4:self.select_policy(row)
+    def open_policy(self,row,col):self.select_policy(row)
+    def select_policy(self,row):
+        app=self.app_table.item(row,0).text();pkg=self.app_table.item(row,1).text()
+        self.policy_title.setText(app);self.policy_package.setText(pkg);self.stack.setCurrentIndex(2)
     def refresh(self):
         ds=self.server.devices()
         if not ds:
@@ -125,7 +150,7 @@ class Window(QMainWindow):
         #brand{font-size:22px;font-weight:700;color:#111827}
         #nav QPushButton{text-align:left;border:0;border-radius:9px;padding:11px 14px;background:transparent;color:#536078}
         #nav QPushButton:hover{background:#f1f5fb} #nav QPushButton:checked{background:#eaf2ff;color:#2563eb;font-weight:600}
-        #heading{font-size:30px;font-weight:700;color:#111827} #status{color:#16803a;font-weight:600;padding:2px 0 8px 0} #updated{color:#8490a4;font-size:12px}
+        #heading{font-size:30px;font-weight:700;color:#111827} #policyTitle{font-size:22px;font-weight:700;color:#182033} #status{color:#16803a;font-weight:600;padding:2px 0 8px 0} #updated{color:#8490a4;font-size:12px}
         #card{background:#ffffff;border:1px solid #e1e7ef;border-radius:16px;min-height:142px}
         #cardTitle{background:transparent;color:#7a8599;font-size:11px;font-weight:700} #cardValue{background:transparent;font-size:24px;font-weight:700;color:#182033} #cardDetail{background:transparent;color:#6b768a}
         QProgressBar{background:#edf1f6;border:0;border-radius:3px} QProgressBar::chunk{background:#2563eb;border-radius:3px}\n        QLineEdit,QComboBox{background:#fff;border:1px solid #dfe5ee;border-radius:9px;padding:9px} QTableWidget{background:#fff;border:1px solid #e1e7ef;border-radius:12px;gridline-color:#eef1f5} QHeaderView::section{background:#f7f9fc;border:0;border-bottom:1px solid #e5eaf1;padding:9px;font-weight:600}
