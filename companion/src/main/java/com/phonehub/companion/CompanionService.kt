@@ -1,89 +1,74 @@
 package com.phonehub.companion
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
-import android.content.Context
-import android.content.Intent
-import android.os.Build
-import android.os.IBinder
+import android.app.*
+import android.content.*
+import android.os.*
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
+import java.net.*
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CompanionService : Service() {
     companion object {
-        private const val CHANNEL = "phonehub_connection"
-        private const val NOTIFICATION_ID = 7001
-        private const val PREFS = "phonehub"
-        private const val ENABLED = "companion_enabled"
-        private const val PORT = 47321
-
-        fun enable(context: Context) {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(ENABLED, true).apply()
-            start(context)
-        }
-        fun isEnabled(context: Context): Boolean =
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(ENABLED, false)
-        fun start(context: Context) {
-            ContextCompat.startForegroundService(context, Intent(context, CompanionService::class.java))
-        }
+        private const val CHANNEL="phonehub_connection"; private const val NOTIFICATION_ID=7001
+        private const val PREFS="phonehub"; private const val ENABLED="companion_enabled"
+        private const val DISCOVERY_PORT=47321; private const val COMMAND_PORT=47322
+        fun enable(c:Context){c.getSharedPreferences(PREFS,0).edit().putBoolean(ENABLED,true).apply();start(c)}
+        fun isEnabled(c:Context)=c.getSharedPreferences(PREFS,0).getBoolean(ENABLED,false)
+        fun start(c:Context){ContextCompat.startForegroundService(c,Intent(c,CompanionService::class.java))}
     }
-
-    private val running = AtomicBoolean(false)
-    private var heartbeatThread: Thread? = null
-
-    override fun onCreate() {
+    private val running=AtomicBoolean(false)
+    private var heartbeatThread:Thread?=null; private var commandThread:Thread?=null
+    override fun onCreate(){
         super.onCreate()
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, "PhoneHub connection", NotificationManager.IMPORTANCE_LOW))
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("PhoneHub")
-            .setContentText("Companion service active")
-            .setOngoing(true).setSilent(true).build()
-        startForeground(NOTIFICATION_ID, notification)
-        startHeartbeat()
+        val m=getSystemService(NotificationManager::class.java)
+        m.createNotificationChannel(NotificationChannel(CHANNEL,"PhoneHub connection",NotificationManager.IMPORTANCE_LOW))
+        startForeground(NOTIFICATION_ID,NotificationCompat.Builder(this,CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth).setContentTitle("PhoneHub")
+            .setContentText("Companion service active").setOngoing(true).setSilent(true).build())
+        startWorkers()
     }
-
-    private fun startHeartbeat() {
-        if (!running.compareAndSet(false, true)) return
-        heartbeatThread = Thread({
-            DatagramSocket().use { socket ->
-                socket.broadcast = true
-                while (running.get()) {
-                    try {
-                        val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "android"
-                        val payload = JSONObject()
-                            .put("type", "heartbeat")
-                            .put("version", 1)
-                            .put("device_id", id)
-                            .put("device_name", Build.MANUFACTURER + " " + Build.MODEL)
-                            .put("timestamp", System.currentTimeMillis() / 1000)
-                            .toString().toByteArray(Charsets.UTF_8)
-                        val packet = DatagramPacket(payload, payload.size, InetAddress.getByName("255.255.255.255"), PORT)
-                        socket.send(packet)
-                    } catch (_: Exception) { }
-                    try { Thread.sleep(5000) } catch (_: InterruptedException) { break }
+    private fun startWorkers(){ startHeartbeat(); startCommandServer() }
+    private fun deviceId()=Settings.Secure.getString(contentResolver,Settings.Secure.ANDROID_ID)?:"android"
+    private fun startHeartbeat(){
+        if(!running.compareAndSet(false,true)) return
+        heartbeatThread=Thread({
+            DatagramSocket().use{socket-> socket.broadcast=true
+                while(running.get()){
+                    try{
+                        val p=JSONObject().put("type","heartbeat").put("version",1).put("device_id",deviceId())
+                            .put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("command_port",COMMAND_PORT)
+                            .put("timestamp",System.currentTimeMillis()/1000).toString().toByteArray()
+                        socket.send(DatagramPacket(p,p.size,InetAddress.getByName("255.255.255.255"),DISCOVERY_PORT))
+                    }catch(_:Exception){}
+                    try{Thread.sleep(5000)}catch(_:InterruptedException){break}
                 }
             }
-        }, "phonehub-heartbeat").apply { isDaemon = true; start() }
+        },"phonehub-heartbeat").apply{isDaemon=true;start()}
     }
-
-    override fun onDestroy() {
-        running.set(false)
-        heartbeatThread?.interrupt()
-        super.onDestroy()
+    private fun startCommandServer(){
+        if(commandThread?.isAlive==true)return
+        commandThread=Thread({
+            try{ServerSocket(COMMAND_PORT).use{server->
+                server.soTimeout=2000
+                while(running.get()){
+                    try{server.accept().use{client->
+                        client.soTimeout=5000
+                        val line=client.getInputStream().bufferedReader().readLine()?:return@use
+                        val req=JSONObject(line); val response=JSONObject().put("version",1)
+                        when(req.optString("type")){
+                            "ping"->response.put("type","pong").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("timestamp",System.currentTimeMillis()/1000)
+                            else->response.put("type","error").put("message","unsupported command")
+                        }
+                        client.getOutputStream().bufferedWriter().use{w->w.write(response.toString());w.newLine();w.flush()}
+                    }}catch(_:SocketTimeoutException){}catch(_:Exception){}
+                }
+            }}catch(_:Exception){}
+        },"phonehub-command").apply{isDaemon=true;start()}
     }
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startHeartbeat()
-        return START_STICKY
-    }
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onDestroy(){running.set(false);heartbeatThread?.interrupt();commandThread?.interrupt();super.onDestroy()}
+    override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{startWorkers();return START_STICKY}
+    override fun onBind(intent:Intent?):IBinder?=null
 }
