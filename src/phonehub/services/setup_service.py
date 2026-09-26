@@ -29,8 +29,17 @@ class SetupService:
         return SetupStatus("ready","USB authorized.",serial)
 
     def package_installed(self,serial:str,package:str=TAILSCALE_PACKAGE)->bool:
-        r=self.adb.runner.run([self.adb.adb,"-s",serial,"shell","pm","path",package],8)
-        return r.ok and "package:" in r.stdout
+        checks = [
+            [self.adb.adb,"-s",serial,"shell","pm","path",package],
+            [self.adb.adb,"-s",serial,"shell","cmd","package","path",package],
+            [self.adb.adb,"-s",serial,"shell","pm","list","packages",package],
+        ]
+        for args in checks:
+            r=self.adb.runner.run(args,8)
+            text=(r.stdout or "").strip()
+            if r.ok and (text.startswith("package:") or f"package:{package}" in text):
+                return True
+        return False
 
     def install_tailscale(self,serial:str):
         try:
