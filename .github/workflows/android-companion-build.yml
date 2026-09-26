@@ -29,12 +29,15 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
       - run: chmod +x gradlew
       - name: Restore stable signing key
+        shell: python
         env:
           PHONEHUB_KEYSTORE_B64: ${{ secrets.PHONEHUB_KEYSTORE_B64 }}
         run: |
-          test -n "$PHONEHUB_KEYSTORE_B64" || { echo "PHONEHUB_KEYSTORE_B64 secret is not configured"; exit 1; }
-          echo "$PHONEHUB_KEYSTORE_B64" | base64 --decode > companion/phonehub-release.jks
-      - name: Build Companion APK
+          import base64, os, pathlib
+          raw = os.environ["PHONEHUB_KEYSTORE_B64"]
+          clean = "".join(raw.split())
+          pathlib.Path("companion/phonehub-release.jks").write_bytes(base64.b64decode(clean, validate=True))
+      - name: Build signed Companion APK
         env:
           PHONEHUB_STORE_PASSWORD: ${{ secrets.PHONEHUB_STORE_PASSWORD }}
           PHONEHUB_KEY_ALIAS: ${{ secrets.PHONEHUB_KEY_ALIAS }}
@@ -43,9 +46,9 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p dist
-          cp companion/build/outputs/apk/release/companion-release.apk dist/PhoneHub-Companion-7.0.0-dev2.apk
+          cp companion/build/outputs/apk/release/companion-release.apk dist/PhoneHub-Companion-7.0.0-dev3.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: PhoneHub-Companion-7.0.0-dev2
-          path: dist/PhoneHub-Companion-7.0.0-dev2.apk
+          name: PhoneHub-Companion-7.0.0-dev3
+          path: dist/PhoneHub-Companion-7.0.0-dev3.apk
           if-no-files-found: error
