@@ -375,7 +375,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.devmsg.setText(f"Network online • {peer.name} • {peer.ip}")
-        self.setupstep.setText("✓ Tailscale phone detected. Next: open PhoneHub Agent on the phone for full policy and notification sync.")
+        self.setupstep.setText("✓ Tailscale phone detected • network connection is online. PhoneHub Agent sync can continue independently.")
         self.state.set_device(DeviceSnapshot(
             state=ConnectionState.ONLINE,
             device_name=peer.name or "Android phone",
@@ -502,7 +502,27 @@ class MainWindow(QMainWindow):
     def diagnostics(self):
         snap=self.adb.snapshot(self.cfg); scr="Found" if self.media.scrcpy else "Missing"; self.secmsg.setText(f"ADB target: {self.cfg.serial or '-'}\nState: {snap.state.value}\nTransport: {snap.transport}\nscrcpy: {scr}")
     def render(self,s:DeviceSnapshot):
-        self.device_metric.setText(s.device_name); battery=f" • {s.battery_percent}%" if s.battery_percent is not None else ""; self.detail.setText(f"{s.detail}{battery} • Android {s.android_version}"); self.badge.setText(f"● {s.state.value.title()}")
+        # Tailscale is the primary PhoneHub transport. Do not let optional ADB
+        # diagnostics overwrite a healthy Tailscale connection in the main UI.
+        peers=self.discovery.peers()
+        peer=next((p for p in peers if p.os=="android"),None)
+        if peer is not None:
+            try:
+                if self.cfg.phone_ip != peer.ip:
+                    self.cfg=self.configs.save(DeviceConfig(peer.ip,5555))
+                    if hasattr(self,"ip"): self.ip.setText(peer.ip)
+            except Exception:
+                pass
+            self.device_metric.setText(peer.name or "Android phone")
+            self.detail.setText(f"Tailscale online • {peer.ip}")
+            self.badge.setText("● Online")
+            if hasattr(self,"devmsg"): self.devmsg.setText(f"Tailscale online • {peer.ip}")
+            return
+
+        self.device_metric.setText(s.device_name)
+        battery=f" • {s.battery_percent}%" if s.battery_percent is not None else ""
+        self.detail.setText(f"{s.detail}{battery} • Android {s.android_version}")
+        self.badge.setText(f"● {s.state.value.title()}")
         if hasattr(self,"devmsg"): self.devmsg.setText(s.detail)
     def closeEvent(self,event):
         self.screen_wanted=False; self.screen_watch.stop(); self.media.stop(); super().closeEvent(event)
