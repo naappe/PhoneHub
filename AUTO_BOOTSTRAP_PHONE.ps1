@@ -1,5 +1,5 @@
 param(
-    [string]$ApkPath = (Join-Path $PSScriptRoot "PhoneHub-Agent-6.2.0\PhoneHub-Agent-6.2.0-debug.apk"),
+    [string]$ApkPath = (Join-Path $PSScriptRoot "PhoneHub-Agent-6.2.1\PhoneHub-Agent-6.2.1-debug.apk"),
     [switch]$NoPause
 )
 
@@ -19,7 +19,7 @@ function Find-ChildByName {
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host " PhoneHub 6.2 - One Click Phone Bootstrap" -ForegroundColor Cyan
+Write-Host " PhoneHub 6.2.1 - One Click Phone Bootstrap" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -27,7 +27,7 @@ if (!(Test-Path $ApkPath)) {
     Write-Host "[PhoneHub] APK not found:" -ForegroundColor Yellow
     Write-Host "  $ApkPath"
     Write-Host ""
-    Write-Host "Extract PhoneHub-Agent-6.2.0.zip into C:\PhoneHub first." -ForegroundColor Yellow
+    Write-Host "Extract PhoneHub-Agent-6.2.1.zip into C:\PhoneHub first." -ForegroundColor Yellow
     exit 1
 }
 
@@ -50,7 +50,7 @@ if ($null -ne $adb) {
             Write-Host ""
             Write-Host "[PhoneHub] PhoneHub Agent installed/updated successfully." -ForegroundColor Green
             Write-Host "[PhoneHub] Starting PhoneHub Agent..." -ForegroundColor Cyan
-            & adb -s $serial shell monkey -p com.phonehub.notifier 1 *> $null
+            & adb -s $serial shell am start -n com.phonehub.notifier/.MainActivity *> $null
             Start-Sleep -Seconds 2
             Write-Host "[PhoneHub] Bootstrap complete. USB is no longer required for normal use once Tailscale is online." -ForegroundColor Green
             if (-not $NoPause) { pause }
