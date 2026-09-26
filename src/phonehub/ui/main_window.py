@@ -3,7 +3,8 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 import os, subprocess, zipfile
-from PySide6.QtCore import QThreadPool,QTimer
+from PySide6.QtCore import QThreadPool,QTimer,Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QFrame,QHBoxLayout,QLabel,QLineEdit,QMainWindow,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QComboBox
 from phonehub.core.command import SubprocessRunner
 from phonehub.core.state import AppState
@@ -14,15 +15,18 @@ from phonehub.services.adb_service import AdbService
 from phonehub.services.media_service import MediaSessionManager
 from phonehub.services.discovery_service import DiscoveryService
 from phonehub.services.setup_service import SetupService
+from phonehub.services.agent_service import PhoneHubAgentService
 from phonehub.ui.theme import APP_STYLE
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("PhoneHub 6.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
         self.state=AppState(); self.state.device_changed.connect(self.render)
-        self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.setup=SetupService(self.adb); self.media=MediaSessionManager()
+        self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.setup=SetupService(self.adb); self.media=MediaSessionManager(); self.agent=PhoneHubAgentService()
         self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_wanted=False; self.screen_watch_busy=False; self.screen_restarting=False; self.screen_user_closed=False; self.screen_started_once=False; self.auto_setup_running=False
         self.screen_watch=QTimer(self); self.screen_watch.setInterval(2500); self.screen_watch.timeout.connect(self._watch_screen)
+        self.agent_screen_watch=QTimer(self); self.agent_screen_watch.setInterval(900); self.agent_screen_watch.timeout.connect(self._poll_agent_frame)
+        self.agent_screen_busy=False
         self.connection_watch=QTimer(self); self.connection_watch.setInterval(5000); self.connection_watch.timeout.connect(self.refresh); self.connection_watch.start()
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
         root.addWidget(self.sidebar()); root.addWidget(self.content(),1); self.render(self.state.device)
@@ -68,11 +72,16 @@ class MainWindow(QMainWindow):
         self.agentmsg=QLabel("Connect any compatible Android phone. PhoneHub identifies the device by Android/USB capabilities, not by brand or model, then installs the Agent through the best available link."); self.agentmsg.setObjectName("Muted"); self.agentmsg.setWordWrap(True); sl.addWidget(self.agentmsg)
         l.addWidget(sc); l.addStretch(); return w
     def screen_page(self):
-        w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Optional engineering screen tool. ADB/scrcpy are only required when this feature is used.")
+        w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Remote screen prefers the PhoneHub Agent over Tailscale. USB/ADB is only a fallback engineering path.")
         c,cl=self.card("Remote screen"); row=QHBoxLayout()
         for name,fn,obj in [("Open Screen",self.open_screen,"Primary"),("Wake",lambda:self.adb.key(self._engineering_cfg(),224),""),("Home",lambda:self.adb.key(self._engineering_cfg(),3),""),("Back",lambda:self.adb.key(self._engineering_cfg(),4),""),("Close",self.stop_media,"Danger")]:
             b=QPushButton(name); b.setObjectName(obj); b.clicked.connect(fn); row.addWidget(b)
-        cl.addLayout(row); self.screenmsg=QLabel("No active screen"); self.screenmsg.setObjectName("Muted"); cl.addWidget(self.screenmsg); l.addWidget(c); l.addStretch(); return w
+        cl.addLayout(row); self.screenmsg=QLabel("No active screen"); self.screenmsg.setObjectName("Muted"); cl.addWidget(self.screenmsg)
+        self.screenview=QLabel("Remote screen preview")
+        self.screenview.setAlignment(Qt.AlignCenter)
+        self.screenview.setMinimumHeight(360)
+        self.screenview.setStyleSheet("border:1px solid #243655;border-radius:10px;background:#07101f;")
+        cl.addWidget(self.screenview,1); l.addWidget(c,1); return w
     def camera_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Camera","Front and rear camera use the same exclusive media owner.")
         c,cl=self.card("Camera session"); row=QHBoxLayout()
@@ -472,9 +481,56 @@ class MainWindow(QMainWindow):
     def open_screen(self):
         self.screen_user_closed=False
         self.screen_wanted=True
-        self.screenmsg.setText("Opening screen…")
+        self.screenmsg.setText("Checking PhoneHub Agent over Tailscale…")
+        ip=self.cfg.phone_ip
+        if ip:
+            self.work(lambda:self.agent.health(ip),self._agent_screen_health)
+            return
+        self._open_screen_fallback()
+
+    def _agent_screen_health(self,health):
+        ip=self.cfg.phone_ip
+        if health.get("service")=="phonehub-agent":
+            if health.get("screen")=="active":
+                self.screenmsg.setText("Remote screen active over Tailscale")
+                if not self.agent_screen_watch.isActive(): self.agent_screen_watch.start()
+                self._poll_agent_frame()
+                return
+            self.screenmsg.setText("Screen approval requested on phone…")
+            self.work(lambda:self.agent.request_screen(ip),self._agent_screen_requested)
+            return
+        self._open_screen_fallback()
+
+    def _agent_screen_requested(self,result):
+        ok,msg=result
+        if ok:
+            self.screenmsg.setText("Tap the PhoneHub screen request notification on the phone and approve screen sharing.")
+            if not self.agent_screen_watch.isActive(): self.agent_screen_watch.start()
+        else:
+            self.screenmsg.setText("PhoneHub Agent remote screen unavailable • using USB/ADB fallback.")
+            self._open_screen_fallback()
+
+    def _open_screen_fallback(self):
         cfg=self._engineering_cfg()
         self.work(lambda:self.adb.snapshot(cfg),lambda snap:self._open_screen_ready(cfg,snap))
+
+    def _poll_agent_frame(self):
+        if not self.screen_wanted or self.agent_screen_busy or not self.cfg.phone_ip:
+            return
+        self.agent_screen_busy=True
+        self.work(lambda:self.agent.frame(self.cfg.phone_ip),self._agent_frame_ready)
+
+    def _agent_frame_ready(self,data):
+        self.agent_screen_busy=False
+        if not self.screen_wanted:
+            return
+        if data:
+            pix=QPixmap()
+            if pix.loadFromData(data):
+                self.screenview.setPixmap(pix.scaled(self.screenview.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation))
+                self.screenmsg.setText("Remote screen active over Tailscale")
+                return
+        self.screenmsg.setText("Waiting for screen-share approval/frame from phone…")
     def _open_screen_ready(self,cfg,snap):
         if snap.state!=ConnectionState.ONLINE:
             self.screenmsg.setText("Screen link unavailable • connect authorized USB or ADB transport.")
@@ -512,8 +568,14 @@ class MainWindow(QMainWindow):
         if not self.ready(): self.cameramsg.setText("Connect Device first"); return
         ok,msg=self.media.camera(self._engineering_cfg(),face); self.cameramsg.setText(msg)
     def stop_media(self):
-        self.screen_user_closed=True; self.screen_wanted=False; self.screen_watch.stop(); self.screen_watch_busy=False; self.screen_restarting=False; self.screen_started_once=False
-        self.media.stop(); self.screenmsg.setText("Closed"); self.cameramsg.setText("Closed")
+        self.screen_user_closed=True; self.screen_wanted=False
+        self.screen_watch.stop(); self.agent_screen_watch.stop()
+        self.screen_watch_busy=False; self.agent_screen_busy=False; self.screen_restarting=False; self.screen_started_once=False
+        if self.cfg.phone_ip:
+            self.work(lambda:self.agent.stop_screen(self.cfg.phone_ip),lambda _ok:None)
+        self.media.stop()
+        if hasattr(self,"screenview"): self.screenview.clear(); self.screenview.setText("Remote screen preview")
+        self.screenmsg.setText("Closed"); self.cameramsg.setText("Closed")
     def capture(self):
         if not self.ready(): self.filemsg.setText("Connect Device first"); return
         cfg=self._engineering_cfg()
@@ -544,4 +606,4 @@ class MainWindow(QMainWindow):
         self.badge.setText(f"● {s.state.value.title()}")
         if hasattr(self,"devmsg"): self.devmsg.setText(s.detail)
     def closeEvent(self,event):
-        self.screen_wanted=False; self.screen_watch.stop(); self.media.stop(); super().closeEvent(event)
+        self.screen_wanted=False; self.screen_watch.stop(); self.agent_screen_watch.stop(); self.media.stop(); super().closeEvent(event)
