@@ -209,15 +209,14 @@ class MainWindow(QMainWindow):
         )
 
     def _auto_agent_checked(self,serial,installed):
-        if installed:
-            self.agentmsg.setText("✓ PhoneHub Agent already installed.")
-            self.setupstep.setText("✓ Agent installed • checking Tailscale on phone…")
-            self.work(
-                lambda:self.setup.package_installed(serial,"com.tailscale.ipn"),
-                lambda present:self._auto_tailscale_checked(serial,present)
-            )
-            return
-        self.setupstep.setText("PhoneHub Agent missing • installing it automatically…")
+        # An installed package may be an older Agent without the current
+        # Tailscale API. First-time USB setup must always ensure the bundled
+        # current Agent build, then normal operation can be network-only.
+        self.setupstep.setText(
+            "PhoneHub Agent found • updating/verifying PhoneHub Agent 6.2…"
+            if installed else
+            "PhoneHub Agent missing • installing PhoneHub Agent 6.2 automatically…"
+        )
         self.work(self._run_agent_bootstrap,self._auto_agent_ready)
 
     def _auto_agent_ready(self,result):
@@ -294,15 +293,8 @@ class MainWindow(QMainWindow):
                 self.ip.setText(peer.ip)
             except Exception:
                 pass
-            self.state.set_device(DeviceSnapshot(
-                state=ConnectionState.ONLINE,
-                device_name=peer.name or "Android phone",
-                transport="Tailscale / PhoneHub Agent",
-                detail=f"Auto setup complete • {peer.ip}"
-            ))
-            self.devmsg.setText(f"Connected automatically • {peer.name} • {peer.ip}")
-            self.auto_setup_running=False
-            self.setupstep.setText("✓ Auto Setup complete • Tailscale is online. You can disconnect USB; normal PhoneHub use now works over any network.")
+            self.setupstep.setText("✓ Tailscale online • verifying PhoneHub Agent remote service…")
+            self.work(lambda:self.agent.health(peer.ip),lambda health:self._auto_agent_network_ready(peer,health))
             return
 
         if getattr(self,"_auto_wait_attempts",0) < 24:
@@ -318,6 +310,36 @@ class MainWindow(QMainWindow):
             "PhoneHub setup is ready, but the phone has not joined Tailscale yet. "
             "Open Tailscale on the phone and approve sign-in/VPN; Auto Detect will then connect."
         )
+    def _auto_agent_network_ready(self,peer,health):
+        if health.get("service")=="phonehub-agent":
+            self.state.set_device(DeviceSnapshot(
+                state=ConnectionState.ONLINE,
+                device_name=peer.name or "Android phone",
+                transport="Tailscale / PhoneHub Agent",
+                detail=f"Agent online • {peer.ip}:8765"
+            ))
+            self.devmsg.setText(f"PhoneHub Agent online • {peer.name} • {peer.ip}:8765")
+            self.auto_setup_running=False
+            self.setupstep.setText(
+                "✓ Setup complete • PhoneHub Agent + Tailscale verified. "
+                "Disconnect USB now; PhoneHub can continue over any network."
+            )
+            self.agentmsg.setText("✓ PhoneHub Agent 6.2 remote service verified over Tailscale.")
+            return
+
+        self.auto_setup_running=False
+        self.state.set_device(DeviceSnapshot(
+            state=ConnectionState.DEGRADED,
+            device_name=peer.name or "Android phone",
+            transport="Tailscale",
+            detail=f"Tailscale online • Agent service not ready on {peer.ip}:8765"
+        ))
+        self.setupstep.setText(
+            "Tailscale is online, but the PhoneHub Agent remote service is not responding yet. "
+            "Keep USB connected and run Auto Setup again so PhoneHub can install/update Agent 6.2."
+        )
+        self.agentmsg.setText("⚠ Tailscale works, but PhoneHub Agent 6.2 remote service is not verified.")
+
     def _auto_usb(self,status):
         self.usb_serial=status.serial
         if status.stage!="ready":
@@ -385,7 +407,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.devmsg.setText(f"Network online • {peer.name} • {peer.ip}")
-        self.setupstep.setText("✓ Tailscale phone detected • network connection is online. PhoneHub Agent sync can continue independently.")
+        self.setupstep.setText("✓ Tailscale phone detected • verifying PhoneHub Agent service is the next step for full remote control.")
         self.state.set_device(DeviceSnapshot(
             state=ConnectionState.ONLINE,
             device_name=peer.name or "Android phone",
@@ -507,8 +529,7 @@ class MainWindow(QMainWindow):
             self.screenmsg.setText("Tap the PhoneHub screen request notification on the phone and approve screen sharing.")
             if not self.agent_screen_watch.isActive(): self.agent_screen_watch.start()
         else:
-            self.screenmsg.setText("PhoneHub Agent remote screen unavailable • using USB/ADB fallback.")
-            self._open_screen_fallback()
+            self.screenmsg.setText("PhoneHub Agent remote service is not available over Tailscale. Run Auto Setup once with USB connected to update/verify Agent 6.2.")
 
     def _open_screen_fallback(self):
         cfg=self._engineering_cfg()
@@ -550,7 +571,7 @@ class MainWindow(QMainWindow):
         cfg,snap,display=result
         if not self.screen_wanted or self.screen_user_closed: return
         if snap.state!=ConnectionState.ONLINE or display=="offline":
-            self.screenmsg.setText("ADB screen link unavailable • USB/Tailscale network may still be online.")
+            self.screenmsg.setText("Engineering ADB fallback unavailable. Normal remote screen requires the PhoneHub Agent service over Tailscale.")
             return
         if display=="screen_off":
             self.screenmsg.setText("Phone screen is off • waiting for wake…")
