@@ -10,6 +10,8 @@ import android.net.NetworkCapabilities
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
+import org.json.JSONArray
+import android.content.pm.ApplicationInfo
 import java.net.*
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
@@ -61,6 +63,14 @@ class CompanionService : Service() {
                     val network=when{caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true->"Wi-Fi";caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)==true->"Cellular";caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)==true->"Ethernet";else->"Offline"}
                     response.put("type","device_status").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("manufacturer",Build.MANUFACTURER).put("model",Build.MODEL).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("battery_percent",level).put("charging",charging).put("storage_total",total).put("storage_free",free).put("memory_total",mi.totalMem).put("memory_free",mi.availMem).put("network",network).put("uptime_seconds",SystemClock.elapsedRealtime()/1000).put("timestamp",now)
                 }
+                "apps"->{
+                    val arr=JSONArray()
+                    packageManager.getInstalledApplications(0).sortedBy{packageManager.getApplicationLabel(it).toString().lowercase()}.forEach{a->
+                        arr.put(JSONObject().put("name",packageManager.getApplicationLabel(a).toString()).put("package",a.packageName).put("system",(a.flags and ApplicationInfo.FLAG_SYSTEM)!=0).put("enabled",a.enabled))
+                    }
+                    response.put("type","apps").put("apps",arr).put("count",arr.length())
+                }
+                "capabilities"->response.put("type","capabilities").put("notifications",false).put("files",true).put("camera",false).put("screen_control",false).put("app_inventory",true)
                 else->response.put("type","error").put("message","unsupported command")
             }
             val wireResponse=if(encrypted&&key!=null)encrypt(key,response) else response;client.getOutputStream().bufferedWriter().use{w->w.write(wireResponse.toString());w.newLine();w.flush()}
