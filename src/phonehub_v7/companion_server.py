@@ -3,7 +3,7 @@ import base64,hashlib,hmac,json,secrets,socket,threading,time
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dataclasses import dataclass
 from pathlib import Path
-PORT=47321;DEFAULT_COMMAND_PORT=47322;MAX_PACKET=8192
+PORT=47321;DEFAULT_COMMAND_PORT=47322;MAX_PACKET=2097152
 @dataclass
 class Companion:
     device_id:str;device_name:str;address:str;last_seen:float;command_port:int=DEFAULT_COMMAND_PORT
@@ -23,12 +23,12 @@ class CompanionServer:
         self._thread=threading.Thread(target=self._run,name="phonehub-companion",daemon=True);self._thread.start()
     def devices(self):
         with self._lock:return sorted((d for d in self._devices.values() if d.online),key=lambda d:d.last_seen,reverse=True)
-    def _raw_command(self,d,payload,timeout=5):
+    def _raw_command(self,d,payload,timeout=20):
         raw=(json.dumps(payload,separators=(",",":"))+"\n").encode()
         with socket.create_connection((d.address,d.command_port),timeout=timeout) as s:
             s.sendall(raw);data=b""
             while b"\n" not in data:
-                chunk=s.recv(MAX_PACKET)
+                chunk=s.recv(65536)
                 if not chunk:break
                 data+=chunk
                 if len(data)>MAX_PACKET:raise ValueError("Companion response too large")
