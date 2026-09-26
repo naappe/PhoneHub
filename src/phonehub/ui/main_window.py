@@ -20,7 +20,7 @@ from phonehub.ui.theme import APP_STYLE
 
 class MainWindow(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle("PhoneHub 6.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
+        super().__init__(); self.setWindowTitle("PhoneHub 6.2"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
         self.state=AppState(); self.state.device_changed.connect(self.render)
         self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.setup=SetupService(self.adb); self.media=MediaSessionManager(); self.agent=PhoneHubAgentService()
         self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_wanted=False; self.screen_watch_busy=False; self.screen_restarting=False; self.screen_user_closed=False; self.screen_started_once=False; self.auto_setup_running=False
@@ -63,7 +63,7 @@ class MainWindow(QMainWindow):
         c,cl=self.card("Connection"); self.ip=QLineEdit(self.cfg.phone_ip); self.ip.setPlaceholderText("100.x.x.x"); cl.addWidget(self.ip)
         row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
-        sc,sl=self.card("PhoneHub 6 Auto Setup","USB and Tailscale are tracked separately. Auto Setup supports compatible Android devices without OEM-specific model rules, prepares the phone over USB, then waits for Tailscale.")
+        sc,sl=self.card("PhoneHub 6.2 Auto Setup","USB and Tailscale are tracked separately. Auto Setup supports compatible Android devices without OEM-specific model rules, prepares the phone over USB, then waits for Tailscale.")
         self.setupstep=QLabel("Run Auto Setup once. PhoneHub will handle the PC and phone setup sequence automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
         sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk)
         agent=QPushButton("Install / Update Agent"); agent.setObjectName("Primary"); agent.clicked.connect(self.install_agent_to_phone); sr.addWidget(agent)
