@@ -74,7 +74,7 @@ class CompanionServer:
     def _relay(self,body):
         req=urllib.request.Request(RELAY_URL,data=json.dumps(body,separators=(",",":")).encode(),headers={"Content-Type":"application/json"},method="POST")
         with urllib.request.urlopen(req,timeout=10) as r:return json.loads(r.read().decode())
-    def _remote_command(self,d,key,payload,timeout=25):
+    def _remote_command(self,d,key,payload,timeout=90):
         request_id=secrets.token_hex(16);payload=dict(payload);payload["_request_id"]=request_id
         iv=secrets.token_bytes(12);cipher=AESGCM(key).encrypt(iv,json.dumps(payload,separators=(",",":")).encode(),None)
         wire={"type":"encrypted","version":2,"nonce":base64.b64encode(iv).decode(),"ciphertext":base64.b64encode(cipher).decode()}
@@ -99,7 +99,7 @@ class CompanionServer:
                         elif s.get("_request_id"):
                             with self._remote_cv:self._remote_responses[s["_request_id"]]=s;self._remote_cv.notify_all()
                 except Exception:pass
-            time.sleep(5)
+            time.sleep(1)
     def _run(self):
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);sock.bind(("0.0.0.0",self.port))
         while True:
