@@ -32,12 +32,10 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(860, 650)
         self.setStyleSheet(APP_STYLE)
 
-        # Keep controls readable even when Windows/font scaling compresses layouts.
+        # Size interactive controls only. Labels/cards size naturally so text never clips.
         self.setStyleSheet(self.styleSheet() + """
-            QPushButton { min-height: 36px; padding: 0 14px; }
+            QPushButton { min-height: 34px; padding: 0 14px; }
             QLineEdit { min-height: 38px; padding: 0 12px; }
-            QLabel { min-height: 20px; }
-            QFrame#Card { min-height: 110px; }
         """)
 
         self.runner = SubprocessRunner()
@@ -51,8 +49,8 @@ class MainWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(30, 26, 30, 26)
-        layout.setSpacing(18)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(14)
 
         brand = QLabel("PhoneHub 6.3")
         brand.setObjectName("PageTitle")
@@ -66,12 +64,13 @@ class MainWindow(QMainWindow):
         self.pc_status = QLabel("PC Tailscale: checking…")
         self.phone_status = QLabel("Android: searching…")
         self.path_status = QLabel("PC  →  Tailscale  →  Phone")
-        self.path_status.setObjectName("Metric")
+        self.path_status.setStyleSheet("font-size:18px;font-weight:700;color:#ffffff;")
         sl.addWidget(self.pc_status)
         sl.addWidget(self.phone_status)
         sl.addWidget(self.path_status)
         self.quality_status = QLabel("Latency —   •   Route —")
         self.quality_status.setObjectName("Muted")
+        self.quality_status.setWordWrap(True)
         sl.addWidget(self.quality_status)
 
         buttons = QHBoxLayout()
@@ -115,6 +114,7 @@ class MainWindow(QMainWindow):
         tl.addLayout(actions)
         self.test_result = QLabel("Select an online Android device first.")
         self.test_result.setObjectName("Muted")
+        self.test_result.setWordWrap(True)
         tl.addWidget(self.test_result)
         self.quick = QLabel("Quick links appear when a phone is detected.")
         self.quick.setObjectName("Muted")
@@ -156,8 +156,8 @@ class MainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName("Card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 14, 18, 16)
+        layout.setSpacing(8)
         heading = QLabel(title)
         heading.setStyleSheet("font-size:16px;font-weight:750;")
         layout.addWidget(heading)
