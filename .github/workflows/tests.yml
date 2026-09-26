@@ -2,6 +2,8 @@ name: PhoneHub 5 Tests
 
 on:
   push:
+    branches-ignore:
+      - 'feature/phonehub-v7-companion'
   pull_request:
   workflow_dispatch:
 
