@@ -2,7 +2,7 @@ param()
 $ErrorActionPreference="Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 $Root=Split-Path -Parent $MyInvocation.MyCommand.Path
-$Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev14.apk"
+$Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev15.apk"
 $Pkg="com.phonehub.companion"
 if(-not(Test-Path $Apk)){throw "APK not found: $Apk"}
 if(-not(Get-Command adb -ErrorAction SilentlyContinue)){throw "adb not found."}
@@ -42,6 +42,9 @@ Write-Host $out.Trim()
 if($out -notmatch "Success"){throw "APK installation failed."}
 Write-Host "[2/3] Launching Companion..."
 & adb -s $serial shell monkey -p $Pkg -c android.intent.category.LAUNCHER 1 | Out-Null
-Write-Host "[3/3] Installed and launched."
+Write-Host "[3/4] Installed and launched."
+Write-Host "[4/4] Enabling authorized wireless ADB for local high-performance screen..."
+$tcp = (& adb -s $serial tcpip 5555 2>&1 | Out-String).Trim()
+if($LASTEXITCODE -eq 0){ Write-Host "Wireless ADB enabled on TCP 5555." } else { Write-Host "Wireless ADB setup skipped: $tcp" }
 Write-Host ""
 Write-Host "If this was the one-time signing migration, tap Enable automatic service once on the phone."
