@@ -3,7 +3,8 @@ import base64,hashlib,hmac,json,secrets,socket,threading,time,urllib.request
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dataclasses import dataclass
 from pathlib import Path
-PORT=47321;DEFAULT_COMMAND_PORT=47322;MAX_PACKET=2097152\nRELAY_URL="https://tmupbruwmwlrmewhoodn.supabase.co/functions/v1/phonehub-relay"
+PORT=47321;DEFAULT_COMMAND_PORT=47322;MAX_PACKET=2097152
+RELAY_URL="https://tmupbruwmwlrmewhoodn.supabase.co/functions/v1/phonehub-relay"
 @dataclass
 class Companion:
     device_id:str;device_name:str;address:str;last_seen:float;command_port:int=DEFAULT_COMMAND_PORT
