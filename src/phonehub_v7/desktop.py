@@ -1,10 +1,11 @@
 from __future__ import annotations
-import sys, json, base64
+import sys, json
 from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, QDateTime, QObject, Signal, QRunnable, QThreadPool
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QComboBox,QCheckBox,QAbstractItemView,QMenu
 from .companion_server import CompanionServer
+from .webrtc_stream import WebRtcScreenClient
 
 def gb(n): return f"{n/1073741824:.1f} GB"
 
@@ -21,6 +22,10 @@ class Card(QFrame):
 
 class TaskSignals(QObject):
     done=Signal(object,object)
+
+class ScreenSignals(QObject):
+    frame=Signal(bytes,int,int)
+    state=Signal(str)
 class Task(QRunnable):
     def __init__(self,fn,tag):super().__init__();self.fn=fn;self.tag=tag;self.signals=TaskSignals()
     def run(self):
@@ -29,12 +34,14 @@ class Task(QRunnable):
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_busy=False;self._screen_pixmap=None
+        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False
         self.setWindowTitle("PhoneHub 7");self.resize(1100,700);self.setMinimumSize(820,560)
         root=QWidget();self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         nav=QFrame();nav.setObjectName("nav");nav.setFixedWidth(220);nl=QVBoxLayout(nav);nl.setContentsMargins(18,24,18,24)
         brand=QLabel("PhoneHub 7");brand.setObjectName("brand");nl.addWidget(brand);nl.addSpacing(22)
         self.stack=QStackedWidget()
+        self.screen_signals=ScreenSignals();self.screen_signals.frame.connect(self.show_screen_frame);self.screen_signals.state.connect(self.show_screen_state)
+        self.screen_client=WebRtcScreenClient(self.server,self.screen_signals.frame.emit,self.screen_signals.state.emit)
         names=["Home","Screen","Apps","App Policy","Policies","Notifications","Settings"]
         for i,name in enumerate(names):
             b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));nl.addWidget(b)
@@ -45,7 +52,7 @@ class Window(QMainWindow):
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
         self.stack.addWidget(self.info_page("Notifications","Notification forwarding will appear here after Android notification access is enabled."))
         self.stack.addWidget(self.info_page("Settings","Connection, protection, backup, logs and new-phone setup will live here."))
-        self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000);self.screen_timer=QTimer(self);self.screen_timer.timeout.connect(self.screen_refresh);self.screen_timer.start(5000);QTimer.singleShot(400,self.refresh)
+        self.stack.currentChanged.connect(self.page_changed);self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000);QTimer.singleShot(400,self.refresh)
 
     def home(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
@@ -61,17 +68,40 @@ class Window(QMainWindow):
 
     def screen_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
-        top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Waiting for phone");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
-        self.screen_help=QLabel("Android requires screen-capture consent. On the phone, open PhoneHub Companion and tap Start screen sharing once for this capture session.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
-        self.screen_view=QLabel("Screen preview will appear here");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
-        b=QPushButton("Refresh screen");b.clicked.connect(self.screen_refresh);l.addWidget(b)
+        top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Ready for live screen");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
+        self.screen_help=QLabel("Live WebRTC screen uses Android's approved MediaProjection session. Video travels peer-to-peer when the network permits; the encrypted PhoneHub relay is used only for signaling.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
+        self.screen_view=QLabel("Open this page to connect the live screen");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
+        self.screen_button=QPushButton("Reconnect live screen");self.screen_button.clicked.connect(self.start_live_screen);l.addWidget(self.screen_button)
         return p
 
-    def screen_refresh(self):
-        if not hasattr(self,"screen_view") or self.stack.currentIndex()!=1 or self._screen_busy:return
+    def page_changed(self,index):
+        if index==1:
+            self.start_live_screen()
+        elif self._screen_active:
+            ds=self.server.devices();self._screen_active=False
+            self.screen_client.stop(ds[0] if ds else None)
+
+    def start_live_screen(self):
+        if self._screen_active:return
         ds=self.server.devices()
         if not ds:self.screen_status.setText("Phone offline");return
-        self._screen_busy=True;self.screen_status.setText("Requesting encrypted screen frame…");self.run_task("screen_snapshot",lambda:self.server.screen_snapshot(ds[0]))
+        self._screen_active=True;self.screen_status.setText("Starting live WebRTC screen…");self.screen_view.setText("Connecting live screen…");self.screen_view.setPixmap(QPixmap())
+        self.screen_client.start(ds[0])
+
+    def show_screen_state(self,state):
+        self.screen_status.setText(state)
+        low=state.lower()
+        if "failed:" in low or low.startswith("webrtc failed") or low.startswith("webrtc closed") or "stream ended:" in low:
+            self._screen_active=False
+
+    def show_screen_frame(self,raw,width,height):
+        try:
+            image=QImage(raw,width,height,width*3,QImage.Format_RGB888).copy()
+            if image.isNull():raise ValueError("invalid RGB frame")
+            pix=QPixmap.fromImage(image);self._screen_pixmap=pix
+            self.screen_view.setText("");self.screen_view.setPixmap(pix.scaled(self.screen_view.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation))
+        except Exception as e:
+            self.screen_status.setText(f"Live frame display failed: {e}");self._screen_active=False
 
     def info_page(self,title,body):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,32,36,32);h=QLabel(title);h.setObjectName("heading");l.addWidget(h);d=QLabel(body);d.setWordWrap(True);l.addWidget(d);l.addStretch();return p
@@ -119,23 +149,6 @@ class Window(QMainWindow):
             mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
             self.android.value.setText(str(s.get("android_version","—")));self.android.detail.setText(f"SDK {s.get('sdk','—')}")
             if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
-        elif tag=="screen_snapshot":
-            self._screen_busy=False
-            if isinstance(result,Exception):self.screen_status.setText(f"Screen unavailable: {result}");return
-            if result.get("type")!="screen_snapshot":
-                self.screen_status.setText("Screen sharing permission required on phone");self.screen_view.setText(result.get("message","Open PhoneHub Companion and start screen sharing."));return
-            try:
-                raw=base64.b64decode(result.get("image",""))
-                pix=QPixmap()
-                if not raw: raise ValueError("phone returned an empty frame")
-                if not pix.loadFromData(raw): raise ValueError(f"Qt could not decode JPEG ({len(raw)} bytes)")
-                self._screen_pixmap=pix
-                self.screen_view.setText("")
-                self.screen_view.setPixmap(pix.scaled(self.screen_view.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation))
-                self.screen_status.setText(f"Encrypted preview • {result.get('width','?')}×{result.get('height','?')} • {len(raw)//1024} KB")
-            except Exception as e:
-                self.screen_status.setText(f"Frame decode failed: {e}")
-                self.screen_view.setText("A screen frame reached the PC but could not be displayed.")
         elif tag=="policy_get":
             if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
             p=result.get("policy",{})
