@@ -158,7 +158,7 @@ class MainWindow(QMainWindow):
             self.setupstep.setText("Tailscale installed. Open it on the phone once, then press Auto Detect.")
 
     def install_agent_to_phone(self):
-        self.agentmsg.setText("Sending PhoneHub Agent 6.2 to the connected phone…")
+        self.agentmsg.setText("Sending PhoneHub Agent 6.2.1 to the connected phone…")
         self.work(self._run_agent_bootstrap,self._agent_bootstrap_done)
 
     def _run_agent_bootstrap(self):
@@ -166,9 +166,9 @@ class MainWindow(QMainWindow):
         script=root/"AUTO_BOOTSTRAP_PHONE.ps1"
         if not script.exists():
             return False,"PhoneHub bootstrap script is missing."
-        apk=root/"PhoneHub-Agent-6.2.0"/"PhoneHub-Agent-6.2.0-debug.apk"
+        apk=root/"PhoneHub-Agent-6.2.1"/"PhoneHub-Agent-6.2.1-debug.apk"
         if not apk.exists():
-            return False,"PhoneHub Agent 6.2 APK is missing. Extract PhoneHub-Agent-6.2.0.zip into C:\\PhoneHub first."
+            return False,"PhoneHub Agent 6.2.1 APK is missing. Extract PhoneHub-Agent-6.2.1.zip into C:\\PhoneHub first."
         result=subprocess.run(
             ["powershell","-NoProfile","-ExecutionPolicy","Bypass","-File",str(script),"-ApkPath",str(apk),"-NoPause"],
             capture_output=True,text=True,timeout=90
@@ -213,9 +213,9 @@ class MainWindow(QMainWindow):
         # Tailscale API. First-time USB setup must always ensure the bundled
         # current Agent build, then normal operation can be network-only.
         self.setupstep.setText(
-            "PhoneHub Agent found • updating/verifying PhoneHub Agent 6.2…"
+            "PhoneHub Agent found • updating/verifying PhoneHub Agent 6.2.1…"
             if installed else
-            "PhoneHub Agent missing • installing PhoneHub Agent 6.2 automatically…"
+            "PhoneHub Agent missing • installing PhoneHub Agent 6.2.1 automatically…"
         )
         self.work(self._run_agent_bootstrap,self._auto_agent_ready)
 
@@ -324,7 +324,7 @@ class MainWindow(QMainWindow):
                 "✓ Setup complete • PhoneHub Agent + Tailscale verified. "
                 "Disconnect USB now; PhoneHub can continue over any network."
             )
-            self.agentmsg.setText("✓ PhoneHub Agent 6.2 remote service verified over Tailscale.")
+            self.agentmsg.setText("✓ PhoneHub Agent 6.2.1 remote service verified over Tailscale.")
             return
 
         self.auto_setup_running=False
@@ -338,7 +338,7 @@ class MainWindow(QMainWindow):
             "Tailscale is online, but the PhoneHub Agent remote service is not responding yet. "
             "Keep USB connected and run Auto Setup again so PhoneHub can install/update Agent 6.2."
         )
-        self.agentmsg.setText("⚠ Tailscale works, but PhoneHub Agent 6.2 remote service is not verified.")
+        self.agentmsg.setText("⚠ Tailscale works, but PhoneHub Agent 6.2.1 remote service is not verified.")
 
     def _auto_usb(self,status):
         self.usb_serial=status.serial
