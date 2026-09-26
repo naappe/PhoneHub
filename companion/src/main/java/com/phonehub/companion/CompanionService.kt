@@ -64,11 +64,10 @@ class CompanionService : Service() {
                     response.put("type","device_status").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("manufacturer",Build.MANUFACTURER).put("model",Build.MODEL).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("battery_percent",level).put("charging",charging).put("storage_total",total).put("storage_free",free).put("memory_total",mi.totalMem).put("memory_free",mi.availMem).put("network",network).put("uptime_seconds",SystemClock.elapsedRealtime()/1000).put("timestamp",now)
                 }
                 "apps"->{
-                    val arr=JSONArray()
-                    packageManager.getInstalledApplications(0).sortedBy{packageManager.getApplicationLabel(it).toString().lowercase()}.forEach{a->
-                        arr.put(JSONObject().put("name",packageManager.getApplicationLabel(a).toString()).put("package",a.packageName).put("system",(a.flags and ApplicationInfo.FLAG_SYSTEM)!=0).put("enabled",a.enabled))
-                    }
-                    response.put("type","apps").put("apps",arr).put("count",arr.length())
+                    val offset=req.optInt("offset",0).coerceAtLeast(0);val limit=req.optInt("limit",50).coerceIn(1,100)
+                    val all=packageManager.getInstalledApplications(0).sortedBy{packageManager.getApplicationLabel(it).toString().lowercase()}
+                    val arr=JSONArray();all.drop(offset).take(limit).forEach{a->arr.put(JSONObject().put("name",packageManager.getApplicationLabel(a).toString()).put("package",a.packageName).put("system",(a.flags and ApplicationInfo.FLAG_SYSTEM)!=0).put("enabled",a.enabled))}
+                    response.put("type","apps_page").put("apps",arr).put("offset",offset).put("next_offset",offset+arr.length()).put("total",all.size).put("has_more",offset+arr.length()<all.size)
                 }
                 "capabilities"->response.put("type","capabilities").put("notifications",false).put("files",true).put("camera",false).put("screen_control",false).put("app_inventory",true)
                 else->response.put("type","error").put("message","unsupported command")
