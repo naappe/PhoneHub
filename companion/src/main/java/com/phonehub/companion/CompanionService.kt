@@ -41,7 +41,7 @@ class CompanionService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentTitle("PhoneHub")
-            .setContentText("Companion service active")
+            .setContentText("Companion service active • automatic startup enabled")
             .setOngoing(true)
             .setSilent(true)
             .build()
