@@ -12,5 +12,8 @@ build/
 Thumbs.db
 
 .gradle/
-
 local.properties
+
+# PhoneHub Android signing keys are local-only. Never commit them.
+*.jks
+*.keystore
