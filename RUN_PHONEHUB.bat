@@ -33,7 +33,7 @@ echo [PhoneHub Setup] Tailscale available.
 rem ADB and scrcpy are optional engineering tools in PhoneHub 6.
 rem They are not required for normal PhoneHub startup or device-online status.
 
-echo [PhoneHub] Starting PhoneHub 6...
+echo [PhoneHub] Starting PhoneHub 6.2...
 python -m phonehub
 exit /b %errorlevel%
 
