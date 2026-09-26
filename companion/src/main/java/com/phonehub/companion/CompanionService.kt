@@ -10,7 +10,9 @@ import org.json.JSONObject
 import java.net.*
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.crypto.Cipher
 import javax.crypto.Mac
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class CompanionService : Service() {
@@ -33,17 +35,19 @@ class CompanionService : Service() {
     private fun keyBytes():ByteArray?{val s=getSharedPreferences(PREFS,0).getString(PAIR_KEY,null)?:return null;return android.util.Base64.decode(s,android.util.Base64.NO_WRAP)}
     private fun hmac(key:ByteArray,data:String):String{val m=Mac.getInstance("HmacSHA256");m.init(SecretKeySpec(key,"HmacSHA256"));return m.doFinal(data.toByteArray()).joinToString(""){"%02x".format(it)}}
     private fun secureEquals(a:String,b:String)=MessageDigest.isEqual(a.toByteArray(),b.toByteArray())
+    private fun decrypt(key:ByteArray,nonceB64:String,cipherB64:String):JSONObject{val nonce=android.util.Base64.decode(nonceB64,android.util.Base64.NO_WRAP);val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,SecretKeySpec(key,"AES"),GCMParameterSpec(128,nonce));val plain=cipher.doFinal(android.util.Base64.decode(cipherB64,android.util.Base64.NO_WRAP));return JSONObject(String(plain,Charsets.UTF_8))}
+    private fun encrypt(key:ByteArray,value:JSONObject):JSONObject{val nonce=ByteArray(12);java.security.SecureRandom().nextBytes(nonce);val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,SecretKeySpec(key,"AES"),GCMParameterSpec(128,nonce));val out=cipher.doFinal(value.toString().toByteArray(Charsets.UTF_8));return JSONObject().put("type","encrypted").put("version",2).put("nonce",android.util.Base64.encodeToString(nonce,android.util.Base64.NO_WRAP)).put("ciphertext",android.util.Base64.encodeToString(out,android.util.Base64.NO_WRAP))}
     private fun startHeartbeat(){
         if(!running.compareAndSet(false,true))return
         heartbeatThread=Thread({DatagramSocket().use{socket->socket.broadcast=true;while(running.get()){try{val p=JSONObject().put("type","heartbeat").put("version",1).put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("command_port",COMMAND_PORT).put("auth","hmac-sha256").put("timestamp",System.currentTimeMillis()/1000).toString().toByteArray();socket.send(DatagramPacket(p,p.size,InetAddress.getByName("255.255.255.255"),DISCOVERY_PORT))}catch(_:Exception){};try{Thread.sleep(5000)}catch(_:InterruptedException){break}}}},"phonehub-heartbeat").apply{isDaemon=true;start()}
     }
     private fun startCommandServer(){
         if(commandThread?.isAlive==true)return
-        commandThread=Thread({try{ServerSocket(COMMAND_PORT).use{server->server.soTimeout=2000;while(running.get()){try{server.accept().use{client->client.soTimeout=5000;val line=client.getInputStream().bufferedReader().readLine()?:return@use;val req=JSONObject(line);val response=JSONObject().put("version",1);val key=keyBytes();val ts=req.optLong("timestamp",0);val nonce=req.optString("nonce");val sig=req.optString("signature");val now=System.currentTimeMillis()/1000;val canonical=req.optString("type")+"|"+ts+"|"+nonce;val authorized=key!=null&&nonce.isNotBlank()&&kotlin.math.abs(now-ts)<=30&&secureEquals(hmac(key,canonical),sig)
+        commandThread=Thread({try{ServerSocket(COMMAND_PORT).use{server->server.soTimeout=2000;while(running.get()){try{server.accept().use{client->client.soTimeout=5000;val line=client.getInputStream().bufferedReader().readLine()?:return@use;val wireReq=JSONObject(line);val key=keyBytes();val encrypted=wireReq.optString("type")=="encrypted"&&wireReq.optInt("version")==2;val req=if(encrypted&&key!=null)decrypt(key,wireReq.optString("nonce"),wireReq.optString("ciphertext")) else wireReq;val response=JSONObject().put("version",2);val ts=req.optLong("timestamp",0);val nonce=req.optString("nonce");val sig=req.optString("signature");val now=System.currentTimeMillis()/1000;val canonical=req.optString("type")+"|"+ts+"|"+nonce;val authorized=key!=null&&encrypted&&nonce.isNotBlank()&&kotlin.math.abs(now-ts)<=30&&secureEquals(hmac(key,canonical),sig)
             if(req.optString("type")=="enroll"){if(key==null)response.put("type","error").put("message","companion not enabled") else response.put("type","enrolled").put("device_id",deviceId()).put("pair_key",android.util.Base64.encodeToString(key,android.util.Base64.NO_WRAP))}
             else if(!authorized)response.put("type","error").put("message","unauthorized")
             else when(req.optString("type")){"ping"->response.put("type","pong").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("timestamp",now);else->response.put("type","error").put("message","unsupported command")}
-            client.getOutputStream().bufferedWriter().use{w->w.write(response.toString());w.newLine();w.flush()}
+            val wireResponse=if(encrypted&&key!=null)encrypt(key,response) else response;client.getOutputStream().bufferedWriter().use{w->w.write(wireResponse.toString());w.newLine();w.flush()}
         }}catch(_:SocketTimeoutException){}catch(_:Exception){}}}}catch(_:Exception){}},"phonehub-command").apply{isDaemon=true;start()}
     }
     override fun onDestroy(){running.set(false);heartbeatThread?.interrupt();commandThread?.interrupt();super.onDestroy()}
