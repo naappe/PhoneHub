@@ -7,7 +7,7 @@ Set-Location $Root
 $Keystore = Join-Path $Root "phonehub-release.jks"
 $Apk = Join-Path $Root "companion\build\outputs\apk\release\companion-release.apk"
 $OutDir = Join-Path $Root "dist"
-$OutApk = Join-Path $OutDir "PhoneHub-Companion-7.0.0-dev5.apk"
+$OutApk = Join-Path $OutDir "PhoneHub-Companion-7.0.0-dev6.apk"
 $SdkRoot = Join-Path $env:LOCALAPPDATA "Android\Sdk"
 $CmdRoot = Join-Path $SdkRoot "cmdline-tools"
 $Latest = Join-Path $CmdRoot "latest"
