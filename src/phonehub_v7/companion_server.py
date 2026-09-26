@@ -50,6 +50,8 @@ class CompanionServer:
         return json.loads(AESGCM(key).decrypt(riv,rc,None).decode())
     def ping(self,d):return self.command(d,"ping")
     def device_status(self,d):return self.command(d,"device_status")
+    def apps(self,d):return self.command(d,"apps")
+    def capabilities(self,d):return self.command(d,"capabilities")
     def _run(self):
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);sock.bind(("0.0.0.0",self.port))
         while True:
