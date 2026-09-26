@@ -1,5 +1,6 @@
 param(
-    [string]$ApkPath = (Join-Path $PSScriptRoot "PhoneHub-Agent-6.1.0\PhoneHub-Agent-6.1.0-debug.apk")
+    [string]$ApkPath = (Join-Path $PSScriptRoot "PhoneHub-Agent-6.1.0\PhoneHub-Agent-6.1.0-debug.apk"),
+    [switch]$NoPause
 )
 
 $ErrorActionPreference = "Stop"
