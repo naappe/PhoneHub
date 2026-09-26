@@ -1,23 +1,30 @@
 from __future__ import annotations
-import json, socket, threading, time
+import base64,hashlib,hmac,json,secrets,socket,threading,time
 from dataclasses import dataclass
-PORT=47321; DEFAULT_COMMAND_PORT=47322; MAX_PACKET=8192
+from pathlib import Path
+PORT=47321;DEFAULT_COMMAND_PORT=47322;MAX_PACKET=8192
 @dataclass
 class Companion:
-    device_id:str; device_name:str; address:str; last_seen:float; command_port:int=DEFAULT_COMMAND_PORT
+    device_id:str;device_name:str;address:str;last_seen:float;command_port:int=DEFAULT_COMMAND_PORT
     @property
-    def online(self)->bool:return time.time()-self.last_seen<15
+    def online(self):return time.time()-self.last_seen<15
 class CompanionServer:
-    def __init__(self,port:int=PORT):
+    def __init__(self,port=PORT):
         self.port=port;self._devices={};self._lock=threading.Lock();self._thread=None
+        self._keyfile=Path.home()/".phonehub"/"paired_devices.json";self._keys=self._load_keys()
+    def _load_keys(self):
+        try:return json.loads(self._keyfile.read_text())
+        except Exception:return {}
+    def _save_keys(self):
+        self._keyfile.parent.mkdir(parents=True,exist_ok=True);self._keyfile.write_text(json.dumps(self._keys,indent=2))
     def start(self):
         if self._thread and self._thread.is_alive():return
         self._thread=threading.Thread(target=self._run,name="phonehub-companion",daemon=True);self._thread.start()
     def devices(self):
         with self._lock:return sorted((d for d in self._devices.values() if d.online),key=lambda d:d.last_seen,reverse=True)
-    def command(self,device:Companion,payload:dict,timeout:float=5.0)->dict:
+    def _raw_command(self,d,payload,timeout=5):
         raw=(json.dumps(payload,separators=(",",":"))+"\n").encode()
-        with socket.create_connection((device.address,device.command_port),timeout=timeout) as s:
+        with socket.create_connection((d.address,d.command_port),timeout=timeout) as s:
             s.sendall(raw);data=b""
             while b"\n" not in data:
                 chunk=s.recv(MAX_PACKET)
@@ -25,7 +32,16 @@ class CompanionServer:
                 data+=chunk
                 if len(data)>MAX_PACKET:raise ValueError("Companion response too large")
         return json.loads(data.split(b"\n",1)[0].decode())
-    def ping(self,device:Companion)->dict:return self.command(device,{"type":"ping","version":1,"timestamp":int(time.time())})
+    def enroll(self,d):
+        r=self._raw_command(d,{"type":"enroll","version":1})
+        if r.get("type")!="enrolled" or not r.get("pair_key"):raise RuntimeError(r.get("message","enrollment failed"))
+        self._keys[d.device_id]=r["pair_key"];self._save_keys();return r
+    def command(self,d,command_type):
+        if d.device_id not in self._keys:self.enroll(d)
+        ts=int(time.time());nonce=secrets.token_hex(16);canonical=f"{command_type}|{ts}|{nonce}".encode()
+        key=base64.b64decode(self._keys[d.device_id]);sig=hmac.new(key,canonical,hashlib.sha256).hexdigest()
+        return self._raw_command(d,{"type":command_type,"version":1,"timestamp":ts,"nonce":nonce,"signature":sig})
+    def ping(self,d):return self.command(d,"ping")
     def _run(self):
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);sock.bind(("0.0.0.0",self.port))
         while True:
