@@ -58,8 +58,8 @@ class MainWindow(QMainWindow):
         c,cl=self.card("Connection"); self.ip=QLineEdit(self.cfg.phone_ip); self.ip.setPlaceholderText("100.x.x.x"); cl.addWidget(self.ip)
         row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
-        sc,sl=self.card("PhoneHub 6 Auto Setup","PhoneHub checks Tailscale on this PC, detects the Android phone, and guides phone-side setup. USB/ADB are optional.")
-        self.setupstep=QLabel("PhoneHub will check Tailscale and discover your phone automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
+        sc,sl=self.card("PhoneHub 6 Auto Setup","One-click setup checks PC Tailscale, updates the PhoneHub Agent, installs/opens Tailscale on the phone, and waits for connection automatically.")
+        self.setupstep=QLabel("Run Auto Setup once. PhoneHub will handle the PC and phone setup sequence automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
         sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk)
         agent=QPushButton("Install / Update Agent"); agent.setObjectName("Primary"); agent.clicked.connect(self.install_agent_to_phone); sr.addWidget(agent)
         tailscale=QPushButton("Install Tailscale to Phone"); tailscale.setObjectName("Primary"); tailscale.clicked.connect(self.install_tailscale_to_phone); sr.addWidget(tailscale)
@@ -90,7 +90,7 @@ class MainWindow(QMainWindow):
     def work(self,fn,done):
         w=Worker(fn); self.workers.add(w); w.signals.result.connect(done); w.signals.error.connect(lambda e:self.devmsg.setText(e)); w.signals.finished.connect(lambda:self.workers.discard(w)); self.pool.start(w)
     def auto_setup(self):
-        self.setupstep.setText("Auto Setup: checking Tailscale on this PC…")
+        self.setupstep.setText("Auto Setup: checking PC, phone link, Agent and Tailscale…")
         self.work(self._ensure_pc_tailscale,self._pc_tailscale_ready)
 
     def _ensure_pc_tailscale(self):
@@ -163,8 +163,100 @@ class MainWindow(QMainWindow):
         if not ok:
             self.setupstep.setText(msg)
             return
-        self.setupstep.setText("✓ "+msg+" Detecting Android phones on Tailscale…")
-        self.auto_discover()
+        self.setupstep.setText("✓ "+msg+" Checking the connected phone…")
+        self.work(self.setup.inspect_usb,self._auto_phone_link_ready)
+
+    def _auto_phone_link_ready(self,status):
+        if status.stage!="ready":
+            self.setupstep.setText(
+                "PC Tailscale is ready. Connect/unlock the phone with the authorized USB service link, "
+                "or complete Tailscale sign-in on the phone if the Agent is already active."
+            )
+            self._begin_tailscale_discovery_wait()
+            return
+        self.usb_serial=status.serial
+        self.setupstep.setText("✓ Phone authorized • checking PhoneHub Agent…")
+        self.work(self._run_agent_bootstrap,self._auto_agent_ready)
+
+    def _auto_agent_ready(self,result):
+        ok,msg=result
+        if not ok:
+            self.setupstep.setText("Agent setup failed: "+msg)
+            return
+        self.agentmsg.setText("✓ "+msg)
+        serial=getattr(self,"usb_serial","")
+        if not serial:
+            self.setupstep.setText("Agent ready • checking Tailscale network…")
+            self._begin_tailscale_discovery_wait()
+            return
+        self.setupstep.setText("✓ Agent ready • checking Tailscale on phone…")
+        self.work(lambda:self.setup.package_installed(serial,"com.tailscale.ipn"),
+                  lambda installed:self._auto_tailscale_checked(serial,installed))
+
+    def _auto_tailscale_checked(self,serial,installed):
+        if installed:
+            self.setupstep.setText("✓ Tailscale installed • opening it on phone…")
+            self.work(lambda:self.setup.open_tailscale(serial),
+                      lambda _opened:self._after_auto_tailscale_launch())
+            return
+        self.setupstep.setText("Installing official verified Tailscale APK to phone…")
+        self.work(lambda:self.setup.install_tailscale(serial),
+                  lambda result:self._auto_tailscale_installed(serial,result))
+
+    def _auto_tailscale_installed(self,serial,result):
+        ok,msg=result
+        if not ok:
+            self.setupstep.setText("Tailscale install failed: "+msg)
+            return
+        self.setupstep.setText("✓ "+msg+" Opening Tailscale…")
+        self.work(lambda:self.setup.open_tailscale(serial),
+                  lambda _opened:self._after_auto_tailscale_launch())
+
+    def _after_auto_tailscale_launch(self):
+        self.setupstep.setText(
+            "Tailscale is ready on the phone. If Android shows sign-in or VPN approval, approve it once. "
+            "PhoneHub is waiting automatically…"
+        )
+        self._begin_tailscale_discovery_wait()
+
+    def _begin_tailscale_discovery_wait(self):
+        self._auto_wait_attempts=0
+        self._auto_wait_for_phone()
+
+    def _auto_wait_for_phone(self):
+        self._auto_wait_attempts=getattr(self,"_auto_wait_attempts",0)+1
+        self.work(self.discovery.peers,self._auto_wait_result)
+
+    def _auto_wait_result(self,peers):
+        peer=next((p for p in peers if p.os=="android"),None)
+        if peer is not None:
+            try:
+                self.cfg=self.configs.save(DeviceConfig(peer.ip,5555))
+                self.ip.setText(peer.ip)
+            except Exception:
+                pass
+            self.state.set_device(DeviceSnapshot(
+                state=ConnectionState.ONLINE,
+                device_name=peer.name or "Android phone",
+                transport="Tailscale / PhoneHub Agent",
+                detail=f"Auto setup complete • {peer.ip}"
+            ))
+            self.devmsg.setText(f"Connected automatically • {peer.name} • {peer.ip}")
+            self.setupstep.setText("✓ Auto Setup complete • PhoneHub connected to the phone.")
+            return
+
+        if getattr(self,"_auto_wait_attempts",0) < 24:
+            self.setupstep.setText(
+                "Waiting for phone Tailscale sign-in / VPN approval… "
+                f"({self._auto_wait_attempts}/24)"
+            )
+            QTimer.singleShot(5000,self._auto_wait_for_phone)
+            return
+
+        self.setupstep.setText(
+            "PhoneHub setup is ready, but the phone has not joined Tailscale yet. "
+            "Open Tailscale on the phone and approve sign-in/VPN; Auto Detect will then connect."
+        )
     def _auto_usb(self,status):
         self.usb_serial=status.serial
         if status.stage!="ready":
