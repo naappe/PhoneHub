@@ -129,7 +129,7 @@ class MainWindow(QMainWindow):
             self.setupstep.setText("✓ Tailscale already installed • opening it on phone…")
             self.work(lambda:self.setup.open_tailscale(serial),lambda opened:self._tailscale_opened(opened))
             return
-        self.setupstep.setText("Tailscale missing • installing verified APK to phone…")
+        self.setupstep.setText("Tailscale missing • installing local APK from PhoneHub folder…")
         self.work(self._run_tailscale_installer_script,lambda result:self._tailscale_phone_done(serial,result))
 
     def _tailscale_phone_done(self,serial,result):
@@ -232,7 +232,7 @@ class MainWindow(QMainWindow):
             self.work(lambda:self.setup.open_tailscale(serial),
                       lambda _opened:self._after_auto_tailscale_launch())
             return
-        self.setupstep.setText("Installing official verified Tailscale APK to phone…")
+        self.setupstep.setText("Installing local Tailscale APK from PhoneHub folder…")
         self.work(self._run_tailscale_installer_script,
                   lambda result:self._auto_tailscale_installed(serial,result))
 
