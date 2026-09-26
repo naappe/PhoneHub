@@ -61,7 +61,7 @@ class MainWindow(QMainWindow):
     def device_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Device","Automatic phone setup and connection.")
         c,cl=self.card("Connection"); self.ip=QLineEdit(self.cfg.phone_ip); self.ip.setPlaceholderText("100.x.x.x"); cl.addWidget(self.ip)
-        row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
+        row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); t=QPushButton("Test Agent"); t.clicked.connect(self.test_agent_connection); row.addWidget(t); row.addStretch(); cl.addLayout(row)
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
         sc,sl=self.card("PhoneHub 6.2 Auto Setup","USB and Tailscale are tracked separately. Auto Setup supports compatible Android devices without OEM-specific model rules, prepares the phone over USB, then waits for Tailscale.")
         self.setupstep=QLabel("First setup: connect USB once, run Auto Setup, approve Android/Tailscale prompts, then disconnect USB. Normal use continues over Tailscale on any network."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
@@ -118,6 +118,27 @@ class MainWindow(QMainWindow):
         if not install.ok:
             return False,install.stderr or install.stdout or "Automatic Tailscale installation failed."
         return True,"Tailscale installed successfully on this PC."
+
+    def test_agent_connection(self):
+        self.devmsg.setText("Testing PhoneHub Agent over Tailscale…")
+        peers=self.discovery.android_peers()
+        if not peers:
+            self.devmsg.setText("No online Android Tailscale peer found.")
+            return
+        self.work(lambda:self.agent.discover(peers),self._agent_connection_tested)
+
+    def _agent_connection_tested(self,result):
+        peer,health=result
+        if peer is None:
+            self.devmsg.setText("Tailscale is online, but PhoneHub Agent is not responding on port 8765.")
+            return
+        try:
+            self.cfg=self.configs.save(DeviceConfig(peer.ip,5555))
+            self.ip.setText(peer.ip)
+        except Exception:
+            pass
+        self.devmsg.setText(f"✓ PhoneHub Agent connected over Tailscale • {peer.ip}:8765")
+        self.refresh()
 
     def install_tailscale_to_phone(self):
         self.setupstep.setText("Checking authorized phone link for Tailscale install…")
@@ -522,7 +543,7 @@ class MainWindow(QMainWindow):
             self.screenmsg.setText("Screen approval requested on phone…")
             self.work(lambda:self.agent.request_screen(ip),self._agent_screen_requested)
             return
-        self._open_screen_fallback()
+        self.screenmsg.setText("Tailscale is reachable, but PhoneHub Agent is not responding on port 8765. Run Auto Setup once by USB to repair the Agent.")
 
     def _agent_screen_requested(self,result):
         ok,msg=result
@@ -612,10 +633,10 @@ class MainWindow(QMainWindow):
     def diagnostics(self):
         snap=self.adb.snapshot(self.cfg); scr="Found" if self.media.scrcpy else "Missing"; self.secmsg.setText(f"ADB target: {self.cfg.serial or '-'}\nState: {snap.state.value}\nTransport: {snap.transport}\nscrcpy: {scr}")
     def render(self,s:DeviceSnapshot):
-        # Tailscale is the primary PhoneHub transport. Do not let optional ADB
-        # diagnostics overwrite a healthy Tailscale connection in the main UI.
-        peers=self.discovery.peers()
-        peer=next((p for p in peers if p.os=="android"),None)
+        # Main status distinguishes network reachability from a live PhoneHub
+        # Agent. Tailscale alone is not treated as full PhoneHub connectivity.
+        peers=self.discovery.android_peers()
+        peer,health=self.agent.discover(peers)
         if peer is not None:
             try:
                 if self.cfg.phone_ip != peer.ip:
@@ -624,9 +645,17 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self.device_metric.setText(peer.name or "Android phone")
-            self.detail.setText(f"Tailscale online • {peer.ip}")
-            self.badge.setText("● Online")
-            if hasattr(self,"devmsg"): self.devmsg.setText(f"Tailscale online • {peer.ip}")
+            self.detail.setText(f"PhoneHub Agent online • Tailscale {peer.ip}:8765")
+            self.badge.setText("● Agent Online")
+            if hasattr(self,"devmsg"): self.devmsg.setText(f"Agent connected over Tailscale • {peer.ip}:8765")
+            return
+
+        peer=peers[0] if peers else None
+        if peer is not None:
+            self.device_metric.setText(peer.name or "Android phone")
+            self.detail.setText(f"Tailscale online • waiting for PhoneHub Agent • {peer.ip}")
+            self.badge.setText("● Network Only")
+            if hasattr(self,"devmsg"): self.devmsg.setText(f"Tailscale reachable • Agent not responding on {peer.ip}:8765")
             return
 
         self.device_metric.setText(s.device_name)
