@@ -7,7 +7,7 @@ android {
     compileSdk = 35
     signingConfigs {
         create("phonehubRelease") {
-            storeFile = file("phonehub-release.jks")
+            storeFile = rootProject.file("phonehub-release.jks")
             storePassword = System.getenv("PHONEHUB_STORE_PASSWORD")
             keyAlias = System.getenv("PHONEHUB_KEY_ALIAS")
             keyPassword = System.getenv("PHONEHUB_KEY_PASSWORD")
