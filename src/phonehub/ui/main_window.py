@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
         brand.setObjectName("PageTitle")
         layout.addWidget(brand)
 
-        subtitle = QLabel("Simple PC Tailscale → Android Tailscale connection")
+        subtitle = QLabel("PC ↔ Phone over Tailscale")
         subtitle.setObjectName("Muted")
         layout.addWidget(subtitle)
 
@@ -87,15 +87,12 @@ class MainWindow(QMainWindow):
         tl.addWidget(self.quick)
         layout.addWidget(tools)
 
-        guide, gl = self.card("Phone setup — no PhoneHub APK required")
+        guide, gl = self.card("Setup")
         instructions = QLabel(
-            "1. Install Tailscale on the PC and Android phone.\n"
-            "2. Sign in to the same Tailscale account/tailnet on both.\n"
-            "3. Turn Tailscale ON on the phone.\n"
-            "4. Press Refresh. PhoneHub automatically finds online Android devices.\n"
-            "5. Use Ping or Test Port to verify the service you want to reach.\n\n"
-            "Tailscale provides the private network connection. SSH, HTTP or another "
-            "service works only when that service is running on the phone."
+            "1. Tailscale ON on PC and phone.\n"
+            "2. Use the same Tailscale account.\n"
+            "3. Press Refresh.\n"
+            "Connected = ready."
         )
         instructions.setWordWrap(True)
         gl.addWidget(instructions)
@@ -160,13 +157,9 @@ class MainWindow(QMainWindow):
             return
 
         self.phone_status.setText(f"Android: ✓ {peer.name} • {peer.ip}")
-        self.path_status.setText("✓ PC  →  Tailscale  →  Phone")
-        self.test_result.setText("Tailscale device discovered. Use Ping or Test Port for the service you need.")
-        self.quick.setText(
-            f"Phone IP: {peer.ip}\n"
-            f"SSH example: ssh user@{peer.ip}\n"
-            f"HTTP example: http://{peer.ip}:8080"
-        )
+        self.path_status.setText("✓ Connected")
+        self.test_result.setText("Ready")
+        self.quick.setText(f"Phone IP: {peer.ip}")
 
     def ping_phone(self):
         if self.peer is None:
