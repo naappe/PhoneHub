@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import socket
+import re
+import webbrowser
+import subprocess
+from datetime import datetime
 from PySide6.QtCore import QThreadPool, QTimer
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QPushButton, QVBoxLayout, QWidget
+    QPushButton, QVBoxLayout, QWidget, QApplication
 )
 
 from phonehub.core.command import SubprocessRunner
@@ -33,6 +37,8 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool.globalInstance()
         self.workers = set()
         self.peer = None
+        self.latencies = []
+        self.last_good = None
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -56,6 +62,9 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.pc_status)
         sl.addWidget(self.phone_status)
         sl.addWidget(self.path_status)
+        self.quality_status = QLabel("Latency: —   Transport: —")
+        self.quality_status.setObjectName("Muted")
+        sl.addWidget(self.quality_status)
 
         buttons = QHBoxLayout()
         refresh = QPushButton("Refresh")
@@ -78,6 +87,18 @@ class MainWindow(QMainWindow):
         test.clicked.connect(self.test_port)
         row.addWidget(test)
         tl.addLayout(row)
+        actions = QHBoxLayout()
+        copy_ip = QPushButton("Copy IP")
+        copy_ip.clicked.connect(self.copy_ip)
+        actions.addWidget(copy_ip)
+        http = QPushButton("HTTP 8080")
+        http.clicked.connect(self.open_http)
+        actions.addWidget(http)
+        ssh = QPushButton("SSH 22")
+        ssh.clicked.connect(self.open_ssh)
+        actions.addWidget(ssh)
+        actions.addStretch()
+        tl.addLayout(actions)
         self.test_result = QLabel("Select an online Android device first.")
         self.test_result.setObjectName("Muted")
         tl.addWidget(self.test_result)
@@ -153,7 +174,13 @@ class MainWindow(QMainWindow):
             self.phone_status.setText("Android: no online Tailscale device found")
             self.path_status.setText("PC  →  Tailscale  →  waiting for phone")
             self.test_result.setText("Open Tailscale on the phone and make sure it is connected to the same tailnet.")
-            self.quick.setText("No phone selected.")
+            if self.last_good:
+                self.quick.setText(
+                    f"Last seen: {self.last_good['seen']} • {self.last_good['ip']} • "
+                    f"{self.last_good['latency']} ms • {self.last_good['transport']}"
+                )
+            else:
+                self.quick.setText("No phone selected.")
             return
 
         self.phone_status.setText(f"Android: ✓ {peer.name} • {peer.ip}")
@@ -176,17 +203,61 @@ class MainWindow(QMainWindow):
 
     def _ping_done(self, result):
         output = (result.stdout or result.stderr or "").strip()
-        # tailscale ping may continue probing for a direct path and be killed by
-        # our UI timeout even after successful DERP pongs. A pong is proof of
-        # reachability regardless of the eventual process return code.
         if "pong from" in output.lower():
             first = next((line.strip() for line in output.splitlines() if "pong from" in line.lower()), "")
-            self.test_result.setText("✓ Phone reachable over Tailscale" + (f" • {first}" if first else "."))
+            match = re.search(r"in\\s+(\\d+)ms", first, re.I)
+            latency = int(match.group(1)) if match else None
+            derp = re.search(r"via\\s+DERP\\(([^)]+)\\)", first, re.I)
+            transport = f"DERP ({derp.group(1)})" if derp else "Direct"
+            if latency is not None:
+                self.latencies = (self.latencies + [latency])[-10:]
+                avg = round(sum(self.latencies) / len(self.latencies))
+                low, high = min(self.latencies), max(self.latencies)
+                quality = "Excellent" if avg < 50 else "Good" if avg < 150 else "Usable" if avg <= 300 else "Poor"
+                self.quality_status.setText(
+                    f"Latency: {latency} ms • {quality} • {transport} • "
+                    f"10-ping window {low}/{avg}/{high} ms"
+                )
+                self.last_good = {
+                    "seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "ip": self.peer.ip if self.peer else "—",
+                    "latency": latency,
+                    "transport": transport,
+                }
+            else:
+                self.quality_status.setText(f"Transport: {transport}")
+            self.test_result.setText("✓ Phone reachable over Tailscale")
         elif result.ok:
             self.test_result.setText("✓ Phone reachable over Tailscale.")
         else:
             detail = output.splitlines()[-1] if output else "No pong received."
             self.test_result.setText(f"✕ Tailscale ping failed • {detail}")
+
+    def copy_ip(self):
+        if self.peer is None:
+            self.test_result.setText("No online Android Tailscale device found.")
+            return
+        QApplication.clipboard().setText(self.peer.ip)
+        self.test_result.setText("✓ IP copied.")
+
+    def open_http(self):
+        if self.peer is None:
+            self.test_result.setText("No online Android Tailscale device found.")
+            return
+        webbrowser.open(f"http://{self.peer.ip}:8080")
+        self.test_result.setText("Opened HTTP 8080 in your browser.")
+
+    def open_ssh(self):
+        if self.peer is None:
+            self.test_result.setText("No online Android Tailscale device found.")
+            return
+        # Launch the system SSH client; PhoneHub does not claim that SSH is
+        # enabled on Android.
+        try:
+            subprocess.Popen(["cmd", "/c", "start", "", "cmd", "/k", "ssh", f"user@{self.peer.ip}"])
+            self.test_result.setText("Opened SSH launcher. SSH must already be running on the phone.")
+        except Exception as exc:
+            self.test_result.setText(f"Could not open SSH: {exc}")
 
     def test_port(self):
         if self.peer is None:
