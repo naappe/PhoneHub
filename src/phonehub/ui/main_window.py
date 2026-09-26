@@ -59,13 +59,13 @@ class MainWindow(QMainWindow):
         c,cl=self.card("Connection"); self.ip=QLineEdit(self.cfg.phone_ip); self.ip.setPlaceholderText("100.x.x.x"); cl.addWidget(self.ip)
         row=QHBoxLayout(); d=QPushButton("Auto Detect"); d.setObjectName("Primary"); d.clicked.connect(self.auto_discover); row.addWidget(d); a=QPushButton("Save + Connect"); a.setObjectName("Primary"); a.clicked.connect(self.connect); row.addWidget(a); r=QPushButton("Refresh"); r.clicked.connect(self.refresh); row.addWidget(r); row.addStretch(); cl.addLayout(row)
         self.devmsg=QLabel("Ready"); self.devmsg.setObjectName("Muted"); cl.addWidget(self.devmsg); l.addWidget(c)
-        sc,sl=self.card("PhoneHub 6 Auto Setup","USB and Tailscale are tracked separately. Auto Setup uses the authorized USB link to prepare the phone, then waits for Tailscale.")
+        sc,sl=self.card("PhoneHub 6 Auto Setup","USB and Tailscale are tracked separately. Auto Setup supports compatible Android devices without OEM-specific model rules, prepares the phone over USB, then waits for Tailscale.")
         self.setupstep=QLabel("Run Auto Setup once. PhoneHub will handle the PC and phone setup sequence automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
         sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk)
         agent=QPushButton("Install / Update Agent"); agent.setObjectName("Primary"); agent.clicked.connect(self.install_agent_to_phone); sr.addWidget(agent)
         tailscale=QPushButton("Install Tailscale to Phone"); tailscale.setObjectName("Primary"); tailscale.clicked.connect(self.install_tailscale_to_phone); sr.addWidget(tailscale)
         sr.addStretch(); sl.addLayout(sr)
-        self.agentmsg=QLabel("Connect and unlock the phone. PhoneHub will direct-install when an authorized service link exists; otherwise it will copy the Agent automatically over USB."); self.agentmsg.setObjectName("Muted"); self.agentmsg.setWordWrap(True); sl.addWidget(self.agentmsg)
+        self.agentmsg=QLabel("Connect any compatible Android phone. PhoneHub identifies the device by Android/USB capabilities, not by brand or model, then installs the Agent through the best available link."); self.agentmsg.setObjectName("Muted"); self.agentmsg.setWordWrap(True); sl.addWidget(self.agentmsg)
         l.addWidget(sc); l.addStretch(); return w
     def screen_page(self):
         w=QWidget(); l=QVBoxLayout(w); self.title(l,"Screen","Optional engineering screen tool. ADB/scrcpy are only required when this feature is used.")
