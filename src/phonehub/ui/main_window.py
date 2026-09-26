@@ -156,6 +156,12 @@ class MainWindow(QMainWindow):
         self.timer.setInterval(7000)
         self.timer.timeout.connect(self.refresh)
         self.timer.start()
+
+        self.adb_timer = QTimer(self)
+        self.adb_timer.setInterval(15000)
+        self.adb_timer.timeout.connect(self.auto_reconnect)
+        self.adb_timer.start()
+
         QTimer.singleShot(300, self.refresh)
 
     def card(self, title):
@@ -228,6 +234,23 @@ class MainWindow(QMainWindow):
         self.quick.setText(f"Phone IP: {peer.ip}")
         self.ensure_wireless_adb(peer.ip)
 
+    def auto_reconnect(self):
+        """Keep an already-provisioned phone attached quietly in the background."""
+        if self.peer is None:
+            return
+        ip = self.peer.ip
+        target = f"{ip}:5555"
+        result = self.runner.run(["adb", "devices"], 5)
+        if result.ok and any(
+            line.strip().startswith(target) and line.strip().endswith("device")
+            for line in (result.stdout or "").splitlines()
+        ):
+            self.adb_ready_ip = ip
+            self.remote_status.setText("Wireless screen/control: ✓ Ready")
+            return
+        self.adb_ready_ip = None
+        self.ensure_wireless_adb(ip)
+
     def ensure_wireless_adb(self, ip):
         """Quietly reconnect an already-authorized Android ADB-over-TCP endpoint."""
         if self.adb_ready_ip == ip:
@@ -260,6 +283,12 @@ class MainWindow(QMainWindow):
             self.test_result.setText("No online Android Tailscale device found.")
             return
         target = f"{self.peer.ip}:5555"
+        if self.adb_ready_ip != self.peer.ip:
+            ok, _ = self._adb_connect(self.peer.ip)
+            if not ok:
+                self.remote_status.setText("Wireless control needs one-time setup on this phone.")
+                return
+            self.adb_ready_ip = self.peer.ip
         try:
             subprocess.Popen(["scrcpy", "-s", target])
             self.test_result.setText("Opening wireless phone screen…")
@@ -273,6 +302,12 @@ class MainWindow(QMainWindow):
             self.test_result.setText("No online Android Tailscale device found.")
             return
         target = f"{self.peer.ip}:5555"
+        if self.adb_ready_ip != self.peer.ip:
+            ok, _ = self._adb_connect(self.peer.ip)
+            if not ok:
+                self.remote_status.setText("Wireless control needs one-time setup on this phone.")
+                return
+            self.adb_ready_ip = self.peer.ip
         # scrcpy 4.x camera capture uses Android camera2 through the scrcpy server.
         # Camera permission/availability is still controlled by Android.
         args = ["scrcpy", "-s", target, "--video-source=camera", f"--camera-facing={facing}", "--no-audio"]
