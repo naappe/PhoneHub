@@ -29,6 +29,7 @@ if errorlevel 1 (
 )
 
 echo [PhoneHub Setup] Tailscale available.
+powershell -NoProfile -Command "if (-not (Get-Process tailscale-ipn -ErrorAction SilentlyContinue)) { Start-Process tailscale -ArgumentList 'up' -WindowStyle Hidden }" >nul 2>&1
 
 rem Install PC-side Android tools once. Normal startup remains automatic.
 where adb >nul 2>&1 || (
