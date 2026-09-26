@@ -33,9 +33,9 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p dist
-          cp companion/build/outputs/apk/debug/companion-debug.apk dist/PhoneHub-Companion-7.0.0-dev1.apk
+          cp companion/build/outputs/apk/debug/companion-debug.apk dist/PhoneHub-Companion-7.0.0-dev2.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: PhoneHub-Companion-7.0.0-dev1
-          path: dist/PhoneHub-Companion-7.0.0-dev1.apk
+          name: PhoneHub-Companion-7.0.0-dev2
+          path: dist/PhoneHub-Companion-7.0.0-dev2.apk
           if-no-files-found: error
