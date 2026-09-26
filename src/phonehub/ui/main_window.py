@@ -40,6 +40,7 @@ class MainWindow(QMainWindow):
         self.latencies = []
         self.last_good = None
         self.adb_ready_ip = None
+        self.camera_process = None
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -206,6 +207,8 @@ class MainWindow(QMainWindow):
         if peer is None:
             self.phone_status.setText("Android: no online Tailscale device found")
             self.path_status.setText("PC  →  Tailscale  →  waiting for phone")
+            self.adb_ready_ip = None
+            self.remote_status.setText("Wireless control: waiting for phone")
             self.test_result.setText("Open Tailscale on the phone and make sure it is connected to the same tailnet.")
             if self.last_good:
                 self.quick.setText(
@@ -301,12 +304,30 @@ class MainWindow(QMainWindow):
                 self.remote_status.setText("Wireless control needs one-time setup on this phone.")
                 return
             self.adb_ready_ip = self.peer.ip
-        # scrcpy 4.x camera capture uses Android camera2 through the scrcpy server.
-        # Camera permission/availability is still controlled by Android.
-        args = ["scrcpy", "-s", target, "--video-source=camera", f"--camera-facing={facing}", "--no-audio"]
+        # Keep exactly one PhoneHub camera session alive. Many Android camera
+        # HALs cannot serve front/back capture concurrently.
+        if self.camera_process is not None and self.camera_process.poll() is None:
+            self.camera_process.terminate()
+            try:
+                self.camera_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.camera_process.kill()
+        self.camera_process = None
+
+        # CPH2469 proved unstable when scrcpy negotiated very large camera modes.
+        # A capped size avoids repeated encoder fallback while remaining clear.
+        args = [
+            "scrcpy", "-s", target,
+            "--video-source=camera",
+            f"--camera-facing={facing}",
+            "--camera-size=1280x720",
+            "--max-fps=30",
+            "--no-audio",
+        ]
         try:
-            subprocess.Popen(args)
-            self.test_result.setText(f"Opening {facing} camera…")
+            creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+            self.camera_process = subprocess.Popen(args, creationflags=creationflags)
+            self.test_result.setText(f"{facing.title()} camera opened.")
         except FileNotFoundError:
             self.test_result.setText("scrcpy is not installed.")
         except Exception as exc:
