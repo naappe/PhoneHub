@@ -1,7 +1,7 @@
 from __future__ import annotations
 import sys
 from PySide6.QtCore import QTimer, Qt, QDateTime
-from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget
+from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QComboBox,QCheckBox
 from .companion_server import CompanionServer
 
 def gb(n): return f"{n/1073741824:.1f} GB"
@@ -31,9 +31,10 @@ class Window(QMainWindow):
             if i==0:b.setChecked(True)
         nl.addStretch();nl.addWidget(QLabel("Secure Companion"))
         outer.addWidget(nav);outer.addWidget(self.stack,1)
-        self.stack.addWidget(self.home())
-        for name in names[1:]:
-            p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,32,36,32);h=QLabel(name);h.setObjectName("heading");l.addWidget(h);l.addWidget(QLabel("This section will connect to the Companion in the next feature phase."));l.addStretch();self.stack.addWidget(p)
+        self.stack.addWidget(self.home());self.stack.addWidget(self.apps_page());self.stack.addWidget(self.policy_page())
+        self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
+        self.stack.addWidget(self.info_page("Notifications","Notification forwarding will appear here after Android notification access is enabled."))
+        self.stack.addWidget(self.info_page("Settings","Connection, protection, backup, logs and new-phone setup will live here."))
         self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(3000);QTimer.singleShot(400,self.refresh)
 
     def home(self):
@@ -47,6 +48,42 @@ class Window(QMainWindow):
         row2=QHBoxLayout();self.storage=Card("STORAGE",progress=True);self.memory=Card("MEMORY",progress=True);self.android=Card("ANDROID")
         for x in [self.storage,self.memory,self.android]:row2.addWidget(x)
         l.addLayout(row2);l.addStretch();return p
+
+    def info_page(self,title,body):
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,32,36,32);h=QLabel(title);h.setObjectName("heading");l.addWidget(h);d=QLabel(body);d.setWordWrap(True);l.addWidget(d);l.addStretch();return p
+
+    def apps_page(self):
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(14)
+        top=QHBoxLayout();h=QLabel("Apps");h.setObjectName("heading");self.app_count=QLabel("Waiting for phone");self.app_count.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.app_count);l.addLayout(top)
+        tools=QHBoxLayout();self.app_search=QLineEdit();self.app_search.setPlaceholderText("Search apps or package…");self.app_search.textChanged.connect(self.filter_apps);self.app_filter=QComboBox();self.app_filter.addItems(["All apps","User apps","System apps"]);self.app_filter.currentIndexChanged.connect(self.filter_apps);tools.addWidget(self.app_search,1);tools.addWidget(self.app_filter);l.addLayout(tools)
+        self.app_table=QTableWidget(0,4);self.app_table.setHorizontalHeaderLabels(["App","Package","Type","State"]);self.app_table.verticalHeader().setVisible(False);self.app_table.setSelectionBehavior(QTableWidget.SelectRows);self.app_table.setEditTriggers(QTableWidget.NoEditTriggers);self.app_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);l.addWidget(self.app_table,1)
+        self._apps=[];return p
+
+    def policy_page(self):
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);h=QLabel("App Policy");h.setObjectName("heading");l.addWidget(h);d=QLabel("Policy controls are staged for the next Android capability layer. Current Companion does not silently suspend or alter other apps.");d.setWordWrap(True);l.addWidget(d)
+        for text,on in [("Keep installed",True),("Allow usage",True),("Suspend",False),("Show notifications",True),("Forward to PhoneHub",False),("Protect from changes",False),("Auto apply on sync",True)]:
+            cb=QCheckBox(text);cb.setChecked(on);cb.setEnabled(False);l.addWidget(cb)
+        l.addStretch();return p
+
+    def load_apps(self,d):
+        try:
+            r=self.server.apps(d)
+            if r.get("type")=="apps":
+                self._apps=r.get("apps",[]);self.app_count.setText(f"{len(self._apps)} installed");self.filter_apps()
+        except Exception as e:self.app_count.setText(f"Apps unavailable: {e}")
+
+    def filter_apps(self):
+        if not hasattr(self,"app_table"):return
+        q=self.app_search.text().lower().strip();mode=self.app_filter.currentText();rows=[]
+        for a in self._apps:
+            if q and q not in a.get("name","").lower() and q not in a.get("package","").lower():continue
+            if mode=="User apps" and a.get("system"):continue
+            if mode=="System apps" and not a.get("system"):continue
+            rows.append(a)
+        self.app_table.setRowCount(len(rows))
+        for row,a in enumerate(rows):
+            vals=[a.get("name",""),a.get("package",""),"System" if a.get("system") else "User","Enabled" if a.get("enabled") else "Disabled"]
+            for col,val in enumerate(vals):self.app_table.setItem(row,col,QTableWidgetItem(str(val)))
 
     def refresh(self):
         ds=self.server.devices()
@@ -63,6 +100,7 @@ class Window(QMainWindow):
             total=s.get("storage_total",0);free=s.get("storage_free",0);used=max(0,total-free);self.storage.value.setText(gb(free));self.storage.bar.setValue(int(used*100/total) if total else 0);self.storage.detail.setText(f"free of {gb(total)}")
             mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
             self.android.value.setText(str(s.get("android_version","—")));self.android.detail.setText(f"SDK {s.get('sdk','—')}")
+            if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
         except Exception as e:self.connection.setText(f"● Connected • status unavailable: {e}")
 
     def apply_style(self):
@@ -76,7 +114,7 @@ class Window(QMainWindow):
         #heading{font-size:30px;font-weight:700;color:#111827} #status{color:#16803a;font-weight:600;padding:2px 0 8px 0} #updated{color:#8490a4;font-size:12px}
         #card{background:#ffffff;border:1px solid #e1e7ef;border-radius:16px;min-height:142px}
         #cardTitle{background:transparent;color:#7a8599;font-size:11px;font-weight:700} #cardValue{background:transparent;font-size:24px;font-weight:700;color:#182033} #cardDetail{background:transparent;color:#6b768a}
-        QProgressBar{background:#edf1f6;border:0;border-radius:3px} QProgressBar::chunk{background:#2563eb;border-radius:3px}
+        QProgressBar{background:#edf1f6;border:0;border-radius:3px} QProgressBar::chunk{background:#2563eb;border-radius:3px}\n        QLineEdit,QComboBox{background:#fff;border:1px solid #dfe5ee;border-radius:9px;padding:9px} QTableWidget{background:#fff;border:1px solid #e1e7ef;border-radius:12px;gridline-color:#eef1f5} QHeaderView::section{background:#f7f9fc;border:0;border-bottom:1px solid #e5eaf1;padding:9px;font-weight:600}
         """)
 
 def main():
