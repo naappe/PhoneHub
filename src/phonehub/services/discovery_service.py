@@ -30,3 +30,8 @@ class DiscoveryService:
                 peers.append(DiscoveredPeer(ip, peer.get("HostName") or peer.get("DNSName", "").rstrip(".") or "Tailscale device", str(peer.get("OS") or "").lower()))
         android=[p for p in peers if p.os=="android"]
         return android or peers
+
+
+    def android_peers(self) -> list[DiscoveredPeer]:
+        """Return only online Android peers on the local Tailscale tailnet."""
+        return [p for p in self.peers() if p.os == "android"]
