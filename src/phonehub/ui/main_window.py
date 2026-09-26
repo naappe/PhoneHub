@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
         super().__init__(); self.setWindowTitle("PhoneHub 6.0"); self.resize(1180,760); self.setMinimumSize(960,620); self.setStyleSheet(APP_STYLE)
         self.state=AppState(); self.state.device_changed.connect(self.render)
         self.configs=ConfigService(); self.cfg=self.configs.load(); self.runner=SubprocessRunner(); self.adb=AdbService(self.runner); self.discovery=DiscoveryService(self.runner); self.setup=SetupService(self.adb); self.media=MediaSessionManager()
-        self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_wanted=False; self.screen_watch_busy=False; self.screen_restarting=False; self.screen_user_closed=False; self.screen_started_once=False
+        self.pool=QThreadPool.globalInstance(); self.workers=set(); self.screen_wanted=False; self.screen_watch_busy=False; self.screen_restarting=False; self.screen_user_closed=False; self.screen_started_once=False; self.auto_setup_running=False
         self.screen_watch=QTimer(self); self.screen_watch.setInterval(2500); self.screen_watch.timeout.connect(self._watch_screen)
         self.connection_watch=QTimer(self); self.connection_watch.setInterval(5000); self.connection_watch.timeout.connect(self.refresh); self.connection_watch.start()
         shell=QWidget(); self.setCentralWidget(shell); root=QHBoxLayout(shell); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
@@ -90,6 +90,10 @@ class MainWindow(QMainWindow):
     def work(self,fn,done):
         w=Worker(fn); self.workers.add(w); w.signals.result.connect(done); w.signals.error.connect(lambda e:self.devmsg.setText(e)); w.signals.finished.connect(lambda:self.workers.discard(w)); self.pool.start(w)
     def auto_setup(self):
+        if self.auto_setup_running:
+            self.setupstep.setText("Auto Setup is already running…")
+            return
+        self.auto_setup_running=True
         self.setupstep.setText("Auto Setup: checking PC, phone link, Agent and Tailscale…")
         self.work(self._ensure_pc_tailscale,self._pc_tailscale_ready)
 
@@ -120,6 +124,7 @@ class MainWindow(QMainWindow):
     def _tailscale_phone_done(self,serial,result):
         ok,msg=result
         if not ok:
+            self.auto_setup_running=False
             self.setupstep.setText("Tailscale install failed: "+msg)
             return
         self.setupstep.setText("✓ "+msg+" Opening Tailscale on phone…")
@@ -161,6 +166,7 @@ class MainWindow(QMainWindow):
     def _pc_tailscale_ready(self,result):
         ok,msg=result
         if not ok:
+            self.auto_setup_running=False
             self.setupstep.setText(msg)
             return
         self.setupstep.setText("✓ "+msg+" Checking the connected phone…")
@@ -196,6 +202,7 @@ class MainWindow(QMainWindow):
     def _auto_agent_ready(self,result):
         ok,msg=result
         if not ok:
+            self.auto_setup_running=False
             self.setupstep.setText("Agent setup failed: "+msg)
             return
         self.agentmsg.setText("✓ "+msg)
@@ -273,6 +280,7 @@ class MainWindow(QMainWindow):
                 detail=f"Auto setup complete • {peer.ip}"
             ))
             self.devmsg.setText(f"Connected automatically • {peer.name} • {peer.ip}")
+            self.auto_setup_running=False
             self.setupstep.setText("✓ Auto Setup complete • PhoneHub connected to the phone.")
             return
 
@@ -284,6 +292,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(5000,self._auto_wait_for_phone)
             return
 
+        self.auto_setup_running=False
         self.setupstep.setText(
             "PhoneHub setup is ready, but the phone has not joined Tailscale yet. "
             "Open Tailscale on the phone and approve sign-in/VPN; Auto Detect will then connect."
