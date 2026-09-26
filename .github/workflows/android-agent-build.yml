@@ -41,11 +41,11 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/PhoneHub-Agent-6.2.0-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/PhoneHub-Agent-6.2.1-debug.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PhoneHub-Agent-6.2.0
-          path: dist/PhoneHub-Agent-6.2.0-debug.apk
+          name: PhoneHub-Agent-6.2.1
+          path: dist/PhoneHub-Agent-6.2.1-debug.apk
           if-no-files-found: error
