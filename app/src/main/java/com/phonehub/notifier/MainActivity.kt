@@ -21,6 +21,9 @@ import androidx.compose.ui.unit.dp
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        startForegroundService(Intent(this, PhoneHubRemoteService::class.java).apply {
+            action = PhoneHubRemoteService.ACTION_START_SERVER
+        })
         setContent { PhoneHubApp() }
     }
 }
