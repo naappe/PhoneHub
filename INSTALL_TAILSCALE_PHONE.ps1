@@ -39,8 +39,15 @@ if ($LASTEXITCODE -eq 0 -and ($installedPath -match "package:")) {
 }
 
 $stable = "https://pkgs.tailscale.com/stable/"
+$curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+
 Write-Host "[PhoneHub] Finding latest official Tailscale APK..." -ForegroundColor Cyan
-$page = (Invoke-WebRequest -UseBasicParsing -Uri $stable).Content
+if ($null -ne $curl) {
+    $page = (& curl.exe -L --fail --silent --show-error --connect-timeout 10 --max-time 30 $stable) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "Could not read Tailscale stable package list." }
+} else {
+    $page = (Invoke-WebRequest -UseBasicParsing -Uri $stable -TimeoutSec 30).Content
+}
 
 $match = [regex]::Match($page, 'href=["'']([^"'']*tailscale-android-universal-([0-9.]+)\.apk)["'']')
 if (-not $match.Success) {
@@ -58,7 +65,13 @@ $cacheApk = Join-Path $cacheDir ("tailscale-android-universal-{0}.apk" -f $versi
 $tmp = $cacheApk
 
 Write-Host "[PhoneHub] Getting official SHA-256..." -ForegroundColor Cyan
-$expected = ((Invoke-WebRequest -UseBasicParsing -Uri $shaUrl).Content.Trim() -split "\s+")[0].ToLowerInvariant()
+if ($null -ne $curl) {
+    $shaText = (& curl.exe -L --fail --silent --show-error --connect-timeout 10 --max-time 30 $shaUrl) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "Could not download Tailscale SHA-256 file." }
+    $expected = (($shaText.Trim() -split "\s+")[0]).ToLowerInvariant()
+} else {
+    $expected = ((Invoke-WebRequest -UseBasicParsing -Uri $shaUrl -TimeoutSec 30).Content.Trim() -split "\s+")[0].ToLowerInvariant()
+}
 
 $useCache = $false
 if (Test-Path $cacheApk) {
@@ -73,7 +86,20 @@ if (Test-Path $cacheApk) {
 
 if (-not $useCache) {
     Write-Host "[PhoneHub] Downloading Tailscale $version once..." -ForegroundColor Cyan
-    Invoke-WebRequest -UseBasicParsing -Uri $apkUrl -OutFile $cacheApk
+    $part = "$cacheApk.part"
+    Remove-Item $part -Force -ErrorAction SilentlyContinue
+
+    if ($null -ne $curl) {
+        & curl.exe -L --fail --show-error --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 1 -o $part $apkUrl
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item $part -Force -ErrorAction SilentlyContinue
+            throw "Tailscale APK download failed."
+        }
+    } else {
+        Invoke-WebRequest -UseBasicParsing -Uri $apkUrl -OutFile $part -TimeoutSec 180
+    }
+
+    Move-Item -Force $part $cacheApk
 }
 
 Write-Host "[PhoneHub] Verifying SHA-256..." -ForegroundColor Cyan
