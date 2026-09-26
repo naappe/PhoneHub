@@ -28,9 +28,17 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PhoneHub 6.3 — Tailscale")
-        self.resize(980, 700)
-        self.setMinimumSize(820, 600)
+        self.resize(1000, 760)
+        self.setMinimumSize(860, 650)
         self.setStyleSheet(APP_STYLE)
+
+        # Keep controls readable even when Windows/font scaling compresses layouts.
+        self.setStyleSheet(self.styleSheet() + """
+            QPushButton { min-height: 36px; padding: 0 14px; }
+            QLineEdit { min-height: 38px; padding: 0 12px; }
+            QLabel { min-height: 20px; }
+            QFrame#Card { min-height: 110px; }
+        """)
 
         self.runner = SubprocessRunner()
         self.discovery = DiscoveryService(self.runner)
@@ -44,7 +52,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(30, 26, 30, 26)
-        layout.setSpacing(16)
+        layout.setSpacing(18)
 
         brand = QLabel("PhoneHub 6.3")
         brand.setObjectName("PageTitle")
@@ -68,10 +76,12 @@ class MainWindow(QMainWindow):
 
         buttons = QHBoxLayout()
         refresh = QPushButton("Refresh")
+        refresh.setMinimumWidth(90)
         refresh.setObjectName("Primary")
         refresh.clicked.connect(self.refresh)
         buttons.addWidget(refresh)
         ping = QPushButton("Ping Phone")
+        ping.setMinimumWidth(110)
         ping.clicked.connect(self.ping_phone)
         buttons.addWidget(ping)
         buttons.addStretch()
@@ -84,17 +94,21 @@ class MainWindow(QMainWindow):
         self.port.setPlaceholderText("Port, e.g. 8080")
         row.addWidget(self.port)
         test = QPushButton("Test Port")
+        test.setMinimumWidth(90)
         test.clicked.connect(self.test_port)
         row.addWidget(test)
         tl.addLayout(row)
         actions = QHBoxLayout()
         copy_ip = QPushButton("Copy IP")
+        copy_ip.setMinimumWidth(90)
         copy_ip.clicked.connect(self.copy_ip)
         actions.addWidget(copy_ip)
         http = QPushButton("HTTP 8080")
+        http.setMinimumWidth(100)
         http.clicked.connect(self.open_http)
         actions.addWidget(http)
         ssh = QPushButton("SSH 22")
+        ssh.setMinimumWidth(90)
         ssh.clicked.connect(self.open_ssh)
         actions.addWidget(ssh)
         actions.addStretch()
@@ -117,6 +131,7 @@ class MainWindow(QMainWindow):
         self.camera_url.setPlaceholderText("Existing camera stream URL, e.g. http://100.x.x.x:8080/video")
         camrow.addWidget(self.camera_url)
         open_camera = QPushButton("Open Stream")
+        open_camera.setMinimumWidth(110)
         open_camera.clicked.connect(self.open_camera_stream)
         camrow.addWidget(open_camera)
         cam.addLayout(camrow)
@@ -142,7 +157,7 @@ class MainWindow(QMainWindow):
         card.setObjectName("Card")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
         heading = QLabel(title)
         heading.setStyleSheet("font-size:16px;font-weight:750;")
         layout.addWidget(heading)
