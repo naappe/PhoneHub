@@ -158,7 +158,12 @@ class MainWindow(QMainWindow):
 
         self.phone_status.setText(f"Android: ✓ {peer.name} • {peer.ip}")
         self.path_status.setText("✓ Connected")
-        self.test_result.setText("Ready")
+        # Do not overwrite Ping/Test Port results during the automatic refresh.
+        if self.test_result.text() in {
+            "Select an online Android device first.",
+            "No online Android Tailscale device found.",
+        }:
+            self.test_result.setText("Ready")
         self.quick.setText(f"Phone IP: {peer.ip}")
 
     def ping_phone(self):
