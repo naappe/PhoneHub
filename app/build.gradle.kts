@@ -44,3 +44,5 @@ dependencies {
 // rebuild after sdkmanager path fix
 
 // PhoneHub 6.2 remote-screen build trigger
+
+// PhoneHub 6.2.1 build trigger
