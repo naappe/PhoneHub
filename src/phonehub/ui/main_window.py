@@ -76,10 +76,12 @@ class MainWindow(QMainWindow):
         refresh = QPushButton("Refresh")
         refresh.setMinimumWidth(90)
         refresh.setObjectName("Primary")
+        refresh.setStyleSheet("QPushButton{background:#2869ed;color:white;border:1px solid #2869ed;border-radius:10px;padding:8px 16px;font-weight:700;} QPushButton:hover{background:#3478f6;}")
         refresh.clicked.connect(self.refresh)
         buttons.addWidget(refresh)
         ping = QPushButton("Ping Phone")
         ping.setMinimumWidth(110)
+        ping.setStyleSheet("QPushButton{background:#15213a;color:#eef4ff;border:1px solid #355078;border-radius:10px;padding:8px 16px;} QPushButton:hover{background:#1b2b4a;}")
         ping.clicked.connect(self.ping_phone)
         buttons.addWidget(ping)
         buttons.addStretch()
@@ -93,16 +95,19 @@ class MainWindow(QMainWindow):
         row.addWidget(self.port)
         test = QPushButton("Test Port")
         test.setMinimumWidth(90)
+        test.setStyleSheet("QPushButton{background:#15213a;color:#eef4ff;border:1px solid #355078;border-radius:10px;padding:8px 16px;} QPushButton:hover{background:#1b2b4a;}")
         test.clicked.connect(self.test_port)
         row.addWidget(test)
         tl.addLayout(row)
         actions = QHBoxLayout()
         copy_ip = QPushButton("Copy IP")
         copy_ip.setMinimumWidth(90)
+        copy_ip.setStyleSheet("QPushButton{background:#15213a;color:#eef4ff;border:1px solid #355078;border-radius:10px;padding:8px 16px;} QPushButton:hover{background:#1b2b4a;}")
         copy_ip.clicked.connect(self.copy_ip)
         actions.addWidget(copy_ip)
         ssh = QPushButton("SSH 22")
         ssh.setMinimumWidth(90)
+        ssh.setStyleSheet("QPushButton{background:#15213a;color:#eef4ff;border:1px solid #355078;border-radius:10px;padding:8px 16px;} QPushButton:hover{background:#1b2b4a;}")
         ssh.clicked.connect(self.open_ssh)
         actions.addWidget(ssh)
         actions.addStretch()
@@ -163,6 +168,8 @@ class MainWindow(QMainWindow):
     def refresh(self):
         self.pc_status.setText("PC Tailscale: checking…")
         self.phone_status.setText("Android: searching tailnet…")
+        if not self.latencies:
+            self.quality_status.setText("Latency —   •   Route —")
         self.work(self._snapshot, self._render_snapshot)
 
     def _snapshot(self):
@@ -239,7 +246,7 @@ class MainWindow(QMainWindow):
                     "transport": transport,
                 }
             else:
-                self.quality_status.setText(f"Transport: {transport}")
+                self.quality_status.setText(f"Route: {transport}")
             self.test_result.setText("✓ Phone reachable over Tailscale")
         elif result.ok:
             self.test_result.setText("✓ Phone reachable over Tailscale.")
