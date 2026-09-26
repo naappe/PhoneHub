@@ -176,6 +176,21 @@ class MainWindow(QMainWindow):
             return
         self.usb_serial=status.serial
         self.setupstep.setText("✓ Phone authorized • checking PhoneHub Agent…")
+        self.work(
+            lambda:self.setup.package_installed(status.serial,"com.phonehub.notifier"),
+            lambda installed:self._auto_agent_checked(status.serial,installed)
+        )
+
+    def _auto_agent_checked(self,serial,installed):
+        if installed:
+            self.agentmsg.setText("✓ PhoneHub Agent already installed.")
+            self.setupstep.setText("✓ Agent installed • checking Tailscale on phone…")
+            self.work(
+                lambda:self.setup.package_installed(serial,"com.tailscale.ipn"),
+                lambda present:self._auto_tailscale_checked(serial,present)
+            )
+            return
+        self.setupstep.setText("PhoneHub Agent missing • installing it automatically…")
         self.work(self._run_agent_bootstrap,self._auto_agent_ready)
 
     def _auto_agent_ready(self,result):
@@ -200,8 +215,24 @@ class MainWindow(QMainWindow):
                       lambda _opened:self._after_auto_tailscale_launch())
             return
         self.setupstep.setText("Installing official verified Tailscale APK to phone…")
-        self.work(lambda:self.setup.install_tailscale(serial),
+        self.work(self._run_tailscale_installer_script,
                   lambda result:self._auto_tailscale_installed(serial,result))
+
+    def _run_tailscale_installer_script(self):
+        root=Path(__file__).resolve().parents[3]
+        script=root/"INSTALL_TAILSCALE_PHONE.ps1"
+        if not script.exists():
+            return False,"Tailscale installer script is missing."
+        result=subprocess.run(
+            ["powershell","-NoProfile","-ExecutionPolicy","Bypass","-File",str(script)],
+            capture_output=True,text=True,timeout=180
+        )
+        output=((result.stdout or "")+"\n"+(result.stderr or "")).strip()
+        if result.returncode==0 and "installed and opened successfully" in output.lower():
+            return True,"Tailscale installed and opened successfully."
+        if result.returncode==0:
+            return True,output or "Tailscale installer completed."
+        return False,output or "Tailscale installer failed."
 
     def _auto_tailscale_installed(self,serial,result):
         ok,msg=result
@@ -314,7 +345,10 @@ class MainWindow(QMainWindow):
                 detail="PC ready • phone Tailscale/Agent not online"
             ))
             return
-        peer=next((p for p in peers if p.os=="android"),peers[0])
+        peer=next((p for p in peers if p.os=="android"),None)
+        if peer is None:
+            self.devmsg.setText("No online Android phone found on Tailscale.")
+            return
         try:
             self.cfg=self.configs.save(DeviceConfig(peer.ip,5555))
             self.ip.setText(peer.ip)
@@ -360,7 +394,7 @@ class MainWindow(QMainWindow):
 
     def _network_snapshot(self):
         peers=self.discovery.peers()
-        peer=next((p for p in peers if p.ip==self.cfg.phone_ip),None)
+        peer=next((p for p in peers if p.ip==self.cfg.phone_ip and p.os=="android"),None)
         if peer is None:
             peer=next((p for p in peers if p.os=="android"),None)
         if peer is not None:
