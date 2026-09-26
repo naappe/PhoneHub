@@ -69,10 +69,12 @@ class Window(QMainWindow):
         self._apps=[];self.load_app_cache();return p
 
     def policy_page(self):
-        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);h=QLabel("App Policy");h.setObjectName("heading");l.addWidget(h);self.policy_title=QLabel("Select an app");self.policy_title.setObjectName("policyTitle");self.policy_package=QLabel("Choose an app from Apps, then double-click it or use Open App Policy.");self.policy_package.setObjectName("updated");l.addWidget(self.policy_title);l.addWidget(self.policy_package);d=QLabel("Policy controls are staged for the next Android capability layer. Current Companion does not silently suspend or alter other apps.");d.setWordWrap(True);l.addWidget(d)
-        for text,on in [("Keep installed",True),("Allow usage",True),("Suspend",False),("Show notifications",True),("Forward to PhoneHub",False),("Protect from changes",False),("Auto apply on sync",True)]:
-            cb=QCheckBox(text);cb.setChecked(on);cb.setEnabled(False);l.addWidget(cb)
-        l.addStretch();return p
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);h=QLabel("App Policy");h.setObjectName("heading");l.addWidget(h);self.policy_title=QLabel("Select an app");self.policy_title.setObjectName("policyTitle");self.policy_package=QLabel("Choose an app from Apps, then double-click it or use Open App Policy.");self.policy_package.setObjectName("updated");l.addWidget(self.policy_title);l.addWidget(self.policy_package)
+        self.policy_status=QLabel("Policies are stored on the phone and synchronized through the encrypted Companion channel.");self.policy_status.setWordWrap(True);l.addWidget(self.policy_status)
+        self.policy_checks={}
+        for key,text,on in [("keep_installed","Keep installed",True),("allow_usage","Allow usage",True),("suspend","Suspend",False),("show_notifications","Show notifications",True),("forward_notifications","Forward to PhoneHub",False),("protect_changes","Protect from changes",False),("auto_apply","Auto apply on sync",True)]:
+            cb=QCheckBox(text);cb.setChecked(on);cb.setEnabled(False);self.policy_checks[key]=cb;l.addWidget(cb)
+        self.policy_save=QPushButton("Save policy to phone");self.policy_save.setEnabled(False);self.policy_save.clicked.connect(self.save_policy);l.addWidget(self.policy_save);l.addStretch();return p
 
     def run_task(self,tag,fn):
         t=Task(fn,tag);t.signals.done.connect(self.task_done);self.pool.start(t)
@@ -102,6 +104,15 @@ class Window(QMainWindow):
             mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
             self.android.value.setText(str(s.get("android_version","—")));self.android.detail.setText(f"SDK {s.get('sdk','—')}")
             if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
+        elif tag=="policy_get":
+            if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
+            p=result.get("policy",{})
+            for key,cb in self.policy_checks.items():cb.setChecked(bool(p.get(key,cb.isChecked())));cb.setEnabled(True)
+            self.policy_save.setEnabled(True);self.policy_status.setText("Policy loaded from phone • remote encrypted sync ready")
+        elif tag=="policy_set":
+            self.policy_save.setEnabled(True)
+            if isinstance(result,Exception):self.policy_status.setText(f"Save failed: {result}");return
+            self.policy_status.setText("Saved on phone • Android-restricted controls are stored but are not silently enforced")
         elif tag=="apps":
             self._apps_loading=False
             if isinstance(result,Exception):self.app_count.setText(f"Apps unavailable: {result}");return
@@ -134,7 +145,18 @@ class Window(QMainWindow):
     def open_policy(self,row,col):self.select_policy(row)
     def select_policy(self,row):
         app=self.app_table.item(row,0).text();pkg=self.app_table.item(row,1).text()
-        self.policy_title.setText(app);self.policy_package.setText(pkg);self.stack.setCurrentIndex(2)
+        self.policy_title.setText(app);self.policy_package.setText(pkg);self.stack.setCurrentIndex(2);self.policy_status.setText("Loading policy from phone…")
+        for cb in self.policy_checks.values():cb.setEnabled(False)
+        self.policy_save.setEnabled(False)
+        ds=self.server.devices()
+        if ds:self.run_task("policy_get",lambda:self.server.policy_get(ds[0],pkg))
+    def save_policy(self):
+        pkg=self.policy_package.text().strip()
+        if not pkg or "." not in pkg:return
+        ds=self.server.devices()
+        if not ds:self.policy_status.setText("Phone is offline");return
+        policy={key:cb.isChecked() for key,cb in self.policy_checks.items()};self.policy_save.setEnabled(False);self.policy_status.setText("Saving encrypted policy to phone…")
+        self.run_task("policy_set",lambda:self.server.policy_set(ds[0],pkg,policy))
     def refresh(self):
         ds=self.server.devices()
         if not ds:
