@@ -67,6 +67,8 @@ class CompanionServer:
             if not page.get("has_more"):return {"type":"apps","apps":items,"count":len(items)}
             offset=int(page.get("next_offset",offset+50))
     def capabilities(self,d):return self.command(d,"capabilities")
+    def policy_get(self,d,package):return self.command(d,"policy_get",{"package":package})
+    def policy_set(self,d,package,policy):return self.command(d,"policy_set",{"package":package,"policy":policy})
     def _mailbox(self,did,key):
         return hashlib.sha256((did+":"+base64.b64encode(key).decode()).encode()).hexdigest()
     def _relay(self,body):
