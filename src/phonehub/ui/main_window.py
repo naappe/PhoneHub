@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         self.setupstep=QLabel("PhoneHub will check Tailscale and discover your phone automatically."); self.setupstep.setWordWrap(True); sl.addWidget(self.setupstep)
         sr=QHBoxLayout(); chk=QPushButton("Run Auto Setup"); chk.setObjectName("Primary"); chk.clicked.connect(self.auto_setup); sr.addWidget(chk)
         agent=QPushButton("Install / Update Agent"); agent.setObjectName("Primary"); agent.clicked.connect(self.install_agent_to_phone); sr.addWidget(agent)
+        tailscale=QPushButton("Install Tailscale to Phone"); tailscale.setObjectName("Primary"); tailscale.clicked.connect(self.install_tailscale_to_phone); sr.addWidget(tailscale)
         sr.addStretch(); sl.addLayout(sr)
         self.agentmsg=QLabel("Connect and unlock the phone. PhoneHub will direct-install when an authorized service link exists; otherwise it will copy the Agent automatically over USB."); self.agentmsg.setObjectName("Muted"); self.agentmsg.setWordWrap(True); sl.addWidget(self.agentmsg)
         l.addWidget(sc); l.addStretch(); return w
@@ -103,6 +104,32 @@ class MainWindow(QMainWindow):
         if not install.ok:
             return False,install.stderr or install.stdout or "Automatic Tailscale installation failed."
         return True,"Tailscale installed successfully on this PC."
+
+    def install_tailscale_to_phone(self):
+        self.setupstep.setText("Checking authorized phone link for Tailscale install…")
+        self.work(self.setup.inspect_usb,self._tailscale_usb_ready)
+
+    def _tailscale_usb_ready(self,status):
+        if status.stage!="ready":
+            self.setupstep.setText(status.message)
+            return
+        serial=status.serial
+        self.setupstep.setText("Downloading official Tailscale APK, verifying it, and installing to phone…")
+        self.work(lambda:self.setup.install_tailscale(serial),lambda result:self._tailscale_phone_done(serial,result))
+
+    def _tailscale_phone_done(self,serial,result):
+        ok,msg=result
+        if not ok:
+            self.setupstep.setText("Tailscale install failed: "+msg)
+            return
+        self.setupstep.setText("✓ "+msg+" Opening Tailscale on phone…")
+        self.work(lambda:self.setup.open_tailscale(serial),lambda opened:self._tailscale_opened(opened))
+
+    def _tailscale_opened(self,opened):
+        if opened:
+            self.setupstep.setText("✓ Tailscale installed and opened on phone. Approve VPN/sign-in on the phone if Android asks, then Auto Detect.")
+        else:
+            self.setupstep.setText("Tailscale installed. Open it on the phone once, then press Auto Detect.")
 
     def install_agent_to_phone(self):
         self.agentmsg.setText("Sending PhoneHub Agent 6.1 to the connected phone…")
