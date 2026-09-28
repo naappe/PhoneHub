@@ -2,7 +2,7 @@ param()
 $ErrorActionPreference="Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 $Root=Split-Path -Parent $MyInvocation.MyCommand.Path
-$Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev16.apk"
+$Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev17.apk"
 $Pkg="com.phonehub.companion"
 if(-not(Test-Path $Apk)){throw "APK not found: $Apk"}
 if(-not(Get-Command adb -ErrorAction SilentlyContinue)){throw "adb not found."}
@@ -44,32 +44,72 @@ Write-Host "[2/3] Launching Companion..."
 & adb -s $serial shell monkey -p $Pkg -c android.intent.category.LAUNCHER 1 | Out-Null
 Write-Host "[3/4] Installed and launched."
 Write-Host "[4/4] Enabling authorized wireless ADB for local high-performance screen..."
-# Resolve the Wi-Fi interface explicitly. A generic 'ip route' can return
-# cellular/VPN routes first (for example 10.x addresses) and send adb to the
-# wrong network.
-$phoneIp = $null
-$wifiAddr = (& adb -s $serial shell ip -4 addr show wlan0 2>$null | Out-String)
-if($wifiAddr -match '\binet\s+(\d+\.\d+\.\d+\.\d+)/\d+'){ $phoneIp=$matches[1] }
-if(-not $phoneIp){
-  $wifiRoute = (& adb -s $serial shell ip -4 route show dev wlan0 2>$null | Out-String)
-  if($wifiRoute -match '\bsrc\s+(\d+\.\d+\.\d+\.\d+)'){ $phoneIp=$matches[1] }
+
+function Test-PhoneHubTcpPort([string]$HostName,[int]$Port,[int]$TimeoutMs=1200) {
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $async = $client.BeginConnect($HostName,$Port,$null,$null)
+        if(-not $async.AsyncWaitHandle.WaitOne($TimeoutMs,$false)){ return $false }
+        $client.EndConnect($async)
+        return $client.Connected
+    } catch { return $false }
+    finally { $client.Close() }
 }
+
+$candidates = New-Object System.Collections.Generic.List[string]
+function Add-PhoneHubCandidate([string]$Ip) {
+    if($Ip -match '^\d{1,3}(\.\d{1,3}){3}$' -and -not $candidates.Contains($Ip)) { $candidates.Add($Ip) }
+}
+
+# Ask Android which source address it would use to reach each active PC IPv4.
+# This avoids accidentally choosing cellular/VPN addresses from a generic route dump.
+try {
+    $pcIps = @(Get-NetIPConfiguration -ErrorAction Stop |
+        Where-Object { $_.NetAdapter.Status -eq "Up" } |
+        ForEach-Object { $_.IPv4Address.IPAddress } |
+        Where-Object { $_ -and $_ -notmatch '^(127\.|169\.254\.)' })
+    foreach($pcIp in $pcIps) {
+        $route = (& adb -s $serial shell ip -4 route get $pcIp 2>$null | Out-String)
+        if($route -match '\bsrc\s+(\d+\.\d+\.\d+\.\d+)') { Add-PhoneHubCandidate $matches[1] }
+    }
+} catch {}
+
+# Wi-Fi-specific fallback for Android builds where route-get is restricted.
+$wifiAddr = (& adb -s $serial shell ip -4 addr show wlan0 2>$null | Out-String)
+if($wifiAddr -match '\binet\s+(\d+\.\d+\.\d+\.\d+)/\d+') { Add-PhoneHubCandidate $matches[1] }
+$wifiRoute = (& adb -s $serial shell ip -4 route show dev wlan0 2>$null | Out-String)
+if($wifiRoute -match '\bsrc\s+(\d+\.\d+\.\d+\.\d+)') { Add-PhoneHubCandidate $matches[1] }
+
 $tcp = (& adb -s $serial tcpip 5555 2>&1 | Out-String).Trim()
 if($LASTEXITCODE -eq 0){
-  Write-Host "Wireless ADB enabled on TCP 5555."
-  if($phoneIp){
+    Write-Host "Wireless ADB enabled on TCP 5555."
     Start-Sleep -Seconds 2
-    $target = "${phoneIp}:5555"
-    Write-Host "Wi-Fi target: $target"
-    $connect = (& adb connect $target 2>&1 | Out-String).Trim()
-    Write-Host $connect
-    if($connect -notmatch '(?i)(connected to|already connected)'){
-      Write-Host "Wi-Fi ADB was not reachable. PhoneHub will keep Companion/WebRTC fallback available."
+    $connectedTarget = $null
+    foreach($phoneIp in $candidates) {
+        $target = "${phoneIp}:5555"
+        Write-Host "Testing local target: $target"
+        if(-not (Test-PhoneHubTcpPort $phoneIp 5555 1200)) {
+            Write-Host "  Not reachable from this PC."
+            continue
+        }
+        $connect = (& adb connect $target 2>&1 | Out-String).Trim()
+        Write-Host "  $connect"
+        if($connect -match '(?i)(connected to|already connected)') {
+            $connectedTarget = $target
+            break
+        }
     }
-  } else {
-    Write-Host "No wlan0 IPv4 address detected; skipping guessed ADB target."
-    Write-Host "PhoneHub will use Companion discovery/WebRTC fallback instead."
-  }
-} else { Write-Host "Wireless ADB setup skipped: $tcp" }
+    if($connectedTarget) {
+        $stateDir = Join-Path $HOME ".phonehub"
+        New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+        Set-Content -Path (Join-Path $stateDir "wireless_adb_target.txt") -Value $connectedTarget -Encoding ASCII
+        Write-Host "Local high-performance target saved: $connectedTarget"
+    } else {
+        Write-Host "No PC-reachable Wi-Fi ADB address was found."
+        Write-Host "PhoneHub will automatically use encrypted Companion/WebRTC fallback instead."
+    }
+} else {
+    Write-Host "Wireless ADB setup skipped: $tcp"
+}
 Write-Host ""
-Write-Host "If this was the one-time signing migration, tap Enable automatic service once on the phone."
+Write-Host "PhoneHub Companion upgrade complete."
