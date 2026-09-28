@@ -108,33 +108,58 @@ class Window(QMainWindow):
         self.screen_status.setText("Starting remote WebRTC screen…");self.screen_view.setText("Connecting remote live screen…")
         self.screen_client.start(d)
 
+    def wireless_adb_path(self):
+        p=Path.home()/".phonehub";p.mkdir(parents=True,exist_ok=True);return p/"wireless_adb_target.txt"
+
     def _start_scrcpy_local(self,d):
         if not shutil.which("adb"):return {"ok":False,"reason":"ADB is not installed"}
         if not shutil.which("scrcpy"):return {"ok":False,"reason":"scrcpy is not installed"}
         flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
         devices=subprocess.run(["adb","devices"],capture_output=True,text=True,timeout=5,creationflags=flags)
-        tcp_targets=[]
+        connected=[]
         for line in (devices.stdout or "").splitlines()[1:]:
             parts=line.split()
             if len(parts)>=2 and parts[1]=="device" and ":" in parts[0]:
-                tcp_targets.append(parts[0])
-        target=tcp_targets[0] if len(tcp_targets)==1 else None
-        if target is None and d.address!="REMOTE":
-            target=f"{d.address}:5555"
+                connected.append(parts[0])
+
+        candidates=[]
+        def add(value):
+            value=(value or "").strip()
+            if value and value not in candidates:candidates.append(value)
+
+        if d.address!="REMOTE":add(f"{d.address}:5555")
+        try:add(self.wireless_adb_path().read_text(encoding="utf-8"))
+        except Exception:pass
+        for value in connected:add(value)
+
+        failures=[]
+        for target in candidates:
             try:
-                with socket.create_connection((d.address,5555),timeout=1.5):pass
+                host,port_text=target.rsplit(":",1);port=int(port_text)
+            except Exception:
+                failures.append(f"{target}: invalid target");continue
+            try:
+                with socket.create_connection((host,port),timeout=1.0):pass
             except OSError:
-                return {"ok":False,"reason":"wireless ADB port 5555 is not reachable"}
-            connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
-            output=((connect.stdout or "")+" "+(connect.stderr or "")).strip().lower()
-            if connect.returncode!=0 or ("connected to" not in output and "already connected" not in output):
-                return {"ok":False,"reason":output or "ADB connection failed"}
-        if target is None:
-            return {"ok":False,"reason":"no authorized wireless ADB target discovered"}
-        args=["scrcpy","-s",target,"--window-title=PhoneHub Screen - Local Control","--max-size=1600","--max-fps=60","--video-bit-rate=8M","--no-audio","--stay-awake"]
-        flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
-        process=subprocess.Popen(args,creationflags=flags)
-        return {"ok":True,"process":process,"target":target}
+                failures.append(f"{target}: unreachable");continue
+            if target not in connected:
+                try:
+                    connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
+                    output=((connect.stdout or "")+" "+(connect.stderr or "")).strip()
+                    low=output.lower()
+                    if connect.returncode!=0 or ("connected to" not in low and "already connected" not in low):
+                        failures.append(f"{target}: {output or 'ADB connection failed'}");continue
+                except Exception as e:
+                    failures.append(f"{target}: {e}");continue
+            try:self.wireless_adb_path().write_text(target,encoding="utf-8")
+            except Exception:pass
+            args=["scrcpy","-s",target,"--window-title=PhoneHub Screen - Local Control","--max-size=1600","--max-fps=60","--video-bit-rate=8M","--no-audio","--stay-awake"]
+            process=subprocess.Popen(args,creationflags=flags)
+            return {"ok":True,"process":process,"target":target}
+
+        reason="no reachable authorized wireless ADB target"
+        if failures:reason+=" ("+"; ".join(failures[:3])+")"
+        return {"ok":False,"reason":reason}
 
 
     def show_screen_state(self,state):
