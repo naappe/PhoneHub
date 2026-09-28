@@ -100,18 +100,21 @@ class CompanionServer:
                         plain=AESGCM(key).decrypt(base64.b64decode(w["nonce"]),base64.b64decode(w["ciphertext"]),None);s=json.loads(plain.decode())
                         if s.get("type")=="remote_presence" and s.get("device_id")==did:
                             s["_seen"]=time.time();self._remote_status[did]=s
-                            local_ip=str(s.get("local_ipv4") or "").strip()
-                            try:
-                                valid=bool(local_ip and ipaddress.ip_address(local_ip).is_private)
-                            except ValueError:
-                                valid=False
-                            if valid:
+                            candidates=[]
+                            primary=str(s.get("local_ipv4") or "").strip()
+                            if primary:candidates.append(primary)
+                            for value in s.get("local_ipv4_candidates",[]) or []:
+                                value=str(value or "").strip()
+                                if value and value not in candidates:candidates.append(value)
+                            port=int(s.get("command_port") or DEFAULT_COMMAND_PORT)
+                            for local_ip in candidates:
                                 try:
-                                    port=int(s.get("command_port") or DEFAULT_COMMAND_PORT)
+                                    if not ipaddress.ip_address(local_ip).is_private:continue
                                     with socket.create_connection((local_ip,port),timeout=.6):pass
                                     with self._lock:self._devices[did]=Companion(did,s.get("device_name","Android"),local_ip,time.time(),port)
-                                except OSError:
-                                    pass
+                                    break
+                                except (ValueError,OSError):
+                                    continue
                         elif s.get("_request_id"):
                             with self._remote_cv:self._remote_responses[s["_request_id"]]=s;self._remote_cv.notify_all()
                 except Exception:pass
