@@ -10,6 +10,10 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -29,36 +33,74 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val title = TextView(this).apply {
-            text = "Samsung Secure"
-            textSize = 26f
-            setPadding(48, 56, 48, 12)
+        val density = resources.displayMetrics.density
+        fun dp(value: Int) = (value * density).toInt()
+        fun rounded(fill: Int, radius: Int = 20) = GradientDrawable().apply {
+            setColor(fill)
+            cornerRadius = dp(radius).toFloat()
+        }
+        fun label(value: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(color)
+            if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
         }
 
-        val description = TextView(this).apply {
-            text = "One-time phone enrollment for the secure PC connection and policy bridge. Approve the Android prompts once; normal control remains on the PC."
-            textSize = 16f
-            setPadding(48, 0, 48, 28)
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(28), dp(24), dp(24))
+            setBackgroundColor(Color.rgb(246, 248, 252))
         }
 
-        status = TextView(this).apply {
-            textSize = 17f
-            setPadding(48, 12, 48, 24)
+        val brand = label("SAMSUNG SECURE", 12f, Color.rgb(37, 99, 235), true).apply {
+            letterSpacing = .12f
         }
+        val title = label("Phone connection", 30f, Color.rgb(15, 23, 42), true).apply {
+            setPadding(0, dp(8), 0, dp(4))
+        }
+        val description = label(
+            "Secure bridge between this phone and your PC. Normal control stays on the PC.",
+            15f, Color.rgb(71, 85, 105)
+        ).apply { setPadding(0, 0, 0, dp(22)) }
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(18), dp(20), dp(18))
+            background = rounded(Color.WHITE)
+            elevation = dp(2).toFloat()
+        }
+        val cardTitle = label("Connection health", 17f, Color.rgb(15, 23, 42), true)
+        status = label("", 14f, Color.rgb(51, 65, 85)).apply {
+            setPadding(0, dp(10), 0, 0)
+            setLineSpacing(0f, 1.15f)
+        }
+        card.addView(cardTitle)
+        card.addView(status)
 
         setupButton = Button(this).apply {
-            text = "Allow all once"
+            text = "Complete setup"
+            isAllCaps = false
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            background = rounded(Color.rgb(37, 99, 235), 14)
             setOnClickListener { beginSetup() }
         }
 
-        setContentView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 24, 32, 32)
-            addView(title)
-            addView(description)
-            addView(status)
-            addView(setupButton)
-        })
+        val screenHint = label(
+            "Remote screen\nWhen the PC requests Screen, Android may ask you to approve screen sharing. Approve it once for that live session; Samsung Secure then continues automatically.",
+            14f, Color.rgb(71, 85, 105)
+        ).apply {
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            background = rounded(Color.rgb(238, 242, 255), 16)
+        }
+
+        page.addView(brand)
+        page.addView(title)
+        page.addView(description)
+        page.addView(card, LinearLayout.LayoutParams(-1, -2))
+        page.addView(setupButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(16) })
+        page.addView(screenHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        setContentView(page)
 
         if (intent?.getBooleanExtra("request_screen_share", false) == true) {
             intent?.removeExtra("request_screen_share")
@@ -230,20 +272,19 @@ class MainActivity : Activity() {
         val background = CapabilityManager.backgroundAllowed(this)
         val complete = CapabilityManager.requiredApprovalsComplete(this)
 
-        setupButton.text = if (complete) "All one-time approvals complete" else "Allow all once"
-        setupButton.isEnabled = !complete
+        setupButton.text = if (complete) "Setup complete" else "Complete setup"
+        setupButton.visibility = if (complete) View.GONE else View.VISIBLE
 
         val lines = mutableListOf<String>()
-        lines.add(if (enabled) "Secure connection: ready" else "Secure connection: setup required")
-        lines.add("Policy bridge: ready")
-        lines.add(if (camera) "Remote camera: ready" else "Remote camera: one-time approval required")
-        lines.add(if (notifications) "Notifications permission: allowed" else "Notifications permission: approval required")
-        lines.add(if (notificationAccess) "Notification access: allowed" else "Notification access: approval required")
-        lines.add(if (background) "Background reconnect: enabled" else "Background reconnect: approval required")
+        lines.add(if (enabled) "● Secure connection ready" else "○ Secure connection setup required")
+        lines.add("● Policy bridge ready")
+        lines.add(if (camera) "● Remote camera ready" else "○ Remote camera approval required")
+        lines.add(if (notifications) "● Notifications allowed" else "○ Notifications approval required")
+        lines.add(if (notificationAccess) "● Notification access allowed" else "○ Notification access required")
+        lines.add(if (background) "● Background reconnect enabled" else "○ Background reconnect approval required")
         if (complete) {
-            lines.add("USB: not required")
-            lines.add("Camera transport: encrypted Internet WebRTC; authorized local/USB ADB + scrcpy is an optional fast path.")
-            lines.add("Screen transport: encrypted Internet WebRTC; authorized local/USB ADB + scrcpy is an optional fast path.")
+            lines.add("")
+            lines.add("Internet relay ready • USB not required")
         }
         if (!extra.isNullOrBlank()) lines.add(extra)
         status.text = lines.joinToString("\n")
