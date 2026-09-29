@@ -50,7 +50,7 @@ class Window(QMainWindow):
         outer.addWidget(nav);outer.addWidget(self.stack,1)
         self.stack.addWidget(self.home());self.stack.addWidget(self.screen_page());self.stack.addWidget(self.apps_page());self.stack.addWidget(self.policy_page())
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
-        self.stack.addWidget(self.info_page("Notifications","PC notification center: filtering, forwarding rules, history and actions will be managed here. The phone remains a thin Android notification bridge."))
+        self.stack.addWidget(self.notifications_page())
         self.stack.addWidget(self.info_page("Files","PC file manager: browse permitted phone storage, transfer files, queues and history will be managed here."))
         self.stack.addWidget(self.camera_page())
         self.stack.addWidget(self.info_page("Automation","PC automation engine: device events, schedules, policy actions and workflows will be configured here."))
@@ -83,6 +83,8 @@ class Window(QMainWindow):
     def page_changed(self,index):
         if index==1:
             self.start_live_screen()
+        elif index==5:
+            self.load_notifications()
         elif self._screen_active:
             self.stop_live_screen()
         if index==7:
@@ -188,6 +190,21 @@ class Window(QMainWindow):
             self.screen_status.setText(f"Live frame display failed: {e}");self._screen_active=False
 
 
+
+    def notifications_page(self):
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
+        top=QHBoxLayout();h=QLabel("Notifications");h.setObjectName("heading");self.notifications_status=QLabel("Waiting for phone");self.notifications_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.notifications_status);l.addLayout(top)
+        help_text=QLabel("Notifications are viewed and managed on the PC. Android only supplies notifications after you explicitly enable PhoneHub notification access once.");help_text.setWordWrap(True);l.addWidget(help_text)
+        self.notifications_refresh=QPushButton("Refresh notifications");self.notifications_refresh.clicked.connect(self.load_notifications);l.addWidget(self.notifications_refresh)
+        self.notifications_table=QTableWidget(0,4);self.notifications_table.setHorizontalHeaderLabels(["App","Title","Notification","Time"]);self.notifications_table.verticalHeader().setVisible(False);self.notifications_table.setEditTriggers(QAbstractItemView.NoEditTriggers);self.notifications_table.setSelectionBehavior(QAbstractItemView.SelectRows);self.notifications_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeToContents);self.notifications_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeToContents);self.notifications_table.horizontalHeader().setSectionResizeMode(2,QHeaderView.Stretch);self.notifications_table.horizontalHeader().setSectionResizeMode(3,QHeaderView.ResizeToContents);l.addWidget(self.notifications_table,1)
+        return p
+
+    def load_notifications(self):
+        ds=self.server.devices()
+        if not ds:self.notifications_status.setText("Phone offline");return
+        self.notifications_status.setText("Loading...")
+        self.run_task("notifications",lambda:self.server.notifications(ds[0]))
+
     def camera_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Camera");h.setObjectName("heading");self.camera_status_label=QLabel("Camera idle");self.camera_status_label.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.camera_status_label);l.addLayout(top)
@@ -277,6 +294,17 @@ class Window(QMainWindow):
                 reason=result.get("reason","local scrcpy unavailable")
                 self.screen_status.setText(f"Local scrcpy unavailable | {reason} | trying WebRTC")
                 if d is not None:self._start_webrtc(d)
+        elif tag=="notifications":
+            if isinstance(result,Exception):self.notifications_status.setText(f"Unavailable: {result}");return
+            if not result.get("access"):
+                self.notifications_status.setText("Notification access not enabled on phone");self.notifications_table.setRowCount(0);return
+            items=result.get("items",[]);self.notifications_table.setRowCount(len(items))
+            for row,item in enumerate(items):
+                posted=int(item.get("posted_at",0) or 0)
+                when=QDateTime.fromMSecsSinceEpoch(posted).toString("yyyy-MM-dd h:mm AP") if posted else ""
+                vals=[item.get("package",""),item.get("title",""),item.get("text",""),when]
+                for col,val in enumerate(vals):self.notifications_table.setItem(row,col,QTableWidgetItem(str(val)))
+            self.notifications_status.setText(f"{len(items)} recent")
         elif tag=="camera_status":
             if isinstance(result,Exception):self.camera_status_label.setText(f"Camera unavailable: {result}");return
             active=bool(result.get("active"));self._camera_active=active
