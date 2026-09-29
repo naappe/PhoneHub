@@ -109,15 +109,21 @@ function GetPhoneTailscaleIp([string]$DeviceSerial) {
     return ""
 }
 
-function SaveWirelessAdbTarget([string]$Target) {
-    if(-not $Target) { return }
+function SaveTailscaleDevice([string]$Ip) {
+    if(-not $Ip) { throw "Tailscale IP is required." }
     $dir = Join-Path $HOME ".phonehub"
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    Set-Content -Path (Join-Path $dir "wireless_adb_target.txt") -Value $Target -Encoding UTF8
+    $device = @{
+        device_id = "pending"
+        device_name = "Android"
+        tailscale_ip = $Ip
+        command_port = 47322
+    }
+    $device | ConvertTo-Json | Set-Content -Path (Join-Path $dir "tailscale_device.json") -Encoding UTF8
 }
 
 function ConfigurePhoneHubTransport {
-    Title "One-Time Phone Enrollment"
+    Title "One-Time Tailscale Enrollment"
     $s = AdbSerial $Serial
 
     Write-Host "Granting Samsung Secure permissions..."
@@ -130,51 +136,36 @@ function ConfigurePhoneHubTransport {
     Write-Host "Allowing Samsung Secure background reconnect..."
     & adb -s $s shell dumpsys deviceidle whitelist "+$Pkg" 2>$null
 
-    Write-Host "Preparing persistent ADB transport..."
     $tsIp = GetPhoneTailscaleIp $s
+    if(-not $tsIp) {
+        throw "No Tailscale IPv4 address found on the phone. Join the phone to your tailnet once, then run setup again."
+    }
 
+    SaveTailscaleDevice $tsIp
+    Write-Host "PhoneHub network fabric: Tailscale $tsIp"
+
+    Write-Host "Preparing unattended ADB/scrcpy path..."
     & adb -s $s tcpip 5555 | Out-Host
     Start-Sleep -Seconds 2
 
-    $target = ""
-    if($tsIp) {
-        $candidate = "$($tsIp):5555"
-        Write-Host "Testing Tailscale ADB: $candidate"
-        & adb connect $candidate | Out-Host
-        if((& adb devices) -match [regex]::Escape($candidate)) {
-            $target = $candidate
-        }
-    }
-
-    if(-not $target) {
-        $wifiIp = ""
-        try {
-            $route = (& adb -s $s shell ip route 2>$null | Select-String -Pattern 'src\s+(\d+\.\d+\.\d+\.\d+)' | Select-Object -First 1)
-            if($route -and $route.Matches.Count -gt 0) { $wifiIp = $route.Matches[0].Groups[1].Value }
-        } catch {}
-        if($wifiIp) {
-            $candidate = "$($wifiIp):5555"
-            & adb connect $candidate | Out-Host
-            if((& adb devices) -match [regex]::Escape($candidate)) { $target = $candidate }
-        }
-    }
-
-    if($target) {
-        SaveWirelessAdbTarget $target
-        Write-Host "Persistent ADB target saved: $target"
+    $target = "$($tsIp):5555"
+    & adb connect $target | Out-Host
+    $adbReady = ((& adb devices) -match [regex]::Escape($target))
+    if($adbReady) {
+        Write-Host "ADB over Tailscale ready: $target"
     } else {
-        Write-Host "ADB TCP is enabled on port 5555. PhoneHub will discover the Tailscale target automatically when available."
+        Write-Host "ADB :5555 is not reachable yet. Samsung Secure command/WebRTC path remains available on Tailscale."
     }
 
-    Write-Host "Starting Samsung Secure one-time enrollment..."
+    Write-Host "Starting Samsung Secure enrollment..."
     & adb -s $s shell am start -n "$Pkg/.MainActivity" --ez pc_enroll true | Out-Host
     Start-Sleep -Seconds 2
 
     Write-Host ""
-    Write-Host "PhoneHub transport setup complete."
-    Write-Host "Screen: scrcpy over authorized ADB/Tailscale."
-    Write-Host "Camera: scrcpy camera over authorized ADB/Tailscale."
-    Write-Host "Samsung Secure: policy, status, notifications, reconnect and remote fallback."
+    Write-Host "PhoneHub Tailscale setup complete."
+    Write-Host "Control: encrypted TCP over $($tsIp):47322"
+    Write-Host "Screen/Camera preferred path: scrcpy over $target"
+    Write-Host "Fallback media path: Samsung Secure WebRTC over the same tailnet."
 }
 
 function DoStart {
