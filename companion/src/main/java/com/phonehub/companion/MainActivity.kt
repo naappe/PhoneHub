@@ -16,7 +16,10 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : Activity() {
     private lateinit var status: TextView
+    private lateinit var setupButton: Button
+    private val setupPermissionsRequest = 7
     private val screenRequest = 8
+    private var waitingForNotificationAccess = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,41 +31,23 @@ class MainActivity : Activity() {
         }
 
         val description = TextView(this).apply {
-            text = "This phone is the secure Android bridge.\nAfter one-time setup, USB is not required. PhoneHub reconnects over Wi-Fi or mobile data and all management lives on your PC."
+            text = "One-time Android setup only. After setup, USB is not required. PhoneHub reconnects over Wi-Fi or mobile data and management stays on your PC."
             textSize = 16f
             setPadding(48, 0, 48, 28)
         }
 
         status = TextView(this).apply {
-            textSize = 18f
+            textSize = 17f
             setPadding(48, 12, 48, 24)
         }
 
-        val enable = Button(this).apply {
-            text = "Enable PhoneHub bridge"
-            setOnClickListener { enableCompanion() }
-        }
-
-        val camera = Button(this).apply {
-            text = "Allow camera permission"
-            setOnClickListener {
-                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                    ActivityCompat.requestPermissions(this@MainActivity, arrayOf(Manifest.permission.CAMERA), 9)
-                } else {
-                    updateStatus("Bridge enabled\nCamera permission already granted")
-                }
-            }
-        }
-
-        val notifications = Button(this).apply {
-            text = "Open notification access"
-            setOnClickListener {
-                startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
-            }
+        setupButton = Button(this).apply {
+            text = "Complete one-time setup"
+            setOnClickListener { beginSetup() }
         }
 
         val screen = Button(this).apply {
-            text = "Allow screen sharing"
+            text = "Start screen sharing when needed"
             setOnClickListener {
                 val manager = getSystemService(MediaProjectionManager::class.java)
                 startActivityForResult(manager.createScreenCaptureIntent(), screenRequest)
@@ -73,12 +58,12 @@ class MainActivity : Activity() {
             text = "Stop screen sharing"
             setOnClickListener {
                 ScreenCaptureService.stop(this@MainActivity)
-                updateStatus("Connected bridge enabled\nScreen sharing stopped")
+                refreshSetupStatus("Screen sharing stopped")
             }
         }
 
         val background = Button(this).apply {
-            text = "Android background settings"
+            text = "Optional: background / battery settings"
             setOnClickListener {
                 startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
             }
@@ -90,20 +75,68 @@ class MainActivity : Activity() {
             addView(title)
             addView(description)
             addView(status)
-            addView(enable)
-            addView(camera)
-            addView(notifications)
+            addView(setupButton)
             addView(screen)
             addView(stopScreen)
             addView(background)
         })
 
-        if (CompanionService.isEnabled(this)) {
-            CompanionService.start(this)
-            updateStatus("Bridge enabled\nUSB not required - open PhoneHub on your PC")
+        if (CompanionService.isEnabled(this)) CompanionService.start(this)
+        refreshSetupStatus()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (waitingForNotificationAccess && notificationAccessGranted()) {
+            waitingForNotificationAccess = false
+            refreshSetupStatus("Notification access enabled")
         } else {
-            updateStatus("One-time setup required\nTap Enable PhoneHub bridge")
+            refreshSetupStatus()
         }
+    }
+
+    private fun beginSetup() {
+        CompanionService.enable(this)
+
+        val needed = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.CAMERA)
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        if (needed.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, needed.toTypedArray(), setupPermissionsRequest)
+        } else {
+            continueSetup()
+        }
+    }
+
+    private fun continueSetup() {
+        CompanionService.enable(this)
+        if (!notificationAccessGranted()) {
+            waitingForNotificationAccess = true
+            refreshSetupStatus("One remaining Android approval: enable PhoneHub notification access, then return here")
+            startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
+            return
+        }
+        refreshSetupStatus("Setup complete - USB can be removed")
+    }
+
+    private fun notificationAccessGranted(): Boolean {
+        return try {
+            val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: ""
+            enabled.contains(packageName, ignoreCase = true)
+        } catch (_: Exception) {
+            PhoneHubNotificationListener.isRunning()
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == setupPermissionsRequest) continueSetup()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -112,27 +145,30 @@ class MainActivity : Activity() {
 
         if (resultCode == RESULT_OK && data != null) {
             ScreenCaptureService.start(this, resultCode, data)
-            updateStatus("Bridge enabled\nScreen sharing active - return to your PC")
+            refreshSetupStatus("Screen sharing active - return to your PC")
         } else {
-            updateStatus("Bridge enabled\nScreen sharing permission was not granted")
+            refreshSetupStatus("Screen sharing was not started")
         }
     }
 
-    private fun enableCompanion() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                7
-            )
-        }
+    private fun refreshSetupStatus(extra: String? = null) {
+        val bridge = CompanionService.isEnabled(this)
+        val camera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val notifications = notificationAccessGranted()
+        val postNotifications = Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-        CompanionService.enable(this)
-        updateStatus("Bridge enabled\nUSB can be removed - PhoneHub will reconnect over the network")
-    }
+        val complete = bridge && camera && notifications
+        setupButton.text = if (complete) "Setup complete" else "Complete one-time setup"
+        setupButton.isEnabled = !complete
 
-    private fun updateStatus(message: String) {
-        status.text = message
+        val lines = mutableListOf<String>()
+        lines.add(if (bridge) "Bridge: ready" else "Bridge: setup required")
+        lines.add(if (camera) "Camera: allowed" else "Camera: permission required")
+        lines.add(if (notifications) "Notification access: allowed" else "Notification access: required")
+        if (!postNotifications) lines.add("PhoneHub alerts: permission not granted")
+        if (complete) lines.add("USB: not required after setup")
+        if (!extra.isNullOrBlank()) lines.add(extra)
+        status.text = lines.joinToString("\n")
     }
 }
