@@ -1,19 +1,24 @@
 package com.phonehub.companion
 
+import android.Manifest
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 
 object CapabilityManager {
-
     fun notificationsRuntimeAllowed(context: Context): Boolean =
         Build.VERSION.SDK_INT < 33 ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
 
     fun notificationAccessAllowed(context: Context): Boolean {
         return try {
@@ -55,7 +60,8 @@ object CapabilityManager {
     }
 
     fun requiredApprovalsComplete(context: Context): Boolean =
-        CompanionService.isEnabled(context) &&            notificationsRuntimeAllowed(context) &&
+        CompanionService.isEnabled(context) &&
+            notificationsRuntimeAllowed(context) &&
             notificationAccessAllowed(context) &&
             backgroundAllowed(context)
 
@@ -74,7 +80,7 @@ object CapabilityManager {
             .put("enrollment_complete", missing.isEmpty())
             .put("missing_required", JSONArray(missing))
             .put("secure_connection", CompanionService.isEnabled(context))
-                        .put("notifications_permission", notificationsRuntimeAllowed(context))
+            .put("notifications_permission", notificationsRuntimeAllowed(context))
             .put("notification_access", notificationAccessAllowed(context))
             .put("background_reconnect", backgroundAllowed(context))
             .put("boot_reconnect", true)
