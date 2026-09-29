@@ -92,11 +92,10 @@ class MainActivity : Activity() {
         CompanionService.enable(this)
 
         val missing = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+        if (!CapabilityManager.cameraAllowed(this)) {
             missing.add(Manifest.permission.CAMERA)
         }
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        if (!CapabilityManager.notificationsRuntimeAllowed(this)) {
             missing.add(Manifest.permission.POST_NOTIFICATIONS)
         }
 
@@ -152,30 +151,14 @@ class MainActivity : Activity() {
         refreshStatus("Setup complete. You can close this app and use Samsung Secure on the PC.")
     }
 
-    private fun runtimePermissionsAllowed(): Boolean {
-        val camera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        val notifications = Build.VERSION.SDK_INT < 33 ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-        return camera && notifications
-    }
+    private fun runtimePermissionsAllowed(): Boolean =
+        CapabilityManager.cameraAllowed(this) && CapabilityManager.notificationsRuntimeAllowed(this)
 
-    private fun notificationAccessAllowed(): Boolean {
-        return try {
-            val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: ""
-            enabled.contains(packageName, ignoreCase = true)
-        } catch (_: Exception) {
-            false
-        }
-    }
+    private fun notificationAccessAllowed(): Boolean =
+        CapabilityManager.notificationAccessAllowed(this)
 
-    private fun backgroundAllowed(): Boolean {
-        return try {
-            val pm = getSystemService(PowerManager::class.java)
-            pm.isIgnoringBatteryOptimizations(packageName)
-        } catch (_: Exception) {
-            false
-        }
-    }
+    private fun backgroundAllowed(): Boolean =
+        CapabilityManager.backgroundAllowed(this)
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -194,12 +177,11 @@ class MainActivity : Activity() {
 
     private fun refreshStatus(extra: String? = null) {
         val enabled = CompanionService.isEnabled(this)
-        val camera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        val notifications = Build.VERSION.SDK_INT < 33 ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-        val notificationAccess = notificationAccessAllowed()
-        val background = backgroundAllowed()
-        val complete = enabled && camera && notifications && notificationAccess && background
+        val camera = CapabilityManager.cameraAllowed(this)
+        val notifications = CapabilityManager.notificationsRuntimeAllowed(this)
+        val notificationAccess = CapabilityManager.notificationAccessAllowed(this)
+        val background = CapabilityManager.backgroundAllowed(this)
+        val complete = CapabilityManager.requiredApprovalsComplete(this)
 
         setupButton.text = if (complete) "All one-time approvals complete" else "Allow all once"
         setupButton.isEnabled = !complete
