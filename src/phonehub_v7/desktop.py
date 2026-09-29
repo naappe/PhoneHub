@@ -42,7 +42,7 @@ class Window(QMainWindow):
         self.stack=QStackedWidget()
         self.screen_signals=ScreenSignals();self.screen_signals.frame.connect(self.show_screen_frame);self.screen_signals.state.connect(self.show_screen_state)
         self.screen_client=WebRtcScreenClient(self.server,self.screen_signals.frame.emit,self.screen_signals.state.emit)
-        names=["Home","Screen","Apps","App Policy","Policies","Notifications","Settings"]
+        names=["Home","Screen","Apps","App Policy","Policies","Notifications","Files","Automation","Logs","Settings"]
         for i,name in enumerate(names):
             b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));nl.addWidget(b)
             if i==0:b.setChecked(True)
@@ -50,8 +50,11 @@ class Window(QMainWindow):
         outer.addWidget(nav);outer.addWidget(self.stack,1)
         self.stack.addWidget(self.home());self.stack.addWidget(self.screen_page());self.stack.addWidget(self.apps_page());self.stack.addWidget(self.policy_page())
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
-        self.stack.addWidget(self.info_page("Notifications","Notification forwarding will appear here after Android notification access is enabled."))
-        self.stack.addWidget(self.info_page("Settings","Connection, protection, backup, logs and new-phone setup will live here."))
+        self.stack.addWidget(self.info_page("Notifications","PC notification center: filtering, forwarding rules, history and actions will be managed here. The phone remains a thin Android notification bridge."))
+        self.stack.addWidget(self.info_page("Files","PC file manager: browse permitted phone storage, transfer files, queues and history will be managed here."))
+        self.stack.addWidget(self.info_page("Automation","PC automation engine: device events, schedules, policy actions and workflows will be configured here."))
+        self.stack.addWidget(self.info_page("Logs","PC audit log: secure connections, commands, policy changes, transfers and errors will appear here."))
+        self.stack.addWidget(self.info_page("Settings","PC-side connection, pairing, protection, backup, updates and new-phone setup will live here."))
         self.stack.currentChanged.connect(self.page_changed);self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000);QTimer.singleShot(400,self.refresh)
 
     def home(self):
