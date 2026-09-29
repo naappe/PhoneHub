@@ -67,6 +67,16 @@ class CompanionServer:
             offset=int(page.get("next_offset",offset+50))
     def capabilities(self,d):return self.command(d,"capabilities")
     def notifications(self,d):return self.command(d,"notifications")
+    def files_list(self,d):return self.command(d,"files_list")
+    def file_get(self,d,name):
+        r=self.command(d,"file_get",{"name":name})
+        if r.get("type")=="file_data" and r.get("data"):
+            r["bytes"]=base64.b64decode(r["data"])
+        return r
+    def file_put(self,d,name,data):
+        if len(data)>1048576:raise ValueError("PhoneHub encrypted transfer limit is 1 MB per file")
+        return self.command(d,"file_put",{"name":name,"data":base64.b64encode(data).decode()})
+    def file_delete(self,d,name):return self.command(d,"file_delete",{"name":name})
     def screen_status(self,d):return self.command(d,"screen_status")
     def camera_status(self,d):return self.command(d,"camera_status")
     def camera_start(self,d,lens="back"):return self.command(d,"camera_start",{"lens":lens})
