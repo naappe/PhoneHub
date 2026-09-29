@@ -66,7 +66,7 @@ class Window(QMainWindow):
         top=QHBoxLayout();h=QLabel("Home");h.setObjectName("heading");self.updated=QLabel("Waiting for device");self.updated.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.updated)
         self.connection=QLabel("Looking for your phone...");self.connection.setObjectName("status")
         self.setup_hint=QLabel("Samsung Secure will check whether the phone is installed and configured.");self.setup_hint.setWordWrap(True);self.setup_hint.setObjectName("setupHint")
-        setup_actions=QHBoxLayout();self.setup_button=QPushButton("Set up connected phone");self.open_companion_button=QPushButton("Open Samsung Secure on phone");self.setup_button.clicked.connect(self.launch_phone_setup);self.open_companion_button.clicked.connect(self.open_companion_on_phone);self.open_companion_button.setEnabled(False);setup_actions.addWidget(self.setup_button);setup_actions.addWidget(self.open_companion_button);setup_actions.addStretch()
+        setup_actions=QHBoxLayout();self.setup_button=QPushButton("Set up connected phone");self.open_companion_button=QPushButton("Open Samsung Secure on phone");self.setup_button.clicked.connect(self.launch_phone_setup);self.open_companion_button.clicked.connect(self.open_companion_on_phone);self.setup_button.setVisible(False);self.open_companion_button.setVisible(False);setup_actions.addWidget(self.setup_button);setup_actions.addWidget(self.open_companion_button);setup_actions.addStretch()
         l.addLayout(top);l.addWidget(self.connection);l.addWidget(self.setup_hint);l.addLayout(setup_actions)
         row1=QHBoxLayout();self.device=Card("DEVICE");self.battery=Card("BATTERY",progress=True);self.network=Card("NETWORK")
         for x in [self.device,self.battery,self.network]:row1.addWidget(x)
@@ -124,7 +124,7 @@ class Window(QMainWindow):
     def screen_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Ready for live screen");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
-        self.screen_help=QLabel("After one-time enrollment, USB is not required. PhoneHub uses the local network when available and the encrypted internet relay when the phone is elsewhere. Screen control uses local scrcpy when authorized, otherwise encrypted WebRTC.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
+        self.screen_help=QLabel("After one-time enrollment, USB is not required. PhoneHub uses the phone's private Tailscale address on any network. Screen control uses scrcpy over authorized ADB when reachable, otherwise WebRTC fallback.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
         self.screen_view=QLabel("Open this page to connect the live screen");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
         self.screen_button=QPushButton("Reconnect live screen");self.screen_button.clicked.connect(self.reconnect_live_screen);l.addWidget(self.screen_button)
         return p
@@ -407,27 +407,27 @@ class Window(QMainWindow):
                 self.setup_hint.setText(f"Could not check phone setup: {result}");return
             state=result.get("state");self._setup_serial=result.get("serial")
             if state=="missing":
-                self.setup_hint.setText(f"{result.get('model','Android phone')} is connected, but PhoneHub Companion is not installed. Click Set up connected phone.")
-                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(False)
+                self.setup_hint.setText(f"{result.get('model','Android phone')} is connected, but Samsung Secure is not installed.")
+                self.setup_button.setVisible(True);self.setup_button.setEnabled(True);self.open_companion_button.setVisible(False)
             elif state=="installed_not_connected":
-                self.setup_hint.setText(f"Samsung Secure is installed on {result.get('model','the phone')}, but the secure bridge is not connected. Click Open Samsung Secure and complete the one-time connection setup.")
-                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(True)
+                self.setup_hint.setText(f"Samsung Secure is installed on {result.get('model','the phone')}. Waiting for the secure Tailscale bridge.")
+                self.setup_button.setVisible(False);self.open_companion_button.setVisible(False)
             elif state=="no_phone":
-                self.setup_hint.setText("No PhoneHub connection. For first setup or repair, connect the phone by USB, unlock it and allow USB debugging.")
-                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(False)
+                self.setup_hint.setText("PhoneHub is waiting for the enrolled phone. Connect USB only if setup or repair is required.")
+                self.setup_button.setVisible(True);self.setup_button.setEnabled(True);self.open_companion_button.setVisible(False)
             elif state=="no_adb":
-                self.setup_hint.setText("PhoneHub Companion is offline. ADB is not available for local diagnosis; use PhoneHub Setup for first installation.")
-                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(False)
+                self.setup_hint.setText("Samsung Secure is offline. Setup controls are available only when repair is required.")
+                self.setup_button.setVisible(True);self.setup_button.setEnabled(True);self.open_companion_button.setVisible(False)
             else:
-                self.setup_hint.setText("PhoneHub is offline. Check the phone internet connection or open the Companion to complete setup.")
-                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(bool(self._setup_serial))
+                self.setup_hint.setText("PhoneHub is offline. Check the phone and Tailscale connection.")
+                self.setup_button.setVisible(False);self.open_companion_button.setVisible(False)
             return
         if tag=="status":
             self._busy=False
             if isinstance(result,Exception):self.connection.setText(f"Status refresh delayed - {result}");self.connection.setStyleSheet("color:#b45309;font-weight:600");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));caps=s.get("capabilities",{}) or {};missing=list(caps.get("missing_required",[]) or []);complete=bool(caps.get("enrollment_complete",not missing));friendly={"secure_connection":"secure connection","remote_camera":"remote camera","camera":"camera","notifications_permission":"notifications permission","notification_access":"notification access","background_reconnect":"background reconnect"};self.setup_hint.setText("Phone enrollment complete. Samsung Secure will reconnect automatically; normal control stays on this PC." if complete else "Phone setup needs attention: "+", ".join(friendly.get(x,x.replace("_"," ")) for x in missing)+". Open Samsung Secure on the phone once to repair these approvals.");self.setup_button.setEnabled(not complete);self.open_companion_button.setEnabled(False)
+            self.connection.setStyleSheet("");transport="TAILSCALE";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));caps=s.get("capabilities",{}) or {};missing=list(caps.get("missing_required",[]) or []);complete=bool(caps.get("enrollment_complete",not missing));friendly={"secure_connection":"secure connection","remote_camera":"remote camera","camera":"camera","notifications_permission":"notifications permission","notification_access":"notification access","background_reconnect":"background reconnect"};self.setup_hint.setText("Phone enrollment complete. Samsung Secure will reconnect automatically; normal control stays on this PC." if complete else "Phone setup needs attention: "+", ".join(friendly.get(x,x.replace("_"," ")) for x in missing)+".");self.setup_button.setVisible(not complete);self.setup_button.setEnabled(not complete);self.open_companion_button.setVisible(False);self.open_companion_button.setEnabled(False)
             self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Samsung Secure | auto reconnect")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
             self.network.value.setText(s.get("network","N/A"));self.network.detail.setText("Active connection")
