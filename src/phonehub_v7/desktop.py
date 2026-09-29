@@ -179,9 +179,11 @@ class Window(QMainWindow):
         ds=self.server.devices()
         if not ds:self.screen_status.setText("Phone offline");return
         d=ds[0];self._screen_device=d;self._screen_active=True;self.screen_view.setPixmap(QPixmap())
-        self.screen_status.setText("Checking high-performance wireless screen...")
-        self.screen_view.setText("Looking for authorized wireless ADB / scrcpy...")
-        self.run_task("screen_local",lambda:self._start_scrcpy_local(d))
+        # Internet/WebRTC is the primary screen path. Local USB ADB/scrcpy is
+        # intentionally not auto-selected because it can hide remote-screen bugs.
+        self.screen_status.setText("Starting encrypted Internet screen...")
+        self.screen_view.setText("Connecting remote live screen...")
+        self._start_webrtc(d)
 
     def _start_webrtc(self,d):
         self.screen_status.setText("Starting remote WebRTC screen...");self.screen_view.setText("Connecting remote live screen...")
