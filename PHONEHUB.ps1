@@ -332,3 +332,4 @@ switch($Action){
         Title "Master Command"
         Write-Host ".\PHONEHUB.ps1 update|build|install|start|setup|backup|remove|clean|status|exe"
     }
+}
