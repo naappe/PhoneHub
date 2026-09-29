@@ -205,13 +205,13 @@ function ConfigurePhoneHubTransport {
 
     $tailscalePkg = GetPhoneTailscalePackage $s
     if(-not $tailscalePkg) {
-        throw "Tailscale Android app is not installed on this phone. Install Tailscale on Android, sign in to your tailnet once, then run .\PHONEHUB.ps1 setup again."
+        throw "Tailscale Android app is not installed on this phone. Install Tailscale, sign in to your tailnet once, then run .\PHONEHUB.ps1 setup again."
     }
 
     Write-Host "Tailscale package detected: $tailscalePkg"
     $tsIp = WaitForPhoneTailscaleIp $s 90
     if(-not $tsIp) {
-        throw "Tailscale is installed but not connected. Open Tailscale on Android, sign in/enable the tailnet connection, then run .\PHONEHUB.ps1 setup again."
+        throw "Tailscale is installed but not connected. Open Tailscale on Android, connect it to your tailnet, then run .\PHONEHUB.ps1 setup again."
     }
 
     SaveTailscaleDevice $tsIp
