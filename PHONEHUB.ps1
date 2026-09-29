@@ -103,8 +103,19 @@ function DoStart {
     if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "Python 3 is required." }
     $env:PYTHONPATH = Join-Path $Root "src"
     $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
-    python -c "import PySide6, aiortc, numpy" *> $null
-    if ($LASTEXITCODE -ne 0) { python -m pip install --disable-pip-version-check "PySide6>=6.8,<7" "aiortc==1.15.0" "numpy>=2,<3" }
+    python -c "import PySide6,sys; v=tuple(map(int,PySide6.__version__.split('.')[:3])); sys.exit(0 if v >= (6,11,2) else 1)" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Updating Qt/PySide6 for this Python version..."
+        python -m pip install --disable-pip-version-check --upgrade "PySide6>=6.11.2,<7"
+        if ($LASTEXITCODE -ne 0) { throw "Could not update PySide6." }
+    }
+    python -c "import aiortc, numpy" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        python -m pip install --disable-pip-version-check "aiortc==1.15.0" "numpy>=2,<3"
+        if ($LASTEXITCODE -ne 0) { throw "Could not install PhoneHub runtime dependencies." }
+    }
+    Write-Host "Python: $(python --version 2>&1)"
+    Write-Host "PySide6: $(& python -c 'import PySide6; print(PySide6.__version__)')"
     python -m phonehub_v7.desktop
 }
 
