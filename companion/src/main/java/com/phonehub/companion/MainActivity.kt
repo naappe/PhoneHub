@@ -1,10 +1,10 @@
-﻿package com.phonehub.companion
+package com.phonehub.companion
 
 import android.Manifest
 import android.app.Activity
-import android.media.projection.MediaProjectionManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -20,72 +20,99 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        status = TextView(this).apply {
-            textSize = 20f
-            setPadding(48, 64, 48, 32)
+
+        val title = TextView(this).apply {
+            text = "PhoneHub Companion"
+            textSize = 26f
+            setPadding(48, 56, 48, 12)
         }
-        val start = Button(this).apply {
-            text = "Enable automatic service"
+
+        val description = TextView(this).apply {
+            text = "This phone is the secure Android bridge.\nAll management and controls live on your PC."
+            textSize = 16f
+            setPadding(48, 0, 48, 28)
+        }
+
+        status = TextView(this).apply {
+            textSize = 18f
+            setPadding(48, 12, 48, 24)
+        }
+
+        val enable = Button(this).apply {
+            text = "Enable PhoneHub bridge"
             setOnClickListener { enableCompanion() }
         }
+
         val screen = Button(this).apply {
-            text = "Start screen sharing"
+            text = "Allow screen sharing"
             setOnClickListener {
-                val m = getSystemService(MediaProjectionManager::class.java)
-                startActivityForResult(m.createScreenCaptureIntent(), screenRequest)
+                val manager = getSystemService(MediaProjectionManager::class.java)
+                startActivityForResult(manager.createScreenCaptureIntent(), screenRequest)
             }
         }
+
         val stopScreen = Button(this).apply {
             text = "Stop screen sharing"
             setOnClickListener {
                 ScreenCaptureService.stop(this@MainActivity)
-                status.text = "PhoneHub Companion\n\nScreen sharing stopped."
+                updateStatus("Connected bridge enabled\nScreen sharing stopped")
             }
         }
-        val battery = Button(this).apply {
-            text = "Background settings"
-            setOnClickListener { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+
+        val background = Button(this).apply {
+            text = "Android background settings"
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
         }
+
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 32, 32, 32)
+            setPadding(32, 24, 32, 32)
+            addView(title)
+            addView(description)
             addView(status)
-            addView(start)
+            addView(enable)
             addView(screen)
             addView(stopScreen)
-            addView(battery)
+            addView(background)
         })
+
         if (CompanionService.isEnabled(this)) {
             CompanionService.start(this)
-            status.text = "PhoneHub Companion\n\nAutomatic service is enabled."
+            updateStatus("Bridge enabled\nOpen PhoneHub on your PC")
         } else {
-            status.text = "PhoneHub Companion\n\nReady for one-time enrollment."
+            updateStatus("One-time setup required\nTap Enable PhoneHub bridge")
         }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == screenRequest) {
-            if (resultCode == RESULT_OK && data != null) {
-                ScreenCaptureService.start(this, resultCode, data)
-                status.text = "PhoneHub Companion\n\nScreen sharing active. You can return to the PC."
-            } else {
-                status.text = "PhoneHub Companion\n\nScreen sharing permission was not granted."
-            }
+        if (requestCode != screenRequest) return
+
+        if (resultCode == RESULT_OK && data != null) {
+            ScreenCaptureService.start(this, resultCode, data)
+            updateStatus("Bridge enabled\nScreen sharing active - return to your PC")
+        } else {
+            updateStatus("Bridge enabled\nScreen sharing permission was not granted")
         }
     }
 
     private fun enableCompanion() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 9)
-        }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7)
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                7
+            )
         }
+
         CompanionService.enable(this)
-        status.text = "PhoneHub Companion\n\nAutomatic service is enabled."
+        updateStatus("Bridge enabled\nPhoneHub is controlled from your PC")
+    }
+
+    private fun updateStatus(message: String) {
+        status.text = message
     }
 }
-
-
