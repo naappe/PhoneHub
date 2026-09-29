@@ -34,7 +34,7 @@ class Task(QRunnable):
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False;self._scrcpy_process=None;self._screen_device=None;self._camera_active=False;self._camera_busy=False;self._setup_probe_busy=False;self._setup_serial=None
+        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False;self._scrcpy_process=None;self._screen_device=None;self._camera_active=False;self._camera_process=None;self._setup_probe_busy=False;self._setup_serial=None
         self.setWindowTitle("Samsung Secure");self.resize(1100,700);self.setMinimumSize(820,560)
         root=QWidget();self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         nav=QFrame();nav.setObjectName("nav");nav.setFixedWidth(220);nl=QVBoxLayout(nav);nl.setContentsMargins(18,24,18,24)
@@ -309,34 +309,53 @@ class Window(QMainWindow):
     def camera_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Camera");h.setObjectName("heading");self.camera_status_label=QLabel("Camera idle");self.camera_status_label.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.camera_status_label);l.addLayout(top)
-        help_text=QLabel("Camera is controlled here on the PC. Camera permission is included in the Companion one-time setup. If the phone is offline or setup is incomplete, finish Home > Set up connected phone first.");help_text.setWordWrap(True);l.addWidget(help_text)
-        controls=QHBoxLayout();self.camera_lens=QComboBox();self.camera_lens.addItems(["Back camera","Front camera"]);self.camera_start_button=QPushButton("Start camera");self.camera_stop_button=QPushButton("Stop camera");self.camera_start_button.clicked.connect(self.start_camera);self.camera_stop_button.clicked.connect(self.stop_camera);controls.addWidget(self.camera_lens);controls.addWidget(self.camera_start_button);controls.addWidget(self.camera_stop_button);controls.addStretch();l.addLayout(controls)
-        self.camera_view=QLabel("Start the camera from the PC");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
+        help_text=QLabel("Camera runs directly from the PC through authorized scrcpy/ADB. The Samsung Secure Companion does not request Android camera permission.");help_text.setWordWrap(True);l.addWidget(help_text)
+        controls=QHBoxLayout();self.camera_lens=QComboBox();self.camera_lens.addItems(["Back camera","Front camera"]);self.camera_start_button=QPushButton("Open camera");self.camera_stop_button=QPushButton("Stop camera");self.camera_start_button.clicked.connect(self.start_camera);self.camera_stop_button.clicked.connect(self.stop_camera);controls.addWidget(self.camera_lens);controls.addWidget(self.camera_start_button);controls.addWidget(self.camera_stop_button);controls.addStretch();l.addLayout(controls)
+        self.camera_view=QLabel("Camera opens in a dedicated scrcpy window from this PC.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
         return p
 
     def refresh_camera_status(self):
-        ds=self.server.devices()
-        if not ds:self.camera_status_label.setText("Phone offline");return
-        self.run_task("camera_status",lambda:self.server.camera_status(ds[0]))
+        if self._camera_process is not None and self._camera_process.poll() is None:
+            self._camera_active=True;self.camera_status_label.setText("SCRCPY CAMERA ACTIVE")
+        else:
+            self._camera_active=False;self._camera_process=None;self.camera_status_label.setText("Ready | authorized ADB required")
 
     def start_camera(self):
-        ds=self.server.devices()
-        if not ds:self.camera_status_label.setText("Phone offline");return
+        if self._camera_process is not None and self._camera_process.poll() is None:
+            self.camera_status_label.setText("Camera already active");return
         lens="front" if self.camera_lens.currentIndex()==1 else "back"
-        self.camera_status_label.setText("Starting camera...")
-        self.run_task("camera_start",lambda:self.server.camera_start(ds[0],lens))
+        self.camera_status_label.setText("Starting scrcpy camera...")
+        self.run_task("camera_local",lambda:self._start_scrcpy_camera(lens))
 
     def stop_camera(self):
-        self.camera_timer.stop();self._camera_active=False
-        ds=self.server.devices()
-        if ds:self.run_task("camera_stop",lambda:self.server.camera_stop(ds[0]))
+        self._camera_active=False
+        if self._camera_process is not None:
+            try:
+                if self._camera_process.poll() is None:self._camera_process.terminate()
+            except Exception:pass
+            self._camera_process=None
+        self.camera_status_label.setText("Camera stopped")
         self.camera_view.setPixmap(QPixmap());self.camera_view.setText("Camera stopped")
 
-    def request_camera_frame(self):
-        if not self._camera_active or self._camera_busy:return
-        ds=self.server.devices()
-        if not ds:self.camera_status_label.setText("Phone offline");self.camera_timer.stop();self._camera_active=False;return
-        self._camera_busy=True;self.run_task("camera_frame",lambda:self.server.camera_frame(ds[0]))
+    def _start_scrcpy_camera(self,lens):
+        if not shutil.which("adb"):return {"ok":False,"reason":"ADB is not installed"}
+        if not shutil.which("scrcpy"):return {"ok":False,"reason":"scrcpy is not installed"}
+        flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+        devices=subprocess.run(["adb","devices"],capture_output=True,text=True,timeout=5,creationflags=flags)
+        connected=[]
+        for line in (devices.stdout or "").splitlines()[1:]:
+            parts=line.split()
+            if len(parts)>=2 and parts[1]=="device":connected.append(parts[0])
+        wireless=[x for x in connected if ":" in x]
+        targets=wireless+([connected[0]] if connected and not wireless else [])
+        if not targets:return {"ok":False,"reason":"no authorized ADB device"}
+        target=targets[0]
+        args=["scrcpy","-s",target,"--video-source=camera",f"--camera-facing={lens}","--no-audio",f"--window-title=PhoneHub Camera - {lens.title()}"]
+        try:
+            process=subprocess.Popen(args,creationflags=flags)
+            return {"ok":True,"process":process,"target":target,"lens":lens}
+        except Exception as e:
+            return {"ok":False,"reason":str(e)}
 
     def info_page(self,title,body):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,32,36,32);h=QLabel(title);h.setObjectName("heading");l.addWidget(h);d=QLabel(body);d.setWordWrap(True);l.addWidget(d);l.addStretch();return p
@@ -452,28 +471,15 @@ class Window(QMainWindow):
                 vals=[item.get("package",""),item.get("title",""),item.get("text",""),when]
                 for col,val in enumerate(vals):self.notifications_table.setItem(row,col,QTableWidgetItem(str(val)))
             self.notifications_status.setText(f"{len(items)} recent")
-        elif tag=="camera_status":
-            if isinstance(result,Exception):self.camera_status_label.setText(f"Camera unavailable: {result}");return
-            active=bool(result.get("active"));self._camera_active=active
-            if not result.get("permission",True):self.camera_status_label.setText("Setup incomplete | camera permission required");self.camera_view.setText("Open PhoneHub Companion and tap Complete one-time setup.");return
-            self.camera_status_label.setText(("Active" if active else "Idle")+" | "+str(result.get("lens","back"))+" camera")
-            if active and not self.camera_timer.isActive():self.camera_timer.start()
-        elif tag=="camera_start":
-            if isinstance(result,Exception):self.camera_status_label.setText(f"Start failed: {result}");return
-            if result.get("type")=="camera_error":
-                self.camera_status_label.setText(result.get("message","Camera permission required"));self.camera_view.setText("Open PhoneHub Companion and tap Complete one-time setup.");return
-            self._camera_active=True;self.camera_status_label.setText("Camera starting...");self.camera_timer.start()
-        elif tag=="camera_stop":
-            self._camera_active=False;self.camera_timer.stop();self.camera_status_label.setText("Camera stopped")
-        elif tag=="camera_frame":
-            self._camera_busy=False
-            if isinstance(result,Exception):self.camera_status_label.setText(f"Frame failed: {result}");return
-            if result.get("type")=="camera_frame":
-                image=QImage.fromData(result.get("jpeg_bytes",b""))
-                if not image.isNull():
-                    pix=QPixmap.fromImage(image);self.camera_view.setPixmap(pix.scaled(self.camera_view.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation));self.camera_status_label.setText("Live | "+str(result.get("lens","back"))+" camera")
-            elif result.get("type")=="camera_no_frame":
-                self.camera_status_label.setText("Waiting for camera frame...")
+        elif tag=="camera_local":
+            if isinstance(result,Exception):
+                self._camera_active=False;self.camera_status_label.setText(f"Camera failed: {result}");return
+            if result.get("ok"):
+                self._camera_process=result["process"];self._camera_active=True
+                self.camera_status_label.setText(f"SCRCPY CAMERA ACTIVE | {result.get('lens','back')}")
+                self.camera_view.setText("Phone camera is open in the dedicated scrcpy window.\nNo Companion camera permission is used.")
+            else:
+                self._camera_active=False;self.camera_status_label.setText("Camera unavailable | "+result.get("reason","ADB/scrcpy unavailable"))
         elif tag=="policy_get":
             if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
             p=result.get("policy",{});e=result.get("enforcement",{});mode=e.get("mode","standard")
