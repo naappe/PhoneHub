@@ -93,6 +93,7 @@ class CompanionServer:
     def file_delete(self,d,name):return self.command(d,"file_delete",{"name":name})
     def screen_status(self,d):return self.command(d,"screen_status")
     def screen_prepare(self,d):return self.command(d,"screen_prepare")
+    def screen_frame(self,d):return self.command(d,"screen_frame")
     def webrtc_offer(self,d,sdp):return self.command(d,"webrtc_offer",{"sdp":sdp})
     def webrtc_stop(self,d):return self.command(d,"webrtc_stop")
     def camera_webrtc_offer(self,d,sdp,lens="back"):
