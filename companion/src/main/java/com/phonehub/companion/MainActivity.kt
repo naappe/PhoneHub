@@ -43,6 +43,17 @@ class MainActivity : Activity() {
             setOnClickListener { enableCompanion() }
         }
 
+        val camera = Button(this).apply {
+            text = "Allow camera permission"
+            setOnClickListener {
+                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(this@MainActivity, arrayOf(Manifest.permission.CAMERA), 9)
+                } else {
+                    updateStatus("Bridge enabled\nCamera permission already granted")
+                }
+            }
+        }
+
         val screen = Button(this).apply {
             text = "Allow screen sharing"
             setOnClickListener {
@@ -73,6 +84,7 @@ class MainActivity : Activity() {
             addView(description)
             addView(status)
             addView(enable)
+            addView(camera)
             addView(screen)
             addView(stopScreen)
             addView(background)
