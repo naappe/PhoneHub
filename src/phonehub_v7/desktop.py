@@ -35,10 +35,10 @@ class Task(QRunnable):
 class Window(QMainWindow):
     def __init__(self):
         super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False;self._scrcpy_process=None;self._screen_device=None;self._camera_active=False;self._camera_busy=False;self._setup_probe_busy=False;self._setup_serial=None
-        self.setWindowTitle("PhoneHub 7");self.resize(1100,700);self.setMinimumSize(820,560)
+        self.setWindowTitle("Samsung Secure");self.resize(1100,700);self.setMinimumSize(820,560)
         root=QWidget();self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         nav=QFrame();nav.setObjectName("nav");nav.setFixedWidth(220);nl=QVBoxLayout(nav);nl.setContentsMargins(18,24,18,24)
-        brand=QLabel("PhoneHub 7");brand.setObjectName("brand");nl.addWidget(brand);nl.addSpacing(22)
+        brand=QLabel("Samsung Secure");brand.setObjectName("brand");nl.addWidget(brand);nl.addSpacing(22)
         self.stack=QStackedWidget()
         self.screen_signals=ScreenSignals();self.screen_signals.frame.connect(self.show_screen_frame);self.screen_signals.state.connect(self.show_screen_state)
         self.screen_client=WebRtcScreenClient(self.server,self.screen_signals.frame.emit,self.screen_signals.state.emit)
@@ -46,7 +46,7 @@ class Window(QMainWindow):
         for i,name in enumerate(names):
             b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));nl.addWidget(b)
             if i==0:b.setChecked(True)
-        nl.addStretch();nl.addWidget(QLabel("PC Control Center"))
+        nl.addStretch();nl.addWidget(QLabel("Secure PC Control"))
         outer.addWidget(nav);outer.addWidget(self.stack,1)
         self.stack.addWidget(self.home());self.stack.addWidget(self.screen_page());self.stack.addWidget(self.apps_page());self.stack.addWidget(self.policy_page())
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
@@ -64,8 +64,8 @@ class Window(QMainWindow):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
         top=QHBoxLayout();h=QLabel("Home");h.setObjectName("heading");self.updated=QLabel("Waiting for device");self.updated.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.updated)
         self.connection=QLabel("Looking for your phone...");self.connection.setObjectName("status")
-        self.setup_hint=QLabel("PhoneHub will check whether the Companion is installed and configured.");self.setup_hint.setWordWrap(True);self.setup_hint.setObjectName("setupHint")
-        setup_actions=QHBoxLayout();self.setup_button=QPushButton("Set up connected phone");self.open_companion_button=QPushButton("Open Companion on phone");self.setup_button.clicked.connect(self.launch_phone_setup);self.open_companion_button.clicked.connect(self.open_companion_on_phone);self.open_companion_button.setEnabled(False);setup_actions.addWidget(self.setup_button);setup_actions.addWidget(self.open_companion_button);setup_actions.addStretch()
+        self.setup_hint=QLabel("Samsung Secure will check whether the phone is installed and configured.");self.setup_hint.setWordWrap(True);self.setup_hint.setObjectName("setupHint")
+        setup_actions=QHBoxLayout();self.setup_button=QPushButton("Set up connected phone");self.open_companion_button=QPushButton("Open Samsung Secure on phone");self.setup_button.clicked.connect(self.launch_phone_setup);self.open_companion_button.clicked.connect(self.open_companion_on_phone);self.open_companion_button.setEnabled(False);setup_actions.addWidget(self.setup_button);setup_actions.addWidget(self.open_companion_button);setup_actions.addStretch()
         l.addLayout(top);l.addWidget(self.connection);l.addWidget(self.setup_hint);l.addLayout(setup_actions)
         row1=QHBoxLayout();self.device=Card("DEVICE");self.battery=Card("BATTERY",progress=True);self.network=Card("NETWORK")
         for x in [self.device,self.battery,self.network]:row1.addWidget(x)
@@ -96,7 +96,7 @@ class Window(QMainWindow):
         try:
             flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
             subprocess.run(["adb","-s",self._setup_serial,"shell","monkey","-p","com.phonehub.companion","-c","android.intent.category.LAUNCHER","1"],capture_output=True,text=True,timeout=8,creationflags=flags)
-            self.setup_hint.setText("PhoneHub Companion opened on the phone. Tap Enable PhoneHub bridge if setup is not complete.")
+            self.setup_hint.setText("Samsung Secure opened on the phone. Tap Complete one-time setup if setup is not complete.")
         except Exception as e:
             self.setup_hint.setText(f"Could not open Companion: {e}")
 
@@ -380,7 +380,7 @@ class Window(QMainWindow):
                 self.setup_hint.setText(f"{result.get('model','Android phone')} is connected, but PhoneHub Companion is not installed. Click Set up connected phone.")
                 self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(False)
             elif state=="installed_not_connected":
-                self.setup_hint.setText(f"PhoneHub Companion is installed on {result.get('model','the phone')}, but it is not connected. Click Open Companion, then tap Enable PhoneHub bridge and complete any Android permission prompts.")
+                self.setup_hint.setText(f"Samsung Secure is installed on {result.get('model','the phone')}, but it is not connected. Click Open Samsung Secure and complete the one-time setup.")
                 self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(True)
             elif state=="no_phone":
                 self.setup_hint.setText("No PhoneHub connection. For first setup or repair, connect the phone by USB, unlock it and allow USB debugging.")
@@ -397,8 +397,8 @@ class Window(QMainWindow):
             if isinstance(result,Exception):self.connection.setText(f"Status refresh delayed - {result}");self.connection.setStyleSheet("color:#b45309;font-weight:600");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));self.setup_hint.setText("PhoneHub Companion is installed, enrolled and connected correctly.");self.open_companion_button.setEnabled(False)
-            self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Encrypted Companion | auto reconnect")
+            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));self.setup_hint.setText("Samsung Secure is installed, enrolled and connected correctly.");self.open_companion_button.setEnabled(False)
+            self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Samsung Secure | auto reconnect")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
             self.network.value.setText(s.get("network","N/A"));self.network.detail.setText("Active connection")
             total=s.get("storage_total",0);free=s.get("storage_free",0);used=max(0,total-free);self.storage.value.setText(gb(free));self.storage.bar.setValue(int(used*100/total) if total else 0);self.storage.detail.setText(f"free of {gb(total)}")
@@ -534,7 +534,7 @@ class Window(QMainWindow):
     def refresh(self):
         ds=self.server.devices()
         if not ds:
-            self.connection.setStyleSheet("");self.connection.setText("Waiting for PhoneHub Companion");self.updated.setText("Offline")
+            self.connection.setStyleSheet("");self.connection.setText("Waiting for Samsung Secure");self.updated.setText("Offline")
             if not self._setup_probe_busy:
                 self._setup_probe_busy=True;self.run_task("setup_probe",self.probe_phone_setup)
             return
