@@ -2,7 +2,7 @@ from __future__ import annotations
 import sys, json, socket, subprocess, shutil
 from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, QDateTime, QObject, Signal, QRunnable, QThreadPool
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QPixmap, QFont
 from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QComboBox,QCheckBox,QAbstractItemView,QMenu,QFileDialog
 from .companion_server import CompanionServer
 from .webrtc_stream import WebRtcScreenClient
@@ -557,5 +557,7 @@ class Window(QMainWindow):
         """)
 
 def main():
-    app=QApplication(sys.argv);w=Window();w.show();sys.exit(app.exec())
+    app=QApplication(sys.argv)
+    app.setFont(QFont("Segoe UI",10))
+    w=Window();w.show();sys.exit(app.exec())
 if __name__=="__main__":main()
