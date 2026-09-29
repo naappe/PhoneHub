@@ -18,6 +18,15 @@
       </intent-filter>
     </activity>
     <service android:name=".CompanionService" android:exported="false" android:foregroundServiceType="dataSync" />
+    <service
+      android:name=".PhoneHubNotificationListener"
+      android:label="PhoneHub Notification Bridge"
+      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+      android:exported="true">
+      <intent-filter>
+        <action android:name="android.service.notification.NotificationListenerService" />
+      </intent-filter>
+    </service>
     <service android:name=".ScreenCaptureService" android:exported="false" android:foregroundServiceType="mediaProjection" />
     <receiver android:name=".PhoneHubDeviceAdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">
       <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin_receiver" />
