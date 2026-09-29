@@ -32,33 +32,36 @@ jobs:
 
       - run: chmod +x gradlew
 
-      - name: Check release signing secrets
+      - name: Prepare release signing when valid
         id: signing
-        shell: bash
+        shell: python
         env:
           PHONEHUB_KEYSTORE_B64: ${{ secrets.PHONEHUB_KEYSTORE_B64 }}
           PHONEHUB_STORE_PASSWORD: ${{ secrets.PHONEHUB_STORE_PASSWORD }}
           PHONEHUB_KEY_ALIAS: ${{ secrets.PHONEHUB_KEY_ALIAS }}
           PHONEHUB_KEY_PASSWORD: ${{ secrets.PHONEHUB_KEY_PASSWORD }}
         run: |
-          if [[ -n "$PHONEHUB_KEYSTORE_B64" && -n "$PHONEHUB_STORE_PASSWORD" && -n "$PHONEHUB_KEY_ALIAS" && -n "$PHONEHUB_KEY_PASSWORD" ]]; then
-            echo "release_signing=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "release_signing=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Restore stable signing key
-        if: steps.signing.outputs.release_signing == 'true'
-        shell: python
-        env:
-          PHONEHUB_KEYSTORE_B64: ${{ secrets.PHONEHUB_KEYSTORE_B64 }}
-        run: |
           import base64, os, pathlib
-          raw = os.environ["PHONEHUB_KEYSTORE_B64"]
-          clean = "".join(raw.split())
-          pathlib.Path("companion/phonehub-release.jks").write_bytes(
-              base64.b64decode(clean, validate=True)
-          )
+          raw = os.environ.get("PHONEHUB_KEYSTORE_B64", "")
+          required = [
+              raw,
+              os.environ.get("PHONEHUB_STORE_PASSWORD", ""),
+              os.environ.get("PHONEHUB_KEY_ALIAS", ""),
+              os.environ.get("PHONEHUB_KEY_PASSWORD", ""),
+          ]
+          ok = all(x.strip() for x in required)
+          keyfile = pathlib.Path("companion/phonehub-release.jks")
+          if ok:
+              try:
+                  clean = "".join(raw.split())
+                  keyfile.write_bytes(base64.b64decode(clean, validate=True))
+                  ok = keyfile.stat().st_size > 0
+              except Exception:
+                  ok = False
+          if not ok and keyfile.exists():
+              keyfile.unlink()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("release_signing=" + ("true" if ok else "false") + "\n")
 
       - name: Build signed Companion APK
         if: steps.signing.outputs.release_signing == 'true'
