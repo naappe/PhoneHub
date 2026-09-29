@@ -77,13 +77,13 @@ jobs:
         run: |
           mkdir -p dist
           if [[ "${{ steps.signing.outputs.release_signing }}" == "true" ]]; then
-            cp companion/build/outputs/apk/release/companion-release.apk dist/PhoneHub-Companion-7.0.0-dev27.apk
+            cp companion/build/outputs/apk/release/companion-release.apk dist/PhoneHub-Companion-7.0.0-dev28.apk
           else
-            cp companion/build/outputs/apk/debug/companion-debug.apk dist/PhoneHub-Companion-7.0.0-dev27-debug.apk
+            cp companion/build/outputs/apk/debug/companion-debug.apk dist/PhoneHub-Companion-7.0.0-dev28-debug.apk
           fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PhoneHub-Companion-7.0.0-dev27
+          name: PhoneHub-Companion-7.0.0-dev28
           path: dist/*.apk
           if-no-files-found: error
