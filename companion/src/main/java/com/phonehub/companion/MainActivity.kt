@@ -93,6 +93,22 @@ class MainActivity : Activity() {
             setPadding(dp(18), dp(16), dp(18), dp(16))
             background = rounded(Color.rgb(238, 242, 255), 16)
         }
+        val screenButton = Button(this).apply {
+            text = "Start screen sharing"
+            isAllCaps = false
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            background = rounded(Color.rgb(37, 99, 235), 14)
+            setOnClickListener {
+                if (ScreenCaptureService.active) {
+                    refreshStatus("Screen sharing is already active and ready for the PC.")
+                    text = "Screen sharing active"
+                    isEnabled = false
+                } else {
+                    requestScreenProjection()
+                }
+            }
+        }
 
         page.addView(brand)
         page.addView(title)
@@ -100,6 +116,7 @@ class MainActivity : Activity() {
         page.addView(card, LinearLayout.LayoutParams(-1, -2))
         page.addView(setupButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(16) })
         page.addView(screenHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        page.addView(screenButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(12) })
         setContentView(page)
 
         if (intent?.getBooleanExtra("request_screen_share", false) == true) {
