@@ -17,3 +17,6 @@ local.properties
 # PhoneHub Android signing keys are local-only. Never commit them.
 *.jks
 *.keystore
+
+# Local device comparison captures
+phone-baselines/
