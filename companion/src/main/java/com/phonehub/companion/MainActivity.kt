@@ -57,7 +57,12 @@ class MainActivity : Activity() {
             addView(setupButton)
         })
 
-        if (CompanionService.isEnabled(this)) CompanionService.start(this)
+        if (intent?.getBooleanExtra("pc_enroll", false) == true) {
+            CompanionService.enable(this)
+            CompanionService.start(this)
+        } else if (CompanionService.isEnabled(this)) {
+            CompanionService.start(this)
+        }
         refreshStatus()
     }
 
@@ -195,8 +200,8 @@ class MainActivity : Activity() {
         lines.add(if (background) "Background reconnect: enabled" else "Background reconnect: approval required")
         if (complete) {
             lines.add("USB: not required")
-            lines.add("Camera transport: scrcpy/ADB when reachable, encrypted WebRTC fallback on other networks.")
-            lines.add("Screen transport: scrcpy/ADB when reachable, WebRTC/MediaProjection fallback when required.")
+            lines.add("Camera transport: authorized ADB/scrcpy over local network or Tailscale, with encrypted WebRTC fallback.")
+            lines.add("Screen transport: authorized ADB/scrcpy over local network or Tailscale; WebRTC is fallback only when explicitly started.")
         }
         if (!extra.isNullOrBlank()) lines.add(extra)
         status.text = lines.joinToString("\n")
