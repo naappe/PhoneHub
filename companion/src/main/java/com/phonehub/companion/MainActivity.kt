@@ -228,8 +228,8 @@ class MainActivity : Activity() {
         lines.add(if (background) "Background reconnect: enabled" else "Background reconnect: approval required")
         if (complete) {
             lines.add("USB: not required")
-            lines.add("Camera transport: authorized ADB/scrcpy over Tailscale, with encrypted WebRTC fallback on the same private network.")
-            lines.add("Screen transport: authorized ADB/scrcpy over Tailscale; WebRTC is fallback only when explicitly started.")
+            lines.add("Camera transport: encrypted Internet WebRTC; authorized local/USB ADB + scrcpy is an optional fast path.")
+            lines.add("Screen transport: encrypted Internet WebRTC; authorized local/USB ADB + scrcpy is an optional fast path.")
         }
         if (!extra.isNullOrBlank()) lines.add(extra)
         status.text = lines.joinToString("\n")
