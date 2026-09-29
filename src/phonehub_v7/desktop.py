@@ -41,7 +41,9 @@ class Window(QMainWindow):
         brand=QLabel("Samsung Secure");brand.setObjectName("brand");nl.addWidget(brand);nl.addSpacing(22)
         self.stack=QStackedWidget()
         self.screen_signals=ScreenSignals();self.screen_signals.frame.connect(self.show_screen_frame);self.screen_signals.state.connect(self.show_screen_state)
-        self.screen_client=WebRtcScreenClient(self.server,self.screen_signals.frame.emit,self.screen_signals.state.emit)
+        self.screen_client=WebRtcScreenClient(self.server,self.screen_signals.frame.emit,self.screen_signals.state.emit,mode="screen")
+        self.camera_signals=ScreenSignals();self.camera_signals.frame.connect(self.show_camera_frame);self.camera_signals.state.connect(self.show_camera_state)
+        self.camera_client=WebRtcScreenClient(self.server,self.camera_signals.frame.emit,self.camera_signals.state.emit,mode="camera")
         names=["Home","Screen","Apps","App Policy","Policies","Notifications","Files","Camera","Automation","Logs","Settings"]
         for i,name in enumerate(names):
             b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));nl.addWidget(b)
@@ -239,6 +241,26 @@ class Window(QMainWindow):
             self.screen_status.setText(f"Live frame display failed: {e}");self._screen_active=False
 
 
+    def show_camera_state(self,state):
+        self.camera_status_label.setText(state)
+        low=state.lower()
+        if "failed:" in low or low.startswith("webrtc failed") or low.startswith("webrtc closed") or "stream ended:" in low:
+            self._camera_active=False
+
+    def show_camera_frame(self,raw,width,height):
+        try:
+            image=QImage(raw,width,height,width*3,QImage.Format_RGB888).copy()
+            if image.isNull():raise ValueError("invalid RGB frame")
+            pix=QPixmap.fromImage(image)
+            self.camera_view.setText("")
+            self.camera_view.setPixmap(pix.scaled(self.camera_view.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation))
+            self.camera_status_label.setText(f"REMOTE CAMERA LIVE | WebRTC | {width}x{height}")
+            self._camera_active=True
+        except Exception as e:
+            self.camera_status_label.setText(f"Remote camera frame failed: {e}")
+            self._camera_active=False
+
+
 
 
     def files_page(self):
@@ -308,22 +330,25 @@ class Window(QMainWindow):
     def camera_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Camera");h.setObjectName("heading");self.camera_status_label=QLabel("Camera idle");self.camera_status_label.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.camera_status_label);l.addLayout(top)
-        help_text=QLabel("Camera runs directly from the PC through authorized scrcpy/ADB. The Samsung Secure Companion does not request Android camera permission.");help_text.setWordWrap(True);l.addWidget(help_text)
+        help_text=QLabel("Camera uses local scrcpy/ADB when reachable and encrypted WebRTC through Samsung Secure when the phone is on another network.");help_text.setWordWrap(True);l.addWidget(help_text)
         controls=QHBoxLayout();self.camera_lens=QComboBox();self.camera_lens.addItems(["Back camera","Front camera"]);self.camera_start_button=QPushButton("Open camera");self.camera_stop_button=QPushButton("Stop camera");self.camera_start_button.clicked.connect(self.start_camera);self.camera_stop_button.clicked.connect(self.stop_camera);controls.addWidget(self.camera_lens);controls.addWidget(self.camera_start_button);controls.addWidget(self.camera_stop_button);controls.addStretch();l.addLayout(controls)
-        self.camera_view=QLabel("Camera opens in a dedicated scrcpy window from this PC.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
+        self.camera_view=QLabel("Open the camera from this PC. PhoneHub chooses local scrcpy or remote WebRTC automatically.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
         return p
 
     def refresh_camera_status(self):
         if self._camera_process is not None and self._camera_process.poll() is None:
             self._camera_active=True;self.camera_status_label.setText("SCRCPY CAMERA ACTIVE")
         else:
-            self._camera_active=False;self._camera_process=None;self.camera_status_label.setText("Ready | authorized ADB required")
+            self._camera_active=False;self._camera_process=None;self.camera_status_label.setText("Ready | local scrcpy or remote WebRTC")
 
     def start_camera(self):
         if self._camera_process is not None and self._camera_process.poll() is None:
             self.camera_status_label.setText("Camera already active");return
         lens="front" if self.camera_lens.currentIndex()==1 else "back"
-        self.camera_status_label.setText("Starting scrcpy camera...")
+        ds=self.server.devices()
+        if not ds:self.camera_status_label.setText("Phone offline");return
+        self._camera_device=ds[0];self._camera_lens=lens
+        self.camera_status_label.setText("Checking local scrcpy camera...")
         self.run_task("camera_local",lambda:self._start_scrcpy_camera(lens))
 
     def stop_camera(self):
@@ -333,6 +358,9 @@ class Window(QMainWindow):
                 if self._camera_process.poll() is None:self._camera_process.terminate()
             except Exception:pass
             self._camera_process=None
+        try:
+            if getattr(self,"_camera_device",None) is not None:self.camera_client.stop(self._camera_device)
+        except Exception:pass
         self.camera_status_label.setText("Camera stopped")
         self.camera_view.setPixmap(QPixmap());self.camera_view.setText("Camera stopped")
 
@@ -415,7 +443,7 @@ class Window(QMainWindow):
             if isinstance(result,Exception):self.connection.setText(f"Status refresh delayed - {result}");self.connection.setStyleSheet("color:#b45309;font-weight:600");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));caps=s.get("capabilities",{}) or {};missing=list(caps.get("missing_required",[]) or []);complete=bool(caps.get("enrollment_complete",not missing));friendly={"secure_connection":"secure connection","camera":"camera","notifications_permission":"notifications permission","notification_access":"notification access","background_reconnect":"background reconnect"};self.setup_hint.setText("Phone enrollment complete. Samsung Secure will reconnect automatically; normal control stays on this PC." if complete else "Phone setup needs attention: "+", ".join(friendly.get(x,x.replace("_"," ")) for x in missing)+". Open Samsung Secure on the phone once to repair these approvals.");self.setup_button.setEnabled(not complete);self.open_companion_button.setEnabled(False)
+            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));caps=s.get("capabilities",{}) or {};missing=list(caps.get("missing_required",[]) or []);complete=bool(caps.get("enrollment_complete",not missing));friendly={"secure_connection":"secure connection","remote_camera":"remote camera","camera":"camera","notifications_permission":"notifications permission","notification_access":"notification access","background_reconnect":"background reconnect"};self.setup_hint.setText("Phone enrollment complete. Samsung Secure will reconnect automatically; normal control stays on this PC." if complete else "Phone setup needs attention: "+", ".join(friendly.get(x,x.replace("_"," ")) for x in missing)+". Open Samsung Secure on the phone once to repair these approvals.");self.setup_button.setEnabled(not complete);self.open_companion_button.setEnabled(False)
             self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Samsung Secure | auto reconnect")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
             self.network.value.setText(s.get("network","N/A"));self.network.detail.setText("Active connection")
@@ -478,7 +506,12 @@ class Window(QMainWindow):
                 self.camera_status_label.setText(f"SCRCPY CAMERA ACTIVE | {result.get('lens','back')}")
                 self.camera_view.setText("Phone camera is open in the dedicated scrcpy window.\nNo Companion camera permission is used.")
             else:
-                self._camera_active=False;self.camera_status_label.setText("Camera unavailable | "+result.get("reason","ADB/scrcpy unavailable"))
+                self._camera_active=True
+                reason=result.get("reason","ADB/scrcpy unavailable")
+                self.camera_status_label.setText(f"Local camera unavailable | {reason} | trying remote WebRTC")
+                self.camera_view.setText("Connecting encrypted remote camera stream...")
+                d=getattr(self,"_camera_device",None)
+                if d is not None:self.camera_client.start(d,getattr(self,"_camera_lens","back"))
         elif tag=="policy_get":
             if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
             p=result.get("policy",{});e=result.get("enforcement",{});mode=e.get("mode","standard")
