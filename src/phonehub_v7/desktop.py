@@ -309,7 +309,7 @@ class Window(QMainWindow):
     def camera_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Camera");h.setObjectName("heading");self.camera_status_label=QLabel("Camera idle");self.camera_status_label.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.camera_status_label);l.addLayout(top)
-        help_text=QLabel("Camera is controlled here on the PC. Android only provides the permission-protected camera bridge and always shows its foreground-service notification while active.");help_text.setWordWrap(True);l.addWidget(help_text)
+        help_text=QLabel("Camera is controlled here on the PC. Camera permission is included in the Companion one-time setup. If the phone is offline or setup is incomplete, finish Home > Set up connected phone first.");help_text.setWordWrap(True);l.addWidget(help_text)
         controls=QHBoxLayout();self.camera_lens=QComboBox();self.camera_lens.addItems(["Back camera","Front camera"]);self.camera_start_button=QPushButton("Start camera");self.camera_stop_button=QPushButton("Stop camera");self.camera_start_button.clicked.connect(self.start_camera);self.camera_stop_button.clicked.connect(self.stop_camera);controls.addWidget(self.camera_lens);controls.addWidget(self.camera_start_button);controls.addWidget(self.camera_stop_button);controls.addStretch();l.addLayout(controls)
         self.camera_view=QLabel("Start the camera from the PC");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
         return p
@@ -455,12 +455,13 @@ class Window(QMainWindow):
         elif tag=="camera_status":
             if isinstance(result,Exception):self.camera_status_label.setText(f"Camera unavailable: {result}");return
             active=bool(result.get("active"));self._camera_active=active
+            if not result.get("permission",True):self.camera_status_label.setText("Setup incomplete | camera permission required");self.camera_view.setText("Open PhoneHub Companion and tap Complete one-time setup.");return
             self.camera_status_label.setText(("Active" if active else "Idle")+" | "+str(result.get("lens","back"))+" camera")
             if active and not self.camera_timer.isActive():self.camera_timer.start()
         elif tag=="camera_start":
             if isinstance(result,Exception):self.camera_status_label.setText(f"Start failed: {result}");return
             if result.get("type")=="camera_error":
-                self.camera_status_label.setText(result.get("message","Camera permission required"));self.camera_view.setText("Open PhoneHub Companion once and grant Camera permission.");return
+                self.camera_status_label.setText(result.get("message","Camera permission required"));self.camera_view.setText("Open PhoneHub Companion and tap Complete one-time setup.");return
             self._camera_active=True;self.camera_status_label.setText("Camera starting...");self.camera_timer.start()
         elif tag=="camera_stop":
             self._camera_active=False;self.camera_timer.stop();self.camera_status_label.setText("Camera stopped")
