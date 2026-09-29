@@ -57,10 +57,10 @@ class CameraService : Service() {
     override fun onCreate() {
         super.onCreate()
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "PhoneHub camera", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Samsung Secure camera", NotificationManager.IMPORTANCE_LOW))
         val n = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("PhoneHub Camera")
+            .setContentTitle("Samsung Secure Camera")
             .setContentText("Camera service")
             .setOngoing(true)
             .setSilent(true)
