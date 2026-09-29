@@ -28,15 +28,14 @@ class CompanionServer:
             if local:return sorted(local,key=lambda d:d.last_seen,reverse=True)
             return [Companion(did,s.get("device_name","Android"),"REMOTE",s.get("_seen",0)) for did,s in self._remote_status.items() if time.time()-s.get("_seen",0)<30]
     def _raw_command(self,d,payload,timeout=20):
-        raw=(json.dumps(payload,separators=(",",":"))+"\\n").encode()
+        raw=(json.dumps(payload,separators=(",",":"))+"\n").encode("utf-8")
         with socket.create_connection((d.address,d.command_port),timeout=timeout) as s:
-            s.sendall(raw);data=b""
-            while b"\\n" not in data:
-                chunk=s.recv(65536)
-                if not chunk:break
-                data+=chunk
-                if len(data)>MAX_PACKET:raise ValueError("Companion response too large")
-        return json.loads(data.split(b"\\n",1)[0].decode())
+            s.settimeout(timeout)
+            s.sendall(raw)
+            line=s.makefile("rb").readline(MAX_PACKET+1)
+        if not line:raise ConnectionError("Companion returned an empty response")
+        if len(line)>MAX_PACKET:raise ValueError("Companion response too large")
+        return json.loads(line.decode("utf-8").strip())
     def enroll(self,d):
         r=self._raw_command(d,{"type":"enroll","version":1})
         if r.get("type")!="enrolled" or not r.get("pair_key"):raise RuntimeError(r.get("message","enrollment failed"))
