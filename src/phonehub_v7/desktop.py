@@ -57,9 +57,27 @@ class Window(QMainWindow):
         self.stack.addWidget(self.camera_page())
         self.stack.addWidget(self.info_page("Automation","PC automation engine: device events, schedules, policy actions and workflows will be configured here."))
         self.stack.addWidget(self.info_page("Logs","PC audit log: secure connections, commands, policy changes, transfers and errors will appear here."))
-        self.stack.addWidget(self.info_page("Settings","PC-side connection, pairing, protection, backup, updates and new-phone setup will live here."))
+        self.stack.addWidget(self.settings_page())
         self.stack.currentChanged.connect(self.page_changed);self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000)
         QTimer.singleShot(400,self.refresh)
+
+    def settings_page(self):
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(14)
+        h=QLabel("Settings");h.setObjectName("heading");l.addWidget(h)
+        info=QLabel("Add each enrolled phone by its Tailscale address. PhoneHub saves every phone separately.");info.setWordWrap(True);l.addWidget(info)
+        row=QHBoxLayout();self.phone_name_input=QLineEdit();self.phone_name_input.setPlaceholderText("Phone name (for example My Samsung)");self.phone_ip_input=QLineEdit();self.phone_ip_input.setPlaceholderText("Tailscale IP (100.x.x.x)");row.addWidget(self.phone_name_input);row.addWidget(self.phone_ip_input);l.addLayout(row)
+        self.save_phone_button=QPushButton("Save & Connect");self.save_phone_button.clicked.connect(self.save_tailscale_phone);l.addWidget(self.save_phone_button)
+        self.saved_phone_status=QLabel("Saved phones will be remembered for future starts.");self.saved_phone_status.setWordWrap(True);l.addWidget(self.saved_phone_status);l.addStretch()
+        return p
+
+    def save_tailscale_phone(self):
+        name=self.phone_name_input.text().strip() or "Android"
+        ip=self.phone_ip_input.text().strip()
+        try:
+            self.server.save_device(name,ip)
+            self.saved_phone_status.setText(f"Saved {name} at {ip}. PhoneHub will use this address automatically.")
+            self.phone_ip_input.clear();self.phone_name_input.clear();QTimer.singleShot(100,self.refresh)
+        except Exception as e:self.saved_phone_status.setText(f"Could not save phone: {e}")
 
     def home(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
