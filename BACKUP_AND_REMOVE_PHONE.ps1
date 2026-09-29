@@ -102,7 +102,14 @@ if (-not $KeepInstalled) {
     $pairFile = Join-Path $HOME ".phonehub\paired_devices.json"
     if (Test-Path $pairFile) {
         try {
-            $pairs = Get-Content $pairFile -Raw | ConvertFrom-Json -AsHashtable
+            $raw = Get-Content $pairFile -Raw
+            $pairsObj = $raw | ConvertFrom-Json
+            $pairs = @{}
+            if ($pairsObj) {
+                $pairsObj.PSObject.Properties | ForEach-Object {
+                    $pairs[$_.Name] = $_.Value
+                }
+            }
             if ($pairs.ContainsKey($androidId)) {
                 $pairs.Remove($androidId)
                 $pairs | ConvertTo-Json -Depth 10 | Set-Content $pairFile -Encoding UTF8
