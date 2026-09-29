@@ -72,6 +72,12 @@ class MainActivity : Activity() {
         refreshStatus()
     }
 
+    override fun onNewIntent(newIntent: Intent) {
+        super.onNewIntent(newIntent)
+        setIntent(newIntent)
+        if (newIntent.getBooleanExtra("request_screen_share", false)) requestScreenProjection()
+    }
+
     override fun onResume() {
         super.onResume()
 
