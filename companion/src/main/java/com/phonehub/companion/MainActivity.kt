@@ -54,6 +54,13 @@ class MainActivity : Activity() {
             }
         }
 
+        val notifications = Button(this).apply {
+            text = "Open notification access"
+            setOnClickListener {
+                startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
+            }
+        }
+
         val screen = Button(this).apply {
             text = "Allow screen sharing"
             setOnClickListener {
@@ -85,6 +92,7 @@ class MainActivity : Activity() {
             addView(status)
             addView(enable)
             addView(camera)
+            addView(notifications)
             addView(screen)
             addView(stopScreen)
             addView(background)
