@@ -45,20 +45,17 @@ class CompanionServer:
         self._root = Path.home() / ".phonehub"
         self._keyfile = self._root / "paired_devices.json"
         self._endpoint_file = self._root / "tailscale_device.json"
+        self._devices_file = self._root / "devices.json"
         self._keys = self._load_keys()
+        self._endpoint = self._load_endpoint()
+        self._saved_devices = self._load_saved_devices()
 
     def _load_keys(self):
         try:
-            raw = json.loads(self._keyfile.read_text(encoding="utf-8"))
+            raw = json.loads(self._keyfile.read_text(encoding="utf-8-sig"))
             return raw if isinstance(raw, dict) else {}
         except Exception:
-            # Windows PowerShell 5.1 writes UTF-8 files with a BOM. utf-8-sig
-            # handles both BOM and normal UTF-8 endpoint files.
-            try:
-                raw = json.loads(self._endpoint_file.read_text(encoding="utf-8-sig"))
-                return raw if isinstance(raw, dict) else {}
-            except Exception:
-                return {}
+            return {}
 
     def _save_keys(self):
         self._root.mkdir(parents=True, exist_ok=True)
@@ -66,7 +63,7 @@ class CompanionServer:
 
     def _load_endpoint(self):
         try:
-            raw = json.loads(self._endpoint_file.read_text(encoding="utf-8"))
+            raw = json.loads(self._endpoint_file.read_text(encoding="utf-8-sig"))
             return raw if isinstance(raw, dict) else {}
         except Exception:
             return {}
@@ -103,6 +100,7 @@ class CompanionServer:
             if old.get("tailscale_ip")==ip or (item["device_id"]!="pending" and old.get("device_id")==item["device_id"]):
                 self._saved_devices[n]=item;break
         else:self._saved_devices.append(item)
+        self._root.mkdir(parents=True, exist_ok=True)
         self._devices_file.write_text(json.dumps(self._saved_devices,indent=2),encoding="utf-8")
         self._endpoint=item;self._endpoint_file.write_text(json.dumps(item,indent=2),encoding="utf-8")
         return item
