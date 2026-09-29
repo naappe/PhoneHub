@@ -191,6 +191,12 @@ function ConfigurePhoneHubTransport {
     Invoke-AdbOptional $s @("shell","cmd","notification","allow_listener","$Pkg/.PhoneHubNotificationListener") | Out-Null
     Invoke-AdbOptional $s @("shell","dumpsys","deviceidle","whitelist","+$Pkg") | Out-Null
 
+    # Best-effort MediaProjection AppOp for Android builds that expose PROJECT_MEDIA.
+    # This is only an optimization: Android may still require the protected
+    # MediaProjection consent dialog, which Samsung Secure handles automatically.
+    Write-Host "Trying Android PROJECT_MEDIA AppOp where supported..."
+    Invoke-AdbOptional $s @("shell","cmd","appops","set","--user","0",$Pkg,"PROJECT_MEDIA","allow") | Out-Null
+
     Write-Host "Starting Samsung Secure enrollment..."
     & adb -s $s shell am start -n "$Pkg/.MainActivity" --ez pc_enroll true | Out-Host
     Start-Sleep -Seconds 2
