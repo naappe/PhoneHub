@@ -21,10 +21,13 @@ class WebRtcScreenClient:
         server,
         on_frame: Callable[[bytes, int, int], None],
         on_state: Callable[[str], None],
+        mode: str = "screen",
     ):
         self.server = server
         self.on_frame = on_frame
         self.on_state = on_state
+        self.mode = mode
+        self._camera_lens = "back"
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, name="phonehub-webrtc", daemon=True)
         self._thread.start()
@@ -37,7 +40,9 @@ class WebRtcScreenClient:
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    def start(self, device):
+    def start(self, device, lens: str | None = None):
+        if lens in ("front", "back"):
+            self._camera_lens = lens
         self._generation += 1
         generation = self._generation
         asyncio.run_coroutine_threadsafe(self._connect(device, generation), self._loop)
@@ -55,7 +60,10 @@ class WebRtcScreenClient:
                 pass
         if device is not None:
             try:
-                await asyncio.to_thread(self.server.webrtc_stop, device)
+                if self.mode == "camera":
+                    await asyncio.to_thread(self.server.camera_webrtc_stop, device)
+                else:
+                    await asyncio.to_thread(self.server.webrtc_stop, device)
             except Exception:
                 pass
 
@@ -65,7 +73,7 @@ class WebRtcScreenClient:
             return
 
         self._terminal_error = False
-        self.on_state("Negotiating direct WebRTC screen…")
+        self.on_state("Negotiating direct WebRTC camera…" if self.mode == "camera" else "Negotiating direct WebRTC screen…")
         config = RTCConfiguration(
             iceServers=[
                 RTCIceServer(urls="stun:stun.l.google.com:19302"),
@@ -112,11 +120,17 @@ class WebRtcScreenClient:
             pc_ice = self._ice_summary(local.sdp)
 
             self.on_state(f"Sending offer • PC ICE {pc_ice}")
-            answer = await asyncio.to_thread(self.server.webrtc_offer, device, local.sdp)
+            if self.mode == "camera":
+                answer = await asyncio.to_thread(
+                    self.server.camera_webrtc_offer, device, local.sdp, self._camera_lens
+                )
+            else:
+                answer = await asyncio.to_thread(self.server.webrtc_offer, device, local.sdp)
             if generation != self._generation:
                 await pc.close()
                 return
-            if answer.get("type") != "webrtc_answer":
+            expected = "camera_webrtc_answer" if self.mode == "camera" else "webrtc_answer"
+            if answer.get("type") != expected:
                 raise RuntimeError(answer.get("message", "Phone did not return a WebRTC answer"))
             phone_ice = self._ice_summary(answer.get("sdp", ""))
             if phone_ice == "none":
@@ -137,7 +151,8 @@ class WebRtcScreenClient:
         except Exception as exc:
             if generation == self._generation:
                 self._terminal_error = True
-                self.on_state(f"Live screen failed: {exc}")
+                label = "camera" if self.mode == "camera" else "screen"
+                self.on_state(f"Live {label} failed: {exc}")
             try:
                 await pc.close()
             except Exception:
@@ -162,7 +177,8 @@ class WebRtcScreenClient:
                     self.on_state(f"LIVE • WebRTC • {frames / elapsed:.1f} FPS • {width}×{height}")
         except Exception as exc:
             if generation == self._generation:
-                self.on_state(f"Screen stream ended: {exc}")
+                label = "Camera" if self.mode == "camera" else "Screen"
+                self.on_state(f"{label} stream ended: {exc}")
 
 
     @staticmethod
