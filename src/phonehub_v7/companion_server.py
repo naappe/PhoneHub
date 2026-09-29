@@ -52,7 +52,13 @@ class CompanionServer:
             raw = json.loads(self._keyfile.read_text(encoding="utf-8"))
             return raw if isinstance(raw, dict) else {}
         except Exception:
-            return {}
+            # Windows PowerShell 5.1 writes UTF-8 files with a BOM. utf-8-sig
+            # handles both BOM and normal UTF-8 endpoint files.
+            try:
+                raw = json.loads(self._endpoint_file.read_text(encoding="utf-8-sig"))
+                return raw if isinstance(raw, dict) else {}
+            except Exception:
+                return {}
 
     def _save_keys(self):
         self._root.mkdir(parents=True, exist_ok=True)
