@@ -18,17 +18,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
       - name: Install Android SDK
         run: |
           SDKMANAGER="/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
       - run: chmod +x gradlew
+
+      - name: Check release signing secrets
+        id: signing
+        shell: bash
+        env:
+          PHONEHUB_KEYSTORE_B64: ${{ secrets.PHONEHUB_KEYSTORE_B64 }}
+          PHONEHUB_STORE_PASSWORD: ${{ secrets.PHONEHUB_STORE_PASSWORD }}
+          PHONEHUB_KEY_ALIAS: ${{ secrets.PHONEHUB_KEY_ALIAS }}
+          PHONEHUB_KEY_PASSWORD: ${{ secrets.PHONEHUB_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$PHONEHUB_KEYSTORE_B64" && -n "$PHONEHUB_STORE_PASSWORD" && -n "$PHONEHUB_KEY_ALIAS" && -n "$PHONEHUB_KEY_PASSWORD" ]]; then
+            echo "release_signing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_signing=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Restore stable signing key
+        if: steps.signing.outputs.release_signing == 'true'
         shell: python
         env:
           PHONEHUB_KEYSTORE_B64: ${{ secrets.PHONEHUB_KEYSTORE_B64 }}
@@ -36,19 +56,34 @@ jobs:
           import base64, os, pathlib
           raw = os.environ["PHONEHUB_KEYSTORE_B64"]
           clean = "".join(raw.split())
-          pathlib.Path("companion/phonehub-release.jks").write_bytes(base64.b64decode(clean, validate=True))
+          pathlib.Path("companion/phonehub-release.jks").write_bytes(
+              base64.b64decode(clean, validate=True)
+          )
+
       - name: Build signed Companion APK
+        if: steps.signing.outputs.release_signing == 'true'
         env:
           PHONEHUB_STORE_PASSWORD: ${{ secrets.PHONEHUB_STORE_PASSWORD }}
           PHONEHUB_KEY_ALIAS: ${{ secrets.PHONEHUB_KEY_ALIAS }}
           PHONEHUB_KEY_PASSWORD: ${{ secrets.PHONEHUB_KEY_PASSWORD }}
         run: ./gradlew :companion:assembleRelease
+
+      - name: Build debug Companion APK
+        if: steps.signing.outputs.release_signing != 'true'
+        run: ./gradlew :companion:assembleDebug
+
       - name: Collect APK
+        shell: bash
         run: |
           mkdir -p dist
-          cp companion/build/outputs/apk/release/companion-release.apk dist/PhoneHub-Companion-7.0.0-dev3.apk
+          if [[ "${{ steps.signing.outputs.release_signing }}" == "true" ]]; then
+            cp companion/build/outputs/apk/release/companion-release.apk dist/PhoneHub-Companion-7.0.0-dev27.apk
+          else
+            cp companion/build/outputs/apk/debug/companion-debug.apk dist/PhoneHub-Companion-7.0.0-dev27-debug.apk
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
-          name: PhoneHub-Companion-7.0.0-dev3
-          path: dist/PhoneHub-Companion-7.0.0-dev3.apk
+          name: PhoneHub-Companion-7.0.0-dev27
+          path: dist/*.apk
           if-no-files-found: error
