@@ -3,7 +3,7 @@ import sys, json, socket, subprocess, shutil
 from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, QDateTime, QObject, Signal, QRunnable, QThreadPool
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QComboBox,QCheckBox,QAbstractItemView,QMenu
+from PySide6.QtWidgets import QApplication,QFrame,QHBoxLayout,QLabel,QMainWindow,QProgressBar,QPushButton,QStackedWidget,QVBoxLayout,QWidget,QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QComboBox,QCheckBox,QAbstractItemView,QMenu,QFileDialog
 from .companion_server import CompanionServer
 from .webrtc_stream import WebRtcScreenClient
 
@@ -51,7 +51,7 @@ class Window(QMainWindow):
         self.stack.addWidget(self.home());self.stack.addWidget(self.screen_page());self.stack.addWidget(self.apps_page());self.stack.addWidget(self.policy_page())
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
         self.stack.addWidget(self.notifications_page())
-        self.stack.addWidget(self.info_page("Files","PC file manager: browse permitted phone storage, transfer files, queues and history will be managed here."))
+        self.stack.addWidget(self.files_page())
         self.stack.addWidget(self.camera_page())
         self.stack.addWidget(self.info_page("Automation","PC automation engine: device events, schedules, policy actions and workflows will be configured here."))
         self.stack.addWidget(self.info_page("Logs","PC audit log: secure connections, commands, policy changes, transfers and errors will appear here."))
@@ -85,6 +85,8 @@ class Window(QMainWindow):
             self.start_live_screen()
         elif index==5:
             self.load_notifications()
+        elif index==6:
+            self.load_files()
         elif self._screen_active:
             self.stop_live_screen()
         if index==7:
@@ -191,6 +193,57 @@ class Window(QMainWindow):
 
 
 
+
+    def files_page(self):
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
+        top=QHBoxLayout();h=QLabel("Files");h.setObjectName("heading");self.files_status=QLabel("Waiting for phone");self.files_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.files_status);l.addLayout(top)
+        help_text=QLabel("Encrypted transfer area managed from the PC. Files are stored in PhoneHub's Android app-specific transfer folder, so no broad storage permission is required. Current secure transfer limit: 1 MB per file.");help_text.setWordWrap(True);l.addWidget(help_text)
+        actions=QHBoxLayout();self.files_refresh=QPushButton("Refresh");self.files_upload=QPushButton("Send file to phone");self.files_download=QPushButton("Save selected to PC");self.files_delete=QPushButton("Delete selected");self.files_refresh.clicked.connect(self.load_files);self.files_upload.clicked.connect(self.upload_file);self.files_download.clicked.connect(self.download_file);self.files_delete.clicked.connect(self.delete_file);actions.addWidget(self.files_refresh);actions.addWidget(self.files_upload);actions.addWidget(self.files_download);actions.addWidget(self.files_delete);actions.addStretch();l.addLayout(actions)
+        self.files_table=QTableWidget(0,3);self.files_table.setHorizontalHeaderLabels(["Name","Size","Modified"]);self.files_table.verticalHeader().setVisible(False);self.files_table.setEditTriggers(QAbstractItemView.NoEditTriggers);self.files_table.setSelectionBehavior(QAbstractItemView.SelectRows);self.files_table.setSelectionMode(QAbstractItemView.SingleSelection);self.files_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.Stretch);self.files_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeToContents);self.files_table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeToContents);l.addWidget(self.files_table,1)
+        self._file_download_name=None
+        return p
+
+    def load_files(self):
+        ds=self.server.devices()
+        if not ds:self.files_status.setText("Phone offline");return
+        self.files_status.setText("Loading...")
+        self.run_task("files_list",lambda:self.server.files_list(ds[0]))
+
+    def selected_phone_file(self):
+        row=self.files_table.currentRow()
+        if row<0:return None
+        item=self.files_table.item(row,0)
+        return item.text() if item else None
+
+    def upload_file(self):
+        ds=self.server.devices()
+        if not ds:self.files_status.setText("Phone offline");return
+        path,_=QFileDialog.getOpenFileName(self,"Send file to phone")
+        if not path:return
+        p=Path(path)
+        if p.stat().st_size>1048576:
+            self.files_status.setText("File is larger than the 1 MB secure transfer limit");return
+        self.files_status.setText(f"Sending {p.name}...")
+        self.run_task("file_put",lambda:self.server.file_put(ds[0],p.name,p.read_bytes()))
+
+    def download_file(self):
+        name=self.selected_phone_file()
+        if not name:self.files_status.setText("Select a file first");return
+        ds=self.server.devices()
+        if not ds:self.files_status.setText("Phone offline");return
+        path,_=QFileDialog.getSaveFileName(self,"Save phone file to PC",name)
+        if not path:return
+        self._file_download_name=path;self.files_status.setText(f"Downloading {name}...")
+        self.run_task("file_get",lambda:self.server.file_get(ds[0],name))
+
+    def delete_file(self):
+        name=self.selected_phone_file()
+        if not name:self.files_status.setText("Select a file first");return
+        ds=self.server.devices()
+        if not ds:self.files_status.setText("Phone offline");return
+        self.files_status.setText(f"Deleting {name}...")
+        self.run_task("file_delete",lambda:self.server.file_delete(ds[0],name))
+
     def notifications_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Notifications");h.setObjectName("heading");self.notifications_status=QLabel("Waiting for phone");self.notifications_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.notifications_status);l.addLayout(top)
@@ -294,6 +347,31 @@ class Window(QMainWindow):
                 reason=result.get("reason","local scrcpy unavailable")
                 self.screen_status.setText(f"Local scrcpy unavailable | {reason} | trying WebRTC")
                 if d is not None:self._start_webrtc(d)
+        elif tag=="files_list":
+            if isinstance(result,Exception):self.files_status.setText(f"Unavailable: {result}");return
+            items=result.get("items",[]);self.files_table.setRowCount(len(items))
+            for row,item in enumerate(items):
+                modified=int(item.get("modified",0) or 0)
+                when=QDateTime.fromMSecsSinceEpoch(modified).toString("yyyy-MM-dd h:mm AP") if modified else ""
+                size=int(item.get("size",0) or 0)
+                vals=[item.get("name",""),f"{size/1024:.1f} KB",when]
+                for col,val in enumerate(vals):self.files_table.setItem(row,col,QTableWidgetItem(str(val)))
+            self.files_status.setText(f"{len(items)} file(s) | encrypted transfer area")
+        elif tag=="file_put":
+            if isinstance(result,Exception):self.files_status.setText(f"Send failed: {result}");return
+            self.files_status.setText(result.get("message",f"Sent {result.get('name','file')}"))
+            QTimer.singleShot(150,self.load_files)
+        elif tag=="file_get":
+            if isinstance(result,Exception):self.files_status.setText(f"Download failed: {result}");return
+            if result.get("type")=="file_error":self.files_status.setText(result.get("message","Download failed"));return
+            try:
+                Path(self._file_download_name).write_bytes(result.get("bytes",b""))
+                self.files_status.setText(f"Saved to {self._file_download_name}")
+            except Exception as e:self.files_status.setText(f"Save failed: {e}")
+        elif tag=="file_delete":
+            if isinstance(result,Exception):self.files_status.setText(f"Delete failed: {result}");return
+            self.files_status.setText("Deleted" if result.get("deleted") else result.get("message","Delete failed"))
+            QTimer.singleShot(150,self.load_files)
         elif tag=="notifications":
             if isinstance(result,Exception):self.notifications_status.setText(f"Unavailable: {result}");return
             if not result.get("access"):
