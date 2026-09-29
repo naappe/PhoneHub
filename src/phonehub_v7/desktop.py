@@ -1,5 +1,5 @@
 from __future__ import annotations
-import sys, json, socket, subprocess, shutil, traceback, datetime
+import sys, json, socket, subprocess, shutil, traceback, datetime, base64
 from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, QDateTime, QObject, Signal, QRunnable, QThreadPool
 from PySide6.QtGui import QImage, QPixmap, QFont
@@ -161,13 +161,14 @@ class Window(QMainWindow):
 
     def stop_live_screen(self):
         self._screen_active=False
+        timer=getattr(self,"_screen_snapshot_timer",None)
+        if timer is not None:timer.stop()
+        self._screen_frame_busy=False
         if self._scrcpy_process is not None:
             try:
                 if self._scrcpy_process.poll() is None:self._scrcpy_process.terminate()
             except Exception:pass
             self._scrcpy_process=None
-        if self._screen_device is not None:
-            self.screen_client.stop(self._screen_device)
         self._screen_device=None
 
     def reconnect_live_screen(self):
@@ -178,16 +179,23 @@ class Window(QMainWindow):
         if self._screen_active:return
         ds=self.server.devices()
         if not ds:self.screen_status.setText("Phone offline");return
-        d=ds[0];self._screen_device=d;self._screen_active=True;self.screen_view.setPixmap(QPixmap())
-        # Internet/WebRTC is the primary screen path. Local USB ADB/scrcpy is
-        # intentionally not auto-selected because it can hide remote-screen bugs.
-        self.screen_status.setText("Starting encrypted Internet screen...")
-        self.screen_view.setText("Connecting remote live screen...")
-        self._start_webrtc(d)
+        d=ds[0];self._screen_device=d;self._screen_active=True;self._screen_frame_busy=False
+        self.screen_view.setPixmap(QPixmap())
+        self.screen_status.setText("REMOTE SCREEN | encrypted Internet snapshots")
+        self.screen_view.setText("Connecting to Samsung Secure Screen Access...")
+        if not hasattr(self,"_screen_snapshot_timer"):
+            self._screen_snapshot_timer=QTimer(self)
+            self._screen_snapshot_timer.setInterval(850)
+            self._screen_snapshot_timer.timeout.connect(self._poll_screen_frame)
+        self._screen_snapshot_timer.start()
+        self._poll_screen_frame()
 
-    def _start_webrtc(self,d):
-        self.screen_status.setText("Starting remote WebRTC screen...");self.screen_view.setText("Connecting remote live screen...")
-        self.screen_client.start(d)
+    def _poll_screen_frame(self):
+        if not self._screen_active or self._screen_device is None:return
+        if getattr(self,"_screen_frame_busy",False):return
+        self._screen_frame_busy=True
+        d=self._screen_device
+        self.run_task("screen_frame",lambda:self.server.screen_frame(d))
 
 
 
@@ -423,6 +431,25 @@ class Window(QMainWindow):
             mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
             self.android.value.setText(str(s.get("android_version","N/A")));self.android.detail.setText(f"SDK {s.get('sdk','N/A')}")
             if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
+        elif tag=="screen_frame":
+            self._screen_frame_busy=False
+            if not self._screen_active:return
+            if isinstance(result,Exception):
+                self.screen_status.setText(f"Remote screen delayed: {result}")
+                return
+            if result.get("type")!="screen_frame":
+                self.screen_status.setText(result.get("message","Enable Samsung Secure Screen Access on the phone."))
+                return
+            try:
+                raw=base64.b64decode(result.get("data",""))
+                image=QImage.fromData(raw,"JPEG")
+                if image.isNull():raise ValueError("invalid JPEG frame")
+                self._screen_pixmap=QPixmap.fromImage(image)
+                self.screen_view.setText("")
+                self.screen_view.setPixmap(self._screen_pixmap.scaled(self.screen_view.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation))
+                self.screen_status.setText(f"REMOTE SCREEN LIVE | encrypted snapshots | {image.width()}x{image.height()}")
+            except Exception as e:
+                self.screen_status.setText(f"Remote screen frame failed: {e}")
         elif tag=="screen_local":
             if isinstance(result,Exception):
                 result={"ok":False,"reason":str(result)}
