@@ -124,20 +124,51 @@ function GetPhoneTailscaleIp([string]$DeviceSerial) {
     try {
         $lines = @(& adb -s $DeviceSerial shell ip -4 addr show 2>$null)
         foreach($line in $lines) {
-            if($line -match 'inet\s+(100\.\d+\.\d+\.\d+)/') { return $matches[1] }
+            if($line -match 'inet\s+(100\.\d+\.\d+\.\d+)/') {
+                return $matches[1]
+            }
         }
     } catch {}
 
-    # Fallback: ask the PC Tailscale client for Android peers.
     if(Get-Command tailscale -ErrorAction SilentlyContinue) {
         try {
-            $json = & tailscale status --json 2>$null | ConvertFrom-Json
-            foreach($peer in $json.Peer.PSObject.Properties.Value) {
-                if($peer.Online -eq $false) { continue }
-                $os = [string]$peer.OS
-                if($os -notmatch 'android') { continue }
-                foreach($ip in @($peer.TailscaleIPs)) {
-                    if($ip -match '^100\.\d+\.\d+\.\d+
+            $jsonText = (& tailscale status --json 2>$null) -join [Environment]::NewLine
+            if($jsonText) {
+                $json = $jsonText | ConvertFrom-Json
+                $peers = @($json.Peer.PSObject.Properties.Value)
+                foreach($peer in $peers) {
+                    if($peer.Online -eq $false) { continue }
+                    if(([string]$peer.OS) -notmatch 'android') { continue }
+                    foreach($ip in @($peer.TailscaleIPs)) {
+                        if(([string]$ip) -match '^100\.\d+\.\d+\.\d+$') {
+                            return [string]$ip
+                        }
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    return ""
+}
+
+function WaitForPhoneTailscaleIp([string]$DeviceSerial, [int]$TimeoutSeconds = 90) {
+    $ip = GetPhoneTailscaleIp $DeviceSerial
+    if($ip) { return $ip }
+
+    Write-Host "Tailscale address not active yet. Opening Tailscale on the phone..."
+    Invoke-AdbOptional $DeviceSerial @("shell","monkey","-p","com.tailscale.ipn","-c","android.intent.category.LAUNCHER","1") | Out-Null
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        $ip = GetPhoneTailscaleIp $DeviceSerial
+        if($ip) { return $ip }
+        Write-Host "Waiting for phone to join the tailnet..."
+    }
+
+    return ""
+}
 
 function SaveTailscaleDevice([string]$Ip) {
     if(-not $Ip) { throw "Tailscale IP is required." }
