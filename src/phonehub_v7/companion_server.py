@@ -86,24 +86,38 @@ class CompanionServer:
             encoding="utf-8",
         )
 
+    def _load_saved_devices(self):
+        try:
+            raw=json.loads(self._devices_file.read_text(encoding="utf-8-sig"))
+            if isinstance(raw,list): return [x for x in raw if isinstance(x,dict)]
+        except Exception: pass
+        ep=self._endpoint if isinstance(self._endpoint,dict) else {}
+        ip=str(ep.get("tailscale_ip","")).strip()
+        return [{"device_id":str(ep.get("device_id","pending")),"device_name":str(ep.get("device_name","Android")),"tailscale_ip":ip,"command_port":int(ep.get("command_port",DEFAULT_COMMAND_PORT))}] if ip else []
+
+    def save_device(self,name,ip,device_id="pending",command_port=DEFAULT_COMMAND_PORT):
+        socket.inet_aton(ip)
+        if not ip.startswith("100."): raise ValueError("Enter a Tailscale IPv4 address (100.x.x.x)")
+        item={"device_id":device_id or "pending","device_name":name.strip() or "Android","tailscale_ip":ip,"command_port":int(command_port)}
+        for n,old in enumerate(self._saved_devices):
+            if old.get("tailscale_ip")==ip or (item["device_id"]!="pending" and old.get("device_id")==item["device_id"]):
+                self._saved_devices[n]=item;break
+        else:self._saved_devices.append(item)
+        self._devices_file.write_text(json.dumps(self._saved_devices,indent=2),encoding="utf-8")
+        self._endpoint=item;self._endpoint_file.write_text(json.dumps(item,indent=2),encoding="utf-8")
+        return item
+
     def start(self):
         # No discovery worker is required. Tailscale is the network fabric.
         return None
 
     def devices(self):
-        endpoint = self._load_endpoint()
-        address = str(endpoint.get("tailscale_ip") or "").strip()
-        if not address:
-            return []
-        return [
-            Companion(
-                str(endpoint.get("device_id") or "pending"),
-                str(endpoint.get("device_name") or "Android"),
-                address,
-                0.0,
-                int(endpoint.get("command_port") or DEFAULT_COMMAND_PORT),
-            )
-        ]
+        out=[]
+        for endpoint in self._saved_devices:
+            address=str(endpoint.get("tailscale_ip") or "").strip()
+            if not address:continue
+            out.append(Companion(str(endpoint.get("device_id") or "pending"),str(endpoint.get("device_name") or "Android"),address,0.0,int(endpoint.get("command_port") or DEFAULT_COMMAND_PORT)))
+        return out
 
     def reachable(self, d, port=None, timeout=0.6):
         try:
