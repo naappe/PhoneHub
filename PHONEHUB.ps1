@@ -1,6 +1,6 @@
 param(
     [Parameter(Position=0)]
-    [ValidateSet("help","build","install","start","update","backup","remove","clean","setup","status")]
+    [ValidateSet("help","build","install","start","update","backup","remove","clean","setup","status","exe")]
     [string]$Action = "help",
     [string]$Serial = ""
 )
@@ -144,6 +144,28 @@ function DoClean {
     Write-Host "Cleanup complete."
 }
 
+function DoExe {
+    Title "Build Windows EXE"
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "Python 3 is required." }
+    python -c "import PyInstaller, PySide6" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Installing EXE builder..."
+        python -m pip install --disable-pip-version-check pyinstaller "PySide6>=6.8,<7"
+        if ($LASTEXITCODE -ne 0) { throw "Could not install PyInstaller." }
+    }
+    $work = Join-Path $env:TEMP "phonehub-exe-build"
+    $spec = Join-Path $env:TEMP "phonehub-exe-spec"
+    Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $spec -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $work,$spec | Out-Null
+    python -m PyInstaller --noconfirm --clean --onefile --windowed --name PhoneHub --paths (Join-Path $Root "src") --distpath $Root --workpath $work --specpath $spec (Join-Path $Root "src\phonehub_v7\launcher.py")
+    if ($LASTEXITCODE -ne 0) { throw "PhoneHub.exe build failed." }
+    if (-not (Test-Path (Join-Path $Root "PhoneHub.exe"))) { throw "PhoneHub.exe was not created." }
+    Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $spec -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "Created: $(Join-Path $Root "PhoneHub.exe")"
+}
+
 function DoStatus {
     Title "Status"
     Write-Host "Version: $(VersionName)"
@@ -162,9 +184,10 @@ switch($Action){
     "remove" { SaveBaseline $true }
     "clean" { DoClean }
     "status" { DoStatus }
+    "exe" { DoExe }
     "setup" { DoUpdate; DoBuild; DoInstall; DoStart }
     default {
         Title "Master Command"
-        Write-Host ".\PHONEHUB.ps1 update|build|install|start|setup|backup|remove|clean|status"
+        Write-Host ".\PHONEHUB.ps1 update|build|install|start|setup|backup|remove|clean|status|exe"
     }
 }
