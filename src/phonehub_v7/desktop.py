@@ -1,5 +1,5 @@
 from __future__ import annotations
-import sys, json, socket, subprocess, shutil
+import sys, json, socket, subprocess, shutil, traceback, datetime
 from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, QDateTime, QObject, Signal, QRunnable, QThreadPool
 from PySide6.QtGui import QImage, QPixmap, QFont
@@ -556,8 +556,36 @@ class Window(QMainWindow):
         QProgressBar{background:#edf1f6;border:0;border-radius:3px} QProgressBar::chunk{background:#2563eb;border-radius:3px}\n        QLineEdit,QComboBox{background:#fff;border:1px solid #dfe5ee;border-radius:9px;padding:9px} QTableWidget{background:#fff;border:1px solid #e1e7ef;border-radius:12px;gridline-color:#eef1f5} QHeaderView::section{background:#f7f9fc;border:0;border-bottom:1px solid #e5eaf1;padding:9px;font-weight:600}
         """)
 
+_WINDOW=None
+
+def _startup_log(message):
+    try:
+        p=Path.home()/".phonehub";p.mkdir(parents=True,exist_ok=True)
+        with (p/"startup.log").open("a",encoding="utf-8") as f:
+            f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} {message}\n")
+    except Exception:
+        pass
+
 def main():
-    app=QApplication(sys.argv)
-    app.setFont(QFont("Segoe UI",10))
-    w=Window();w.show();sys.exit(app.exec())
-if __name__=="__main__":main()
+    global _WINDOW
+    try:
+        _startup_log("desktop main entered")
+        app=QApplication.instance() or QApplication(sys.argv)
+        app.setQuitOnLastWindowClosed(True)
+        app.setFont(QFont("Segoe UI",10))
+        _WINDOW=Window()
+        _WINDOW.show()
+        _WINDOW.raise_()
+        _WINDOW.activateWindow()
+        _startup_log("main window shown")
+        code=app.exec()
+        _startup_log(f"Qt event loop exited code={code}")
+        return code
+    except BaseException:
+        detail=traceback.format_exc()
+        _startup_log("STARTUP ERROR\n"+detail)
+        print(detail,file=sys.stderr,flush=True)
+        raise
+
+if __name__=="__main__":
+    sys.exit(main())
