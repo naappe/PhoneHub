@@ -174,6 +174,34 @@ class Window(QMainWindow):
     def wireless_adb_path(self):
         p=Path.home()/".phonehub";p.mkdir(parents=True,exist_ok=True);return p/"wireless_adb_target.txt"
 
+    def tailscale_adb_candidates(self):
+        exe=shutil.which("tailscale")
+        if not exe:return []
+        flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+        try:
+            r=subprocess.run([exe,"status","--json"],capture_output=True,text=True,timeout=8,creationflags=flags)
+            if r.returncode!=0:return []
+            data=json.loads(r.stdout or "{}")
+        except Exception:
+            return []
+        out=[]
+        peers=data.get("Peer",{}) or {}
+        values=peers.values() if isinstance(peers,dict) else peers
+        for peer in values:
+            if not isinstance(peer,dict):continue
+            online=peer.get("Online",True)
+            if online is False:continue
+            os_name=str(peer.get("OS","") or "").lower()
+            host=str(peer.get("HostName","") or "").lower()
+            dns=str(peer.get("DNSName","") or "").lower()
+            if "android" not in os_name and "android" not in host and "android" not in dns:
+                continue
+            for ip in peer.get("TailscaleIPs",[]) or []:
+                if ":" in str(ip):continue
+                target=f"{ip}:5555"
+                if target not in out:out.append(target)
+        return out
+
     def _start_scrcpy_local(self,d):
         if not shutil.which("adb"):return {"ok":False,"reason":"ADB is not installed"}
         if not shutil.which("scrcpy"):return {"ok":False,"reason":"scrcpy is not installed"}
@@ -191,6 +219,7 @@ class Window(QMainWindow):
             if value and value not in candidates:candidates.append(value)
 
         if d.address!="REMOTE":add(f"{d.address}:5555")
+        for value in self.tailscale_adb_candidates():add(value)
         try:add(self.wireless_adb_path().read_text(encoding="utf-8"))
         except Exception:pass
         for value in connected:add(value)
@@ -373,16 +402,46 @@ class Window(QMainWindow):
         for line in (devices.stdout or "").splitlines()[1:]:
             parts=line.split()
             if len(parts)>=2 and parts[1]=="device":connected.append(parts[0])
-        wireless=[x for x in connected if ":" in x]
-        targets=wireless+([connected[0]] if connected and not wireless else [])
-        if not targets:return {"ok":False,"reason":"no authorized ADB device"}
-        target=targets[0]
-        args=["scrcpy","-s",target,"--video-source=camera",f"--camera-facing={lens}","--no-audio",f"--window-title=PhoneHub Camera - {lens.title()}"]
-        try:
-            process=subprocess.Popen(args,creationflags=flags)
-            return {"ok":True,"process":process,"target":target,"lens":lens}
-        except Exception as e:
-            return {"ok":False,"reason":str(e)}
+
+        candidates=[]
+        def add(value):
+            value=(value or "").strip()
+            if value and value not in candidates:candidates.append(value)
+
+        for value in self.tailscale_adb_candidates():add(value)
+        try:add(self.wireless_adb_path().read_text(encoding="utf-8"))
+        except Exception:pass
+        for value in connected:add(value)
+
+        failures=[]
+        for target in candidates:
+            if ":" in target:
+                try:
+                    host,port_text=target.rsplit(":",1);port=int(port_text)
+                    with socket.create_connection((host,port),timeout=1.0):pass
+                except Exception:
+                    failures.append(f"{target}: unreachable");continue
+                if target not in connected:
+                    try:
+                        connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
+                        output=((connect.stdout or "")+" "+(connect.stderr or "")).strip()
+                        low=output.lower()
+                        if connect.returncode!=0 or ("connected to" not in low and "already connected" not in low):
+                            failures.append(f"{target}: {output or 'ADB connection failed'}");continue
+                    except Exception as e:
+                        failures.append(f"{target}: {e}");continue
+            try:self.wireless_adb_path().write_text(target,encoding="utf-8")
+            except Exception:pass
+            args=["scrcpy","-s",target,"--video-source=camera",f"--camera-facing={lens}","--no-audio",f"--window-title=PhoneHub Camera - {lens.title()}"]
+            try:
+                process=subprocess.Popen(args,creationflags=flags)
+                return {"ok":True,"process":process,"target":target,"lens":lens}
+            except Exception as e:
+                failures.append(f"{target}: {e}")
+
+        reason="no reachable authorized ADB target"
+        if failures:reason+=" ("+"; ".join(failures[:3])+")"
+        return {"ok":False,"reason":reason}
 
     def info_page(self,title,body):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,32,36,32);h=QLabel(title);h.setObjectName("heading");l.addWidget(h);d=QLabel(body);d.setWordWrap(True);l.addWidget(d);l.addStretch();return p
