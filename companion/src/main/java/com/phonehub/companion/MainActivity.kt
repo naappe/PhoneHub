@@ -92,6 +92,9 @@ class MainActivity : Activity() {
         CompanionService.enable(this)
 
         val missing = mutableListOf<String>()
+        if (!CapabilityManager.cameraAllowed(this)) {
+            missing.add(Manifest.permission.CAMERA)
+        }
         if (!CapabilityManager.notificationsRuntimeAllowed(this)) {
             missing.add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -109,7 +112,7 @@ class MainActivity : Activity() {
         CompanionService.enable(this)
 
         if (!runtimePermissionsAllowed()) {
-            refreshStatus("One-time setup is incomplete. Tap Allow all once and approve Notifications.")
+            refreshStatus("One-time setup is incomplete. Approve the remote camera and notification permissions once.")
             return
         }
 
@@ -149,7 +152,7 @@ class MainActivity : Activity() {
     }
 
     private fun runtimePermissionsAllowed(): Boolean =
-        CapabilityManager.notificationsRuntimeAllowed(this)
+        CapabilityManager.cameraAllowed(this) && CapabilityManager.notificationsRuntimeAllowed(this)
 
     private fun notificationAccessAllowed(): Boolean =
         CapabilityManager.notificationAccessAllowed(this)
@@ -168,12 +171,13 @@ class MainActivity : Activity() {
         if (runtimePermissionsAllowed()) {
             continueSetup()
         } else {
-            refreshStatus("Notifications permission must be allowed to complete the one-time setup.")
+            refreshStatus("Remote camera and notification permissions must be allowed to complete setup.")
         }
     }
 
     private fun refreshStatus(extra: String? = null) {
         val enabled = CompanionService.isEnabled(this)
+        val camera = CapabilityManager.cameraAllowed(this)
         val notifications = CapabilityManager.notificationsRuntimeAllowed(this)
         val notificationAccess = CapabilityManager.notificationAccessAllowed(this)
         val background = CapabilityManager.backgroundAllowed(this)
@@ -185,13 +189,14 @@ class MainActivity : Activity() {
         val lines = mutableListOf<String>()
         lines.add(if (enabled) "Secure connection: ready" else "Secure connection: setup required")
         lines.add("Policy bridge: ready")
+        lines.add(if (camera) "Remote camera: ready" else "Remote camera: one-time approval required")
         lines.add(if (notifications) "Notifications permission: allowed" else "Notifications permission: approval required")
         lines.add(if (notificationAccess) "Notification access: allowed" else "Notification access: approval required")
         lines.add(if (background) "Background reconnect: enabled" else "Background reconnect: approval required")
         if (complete) {
             lines.add("USB: not required")
-            lines.add("PC camera uses authorized scrcpy/ADB and does not require Companion camera permission.")
-            lines.add("Screen sharing may still require Android session authorization when WebRTC/MediaProjection is used.")
+            lines.add("Camera transport: scrcpy/ADB when reachable, encrypted WebRTC fallback on other networks.")
+            lines.add("Screen transport: scrcpy/ADB when reachable, WebRTC/MediaProjection fallback when required.")
         }
         if (!extra.isNullOrBlank()) lines.add(extra)
         status.text = lines.joinToString("\n")
