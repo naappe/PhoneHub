@@ -41,17 +41,31 @@ class CompanionServer:
         if r.get("type")!="enrolled" or not r.get("pair_key"):raise RuntimeError(r.get("message","enrollment failed"))
         self._keys[d.device_id]=r["pair_key"];self._save_keys();return r
     def command(self,d,command_type,extra=None):
-        if d.device_id not in self._keys:self.enroll(d)
-        ts=int(time.time());request_nonce=secrets.token_hex(16);canonical=f"{command_type}|{ts}|{request_nonce}".encode()
-        key=base64.b64decode(self._keys[d.device_id]);sig=hmac.new(key,canonical,hashlib.sha256).hexdigest()
-        payload={"type":command_type,"version":2,"timestamp":ts,"nonce":request_nonce,"signature":sig};payload.update(extra or {})
-        plain=json.dumps(payload,separators=(",",":")).encode()
-        iv=secrets.token_bytes(12);cipher=AESGCM(key).encrypt(iv,plain,None)
-        wire={"type":"encrypted","version":2,"nonce":base64.b64encode(iv).decode(),"ciphertext":base64.b64encode(cipher).decode()}
-        response=self._remote_command(d,key,payload) if d.address=="REMOTE" else self._raw_command(d,wire)
-        if response.get("type")!="encrypted":return response
-        riv=base64.b64decode(response["nonce"]);rc=base64.b64decode(response["ciphertext"])
-        return json.loads(AESGCM(key).decrypt(riv,rc,None).decode())
+        def build_and_send():
+            if d.device_id not in self._keys:self.enroll(d)
+            ts=int(time.time());request_nonce=secrets.token_hex(16);canonical=f"{command_type}|{ts}|{request_nonce}".encode()
+            key=base64.b64decode(self._keys[d.device_id]);sig=hmac.new(key,canonical,hashlib.sha256).hexdigest()
+            payload={"type":command_type,"version":2,"timestamp":ts,"nonce":request_nonce,"signature":sig};payload.update(extra or {})
+            plain=json.dumps(payload,separators=(",",":")).encode()
+            iv=secrets.token_bytes(12);cipher=AESGCM(key).encrypt(iv,plain,None)
+            wire={"type":"encrypted","version":2,"nonce":base64.b64encode(iv).decode(),"ciphertext":base64.b64encode(cipher).decode()}
+            response=self._remote_command(d,key,payload) if d.address=="REMOTE" else self._raw_command(d,wire)
+            if response.get("type")!="encrypted":return response
+            riv=base64.b64decode(response["nonce"]);rc=base64.b64decode(response["ciphertext"])
+            return json.loads(AESGCM(key).decrypt(riv,rc,None).decode())
+
+        try:
+            return build_and_send()
+        except (ConnectionError, ValueError, KeyError) as first_error:
+            # A reinstall can keep the same Android ID while generating a new pair key.
+            # If the phone is reachable locally, discard the stale PC key, enroll again,
+            # and retry once automatically. Remote-only devices cannot be re-enrolled safely.
+            if d.address=="REMOTE":
+                raise first_error
+            self._keys.pop(d.device_id,None)
+            self._save_keys()
+            self.enroll(d)
+            return build_and_send()
     def ping(self,d):return self.command(d,"ping")
     def device_status(self,d):
         if d.address=="REMOTE":return dict(self._remote_status.get(d.device_id,{}),type="device_status")
