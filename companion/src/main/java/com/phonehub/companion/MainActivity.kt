@@ -18,7 +18,9 @@ import androidx.core.content.ContextCompat
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var setupButton: Button
-    private val notificationPermissionRequest = 7
+
+    private val runtimePermissionRequest = 7
+    private var waitingForNotificationAccess = false
     private var waitingForBatteryAccess = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,7 +33,7 @@ class MainActivity : Activity() {
         }
 
         val description = TextView(this).apply {
-            text = "Secure connection and Android policy bridge only. All controls, files, camera, screen, notifications and automation are managed from the PC."
+            text = "One-time phone enrollment for the secure PC connection and policy bridge. Approve the Android prompts once; normal control remains on the PC."
             textSize = 16f
             setPadding(48, 0, 48, 28)
         }
@@ -42,7 +44,7 @@ class MainActivity : Activity() {
         }
 
         setupButton = Button(this).apply {
-            text = "Complete one-time connection setup"
+            text = "Allow all once"
             setOnClickListener { beginSetup() }
         }
 
@@ -62,10 +64,23 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
 
-        if (waitingForBatteryAccess && backgroundAllowed()) {
-            waitingForBatteryAccess = false
-            CompanionService.start(this)
-            refreshStatus("Setup complete. Close this app and use Samsung Secure on the PC.")
+        if (waitingForNotificationAccess) {
+            if (notificationAccessAllowed()) {
+                waitingForNotificationAccess = false
+                continueSetup()
+                return
+            }
+            refreshStatus("Enable Samsung Secure notification access, then return here.")
+            return
+        }
+
+        if (waitingForBatteryAccess) {
+            if (backgroundAllowed()) {
+                waitingForBatteryAccess = false
+                finishSetup()
+                return
+            }
+            refreshStatus("Allow background operation, then return here.")
             return
         }
 
@@ -76,13 +91,18 @@ class MainActivity : Activity() {
     private fun beginSetup() {
         CompanionService.enable(this)
 
+        val missing = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.CAMERA)
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                notificationPermissionRequest
-            )
+            missing.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        if (missing.isNotEmpty()) {
+            refreshStatus("Approve the Android permission prompt(s). This is part of the one-time setup.")
+            ActivityCompat.requestPermissions(this, missing.toTypedArray(), runtimePermissionRequest)
             return
         }
 
@@ -92,9 +112,25 @@ class MainActivity : Activity() {
     private fun continueSetup() {
         CompanionService.enable(this)
 
+        if (!runtimePermissionsAllowed()) {
+            refreshStatus("One-time setup is incomplete. Tap Allow all once and approve Camera and Notifications.")
+            return
+        }
+
+        if (!notificationAccessAllowed()) {
+            waitingForNotificationAccess = true
+            refreshStatus("Next one-time approval: enable Samsung Secure notification access.")
+            try {
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            } catch (_: Exception) {
+                startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
+            }
+            return
+        }
+
         if (!backgroundAllowed()) {
             waitingForBatteryAccess = true
-            refreshStatus("One Android approval remains: allow background operation so the secure connection can reconnect automatically.")
+            refreshStatus("Final one-time approval: allow background operation so the secure connection can reconnect automatically.")
             try {
                 startActivity(
                     Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -107,8 +143,29 @@ class MainActivity : Activity() {
             return
         }
 
+        finishSetup()
+    }
+
+    private fun finishSetup() {
+        CompanionService.enable(this)
         CompanionService.start(this)
-        refreshStatus("Setup complete. Close this app and use Samsung Secure on the PC.")
+        refreshStatus("Setup complete. You can close this app and use Samsung Secure on the PC.")
+    }
+
+    private fun runtimePermissionsAllowed(): Boolean {
+        val camera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val notifications = Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        return camera && notifications
+    }
+
+    private fun notificationAccessAllowed(): Boolean {
+        return try {
+            val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: ""
+            enabled.contains(packageName, ignoreCase = true)
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun backgroundAllowed(): Boolean {
@@ -120,24 +177,44 @@ class MainActivity : Activity() {
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == notificationPermissionRequest) continueSetup()
+        if (requestCode != runtimePermissionRequest) return
+
+        if (runtimePermissionsAllowed()) {
+            continueSetup()
+        } else {
+            refreshStatus("Camera and Notifications must both be allowed to complete the one-time setup.")
+        }
     }
 
     private fun refreshStatus(extra: String? = null) {
         val enabled = CompanionService.isEnabled(this)
+        val camera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val notifications = Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        val notificationAccess = notificationAccessAllowed()
         val background = backgroundAllowed()
-        val complete = enabled && background
+        val complete = enabled && camera && notifications && notificationAccess && background
 
-        setupButton.text = if (complete) "Connection setup complete" else "Complete one-time connection setup"
+        setupButton.text = if (complete) "All one-time approvals complete" else "Allow all once"
         setupButton.isEnabled = !complete
 
         val lines = mutableListOf<String>()
         lines.add(if (enabled) "Secure connection: ready" else "Secure connection: setup required")
         lines.add("Policy bridge: ready")
+        lines.add(if (camera) "Camera permission: allowed" else "Camera permission: approval required")
+        lines.add(if (notifications) "Notifications permission: allowed" else "Notifications permission: approval required")
+        lines.add(if (notificationAccess) "Notification access: allowed" else "Notification access: approval required")
         lines.add(if (background) "Background reconnect: enabled" else "Background reconnect: approval required")
-        if (complete) lines.add("USB: not required")
+        if (complete) {
+            lines.add("USB: not required")
+            lines.add("Screen sharing is Android session-protected and may still require Android confirmation when started.")
+        }
         if (!extra.isNullOrBlank()) lines.add(extra)
         status.text = lines.joinToString("\n")
     }
