@@ -119,6 +119,21 @@ class CompanionService : Service() {
             "file_get"->{val f=transferFile(req.optString("name"));if(f==null||!f.exists()||!f.isFile)response.put("type","file_error").put("message","File not found") else if(f.length()>1048576L)response.put("type","file_error").put("message","File exceeds the 1 MB encrypted transfer limit") else response.put("type","file_data").put("name",f.name).put("size",f.length()).put("data",android.util.Base64.encodeToString(f.readBytes(),android.util.Base64.NO_WRAP))}
             "file_put"->{val f=transferFile(req.optString("name"));val data=req.optString("data");if(f==null||data.isBlank())response.put("type","file_error").put("message","Invalid file") else {try{val bytes=android.util.Base64.decode(data,android.util.Base64.NO_WRAP);if(bytes.size>1048576)response.put("type","file_error").put("message","File exceeds the 1 MB encrypted transfer limit") else {f.writeBytes(bytes);response.put("type","file_saved").put("name",f.name).put("size",f.length())}}catch(e:Exception){response.put("type","file_error").put("message",e.message?:"Could not save file")}}}
             "file_delete"->{val f=transferFile(req.optString("name"));if(f==null||!f.exists())response.put("type","file_error").put("message","File not found") else response.put("type","file_deleted").put("name",f.name).put("deleted",f.delete())}
+            "screen_prepare"->{
+                if(ScreenCaptureService.active){
+                    response.put("type","screen_ready").put("active",true)
+                }else{
+                    try{
+                        val i=Intent(this,MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            .putExtra("request_screen_share",true)
+                        startActivity(i)
+                        response.put("type","screen_consent_required").put("active",false)
+                    }catch(e:Exception){
+                        response.put("type","screen_error").put("message",e.message?:"Could not open Android screen-sharing approval.")
+                    }
+                }
+            }
             "webrtc_offer"->{val sdp=req.optString("sdp");ScreenCaptureService.answerOffer(sdp)}
             "webrtc_stop"->{ScreenCaptureService.stopWebRtc();response.put("type","webrtc_stopped")}
             "camera_webrtc_offer"->{
