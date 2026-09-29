@@ -99,6 +99,27 @@ function DoInstall {
 }
 
 
+function Invoke-AdbOptional {
+    param(
+        [string]$DeviceSerial,
+        [string[]]$Arguments
+    )
+    $oldPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& adb -s $DeviceSerial @Arguments 2>&1)
+        foreach($line in $output) {
+            if($line) { Write-Host $line }
+        }
+        return $LASTEXITCODE
+    } catch {
+        Write-Host "Optional Android setup step skipped: $($_.Exception.Message)"
+        return 1
+    } finally {
+        $ErrorActionPreference = $oldPreference
+    }
+}
+
 function GetPhoneTailscaleIp([string]$DeviceSerial) {
     try {
         $lines = @(& adb -s $DeviceSerial shell ip -4 addr show 2>$null)
@@ -127,14 +148,14 @@ function ConfigurePhoneHubTransport {
     $s = AdbSerial $Serial
 
     Write-Host "Granting Samsung Secure permissions..."
-    & adb -s $s shell pm grant $Pkg android.permission.CAMERA 2>$null
-    & adb -s $s shell pm grant $Pkg android.permission.POST_NOTIFICATIONS 2>$null
+    Invoke-AdbOptional $s @("shell","pm","grant",$Pkg,"android.permission.CAMERA") | Out-Null
+    Invoke-AdbOptional $s @("shell","pm","grant",$Pkg,"android.permission.POST_NOTIFICATIONS") | Out-Null
 
     Write-Host "Enabling notification bridge where Android permits it..."
-    & adb -s $s shell cmd notification allow_listener "$Pkg/.PhoneHubNotificationListener" 2>$null
+    Invoke-AdbOptional $s @("shell","cmd","notification","allow_listener","$Pkg/.PhoneHubNotificationListener") | Out-Null
 
     Write-Host "Allowing Samsung Secure background reconnect..."
-    & adb -s $s shell dumpsys deviceidle whitelist "+$Pkg" 2>$null
+    Invoke-AdbOptional $s @("shell","dumpsys","deviceidle","whitelist","+$Pkg") | Out-Null
 
     $tsIp = GetPhoneTailscaleIp $s
     if(-not $tsIp) {
