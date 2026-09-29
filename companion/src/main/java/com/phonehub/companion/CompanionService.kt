@@ -1,6 +1,7 @@
 ﻿package com.phonehub.companion
 
 import android.app.*
+import android.app.admin.DevicePolicyManager
 import android.content.*
 import android.os.*
 import android.provider.Settings
