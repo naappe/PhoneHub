@@ -192,7 +192,7 @@ class Window(QMainWindow):
 
     def policy_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);h=QLabel("App Policy");h.setObjectName("heading");l.addWidget(h);self.policy_title=QLabel("Select an app");self.policy_title.setObjectName("policyTitle");self.policy_package=QLabel("Choose an app from Apps, then double-click it or use Open App Policy.");self.policy_package.setObjectName("updated");l.addWidget(self.policy_title);l.addWidget(self.policy_package)
-        self.policy_status=QLabel("Policies are stored on the phone and synchronized through the encrypted Companion channel.");self.policy_status.setWordWrap(True);l.addWidget(self.policy_status)
+        self.policy_status=QLabel("Policies are stored on the phone and synchronized through the encrypted Companion channel.");self.policy_status.setWordWrap(True);l.addWidget(self.policy_status);self.policy_mode=QLabel("Enforcement mode: checking phone...");self.policy_mode.setObjectName("updated");l.addWidget(self.policy_mode)
         self.policy_checks={}
         for key,text,on in [("keep_installed","Keep installed",True),("allow_usage","Allow usage",True),("suspend","Suspend",False),("show_notifications","Show notifications",True),("forward_notifications","Forward to PhoneHub",False),("protect_changes","Protect from changes",False),("auto_apply","Auto apply on sync",True)]:
             cb=QCheckBox(text);cb.setChecked(on);cb.setEnabled(False);self.policy_checks[key]=cb;l.addWidget(cb)
@@ -239,13 +239,17 @@ class Window(QMainWindow):
                 if d is not None:self._start_webrtc(d)
         elif tag=="policy_get":
             if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
-            p=result.get("policy",{})
+            p=result.get("policy",{});e=result.get("enforcement",{});mode=e.get("mode","standard")
             for key,cb in self.policy_checks.items():cb.setChecked(bool(p.get(key,cb.isChecked())));cb.setEnabled(True)
-            self.policy_save.setEnabled(True);self.policy_status.setText("Policy loaded from phone | remote encrypted sync ready")
+            self.policy_save.setEnabled(True);self.policy_mode.setText("Enforcement mode: Device Owner" if mode=="device_owner" else "Enforcement mode: Standard Android")
+            if mode=="device_owner":self.policy_status.setText("Policy loaded | strong app controls available")
+            else:self.policy_status.setText("Policy loaded | settings sync now; Android requires Device Owner for suspend/uninstall protection")
         elif tag=="policy_set":
             self.policy_save.setEnabled(True)
             if isinstance(result,Exception):self.policy_status.setText(f"Save failed: {result}");return
-            self.policy_status.setText("Saved on phone | Android-restricted controls are stored but are not silently enforced")
+            e=result.get("enforcement",{});a=result.get("apply_result",{});mode=e.get("mode","standard")
+            self.policy_mode.setText("Enforcement mode: Device Owner" if mode=="device_owner" else "Enforcement mode: Standard Android")
+            self.policy_status.setText(result.get("message","Policy saved on phone"))
         elif tag=="apps":
             self._apps_loading=False
             if isinstance(result,Exception):self.app_count.setText(f"Apps unavailable: {result}");return
