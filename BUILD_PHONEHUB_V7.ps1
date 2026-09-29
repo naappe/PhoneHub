@@ -7,7 +7,13 @@ Set-Location $Root
 $Keystore = Join-Path $Root "phonehub-release.jks"
 $Apk = Join-Path $Root "companion\build\outputs\apk\release\companion-release.apk"
 $OutDir = Join-Path $Root "dist"
-$OutApk = Join-Path $OutDir "PhoneHub-Companion-7.0.0-dev18.apk"
+
+$GradleFile = Join-Path $Root "companion\build.gradle.kts"
+$GradleText = Get-Content $GradleFile -Raw
+$VersionMatch = [regex]::Match($GradleText, 'versionName\s*=\s*"([^"]+)"')
+if (-not $VersionMatch.Success) { throw "Could not read Companion versionName from $GradleFile" }
+$VersionName = $VersionMatch.Groups[1].Value
+$OutApk = Join-Path $OutDir ("PhoneHub-Companion-{0}.apk" -f $VersionName)
 $SdkRoot = Join-Path $env:LOCALAPPDATA "Android\Sdk"
 $CmdRoot = Join-Path $SdkRoot "cmdline-tools"
 $Latest = Join-Path $CmdRoot "latest"
@@ -15,6 +21,7 @@ $SdkManager = Join-Path $Latest "bin\sdkmanager.bat"
 
 Write-Host "========================================"
 Write-Host " PhoneHub 7 - Automatic Local Builder"
+Write-Host " Version: $VersionName"
 Write-Host "========================================"
 
 if (-not (Test-Path $Keystore)) { throw "Signing key not found: $Keystore" }
@@ -85,6 +92,7 @@ try {
 
     if (-not (Test-Path $Apk)) { throw "Signed APK was not produced." }
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+    Get-ChildItem $OutDir -Filter "PhoneHub-Companion-*.apk" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Copy-Item $Apk $OutApk -Force
     Write-Host "[2/3] Signed APK ready: $OutApk"
     Write-Host "[3/3] Build complete."
