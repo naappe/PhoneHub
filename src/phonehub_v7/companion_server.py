@@ -66,6 +66,7 @@ class CompanionServer:
             if not page.get("has_more"):return {"type":"apps","apps":items,"count":len(items)}
             offset=int(page.get("next_offset",offset+50))
     def capabilities(self,d):return self.command(d,"capabilities")
+    def notifications(self,d):return self.command(d,"notifications")
     def screen_status(self,d):return self.command(d,"screen_status")
     def camera_status(self,d):return self.command(d,"camera_status")
     def camera_start(self,d,lens="back"):return self.command(d,"camera_start",{"lens":lens})
