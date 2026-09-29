@@ -30,7 +30,7 @@ class Launcher(QMainWindow):
         super().__init__()
         self.root = project_root()
         self.script = self.root / 'PHONEHUB.ps1'
-        self.setWindowTitle('PhoneHub')
+        self.setWindowTitle('Samsung Secure')
         self.setMinimumSize(620, 520)
 
         central = QWidget()
@@ -39,9 +39,9 @@ class Launcher(QMainWindow):
         layout.setContentsMargins(34, 30, 34, 30)
         layout.setSpacing(16)
 
-        title = QLabel('PhoneHub')
+        title = QLabel('Samsung Secure')
         title.setObjectName('title')
-        subtitle = QLabel('Simple phone. Powerful PC.')
+        subtitle = QLabel('One-time phone setup. Secure PC control.')
         subtitle.setObjectName('subtitle')
         info = QLabel(f'Project: {self.root}')
         info.setObjectName('info')
@@ -95,7 +95,7 @@ class Launcher(QMainWindow):
 
     def run_action(self, action: str):
         if not self.script.exists():
-            QMessageBox.critical(self, 'PhoneHub', f'PHONEHUB.ps1 was not found in:\n{self.root}')
+            QMessageBox.critical(self, 'Samsung Secure', f'PHONEHUB.ps1 was not found in:\n{self.root}')
             return
         command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(self.script), action]
         flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
