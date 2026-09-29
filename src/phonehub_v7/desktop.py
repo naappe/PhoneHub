@@ -57,7 +57,6 @@ class Window(QMainWindow):
         self.stack.addWidget(self.info_page("Logs","PC audit log: secure connections, commands, policy changes, transfers and errors will appear here."))
         self.stack.addWidget(self.info_page("Settings","PC-side connection, pairing, protection, backup, updates and new-phone setup will live here."))
         self.stack.currentChanged.connect(self.page_changed);self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000)
-        self.camera_timer=QTimer(self);self.camera_timer.timeout.connect(self.request_camera_frame);self.camera_timer.setInterval(900)
         QTimer.singleShot(400,self.refresh)
 
     def home(self):
