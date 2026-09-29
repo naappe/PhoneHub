@@ -2,6 +2,7 @@ package com.phonehub.companion
 
 import android.Manifest
 import android.app.Activity
+import android.media.projection.MediaProjectionManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -20,6 +21,7 @@ class MainActivity : Activity() {
     private lateinit var setupButton: Button
 
     private val runtimePermissionRequest = 7
+    private val screenProjectionRequest = 8
     private var waitingForNotificationAccess = false
     private var waitingForBatteryAccess = false
 
@@ -57,6 +59,10 @@ class MainActivity : Activity() {
             addView(setupButton)
         })
 
+        if (intent?.getBooleanExtra("request_screen_share", false) == true) {
+            requestScreenProjection()
+        }
+
         if (intent?.getBooleanExtra("pc_enroll", false) == true) {
             CompanionService.enable(this)
             CompanionService.start(this)
@@ -91,6 +97,28 @@ class MainActivity : Activity() {
 
         if (CompanionService.isEnabled(this)) CompanionService.start(this)
         refreshStatus()
+    }
+
+    private fun requestScreenProjection() {
+        if (ScreenCaptureService.active) {
+            refreshStatus("Screen sharing is already active. Return to PhoneHub on the PC.")
+            return
+        }
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        refreshStatus("Approve Android's screen sharing prompt. PhoneHub will connect automatically after approval.")
+        startActivityForResult(manager.createScreenCaptureIntent(), screenProjectionRequest)
+    }
+
+    @Deprecated("Deprecated in Android API; retained for MediaProjection consent compatibility.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != screenProjectionRequest) return
+        if (resultCode == RESULT_OK && data != null) {
+            ScreenCaptureService.start(this, resultCode, data)
+            refreshStatus("Screen sharing started. You can return to PhoneHub on the PC.")
+        } else {
+            refreshStatus("Screen sharing was not approved.")
+        }
     }
 
     private fun beginSetup() {
