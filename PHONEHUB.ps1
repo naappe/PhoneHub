@@ -184,49 +184,23 @@ function SaveTailscaleDevice([string]$Ip) {
 }
 
 function ConfigurePhoneHubTransport {
-    Title "One-Time Tailscale Enrollment"
+    Title "One-Time Samsung Secure Enrollment"
     $s = AdbSerial $Serial
 
-    Write-Host "Granting Samsung Secure permissions..."
-    Invoke-AdbOptional $s @("shell","pm","grant",$Pkg,"android.permission.CAMERA") | Out-Null
-    Invoke-AdbOptional $s @("shell","pm","grant",$Pkg,"android.permission.POST_NOTIFICATIONS") | Out-Null
-
-    Write-Host "Enabling notification bridge where Android permits it..."
+    Write-Host "Preparing Samsung Secure..."
     Invoke-AdbOptional $s @("shell","cmd","notification","allow_listener","$Pkg/.PhoneHubNotificationListener") | Out-Null
-
-    Write-Host "Allowing Samsung Secure background reconnect..."
     Invoke-AdbOptional $s @("shell","dumpsys","deviceidle","whitelist","+$Pkg") | Out-Null
-
-    $tsIp = WaitForPhoneTailscaleIp $s 90
-    if(-not $tsIp) {
-        throw "Tailscale is not connected on the phone. Sign in/enable Tailscale on Android, wait until it shows connected, then run .\PHONEHUB.ps1 setup again."
-    }
-
-    SaveTailscaleDevice $tsIp
-    Write-Host "PhoneHub network fabric: Tailscale $tsIp"
-
-    Write-Host "Preparing unattended ADB/scrcpy path..."
-    & adb -s $s tcpip 5555 | Out-Host
-    Start-Sleep -Seconds 2
-
-    $target = "$($tsIp):5555"
-    & adb connect $target | Out-Host
-    $adbReady = ((& adb devices) -match [regex]::Escape($target))
-    if($adbReady) {
-        Write-Host "ADB over Tailscale ready: $target"
-    } else {
-        Write-Host "ADB :5555 is not reachable yet. Samsung Secure command/WebRTC path remains available on Tailscale."
-    }
 
     Write-Host "Starting Samsung Secure enrollment..."
     & adb -s $s shell am start -n "$Pkg/.MainActivity" --ez pc_enroll true | Out-Host
     Start-Sleep -Seconds 2
 
     Write-Host ""
-    Write-Host "PhoneHub Tailscale setup complete."
-    Write-Host "Control: encrypted TCP over $($tsIp):47322"
-    Write-Host "Screen/Camera preferred path: scrcpy over $target"
-    Write-Host "Fallback media path: Samsung Secure WebRTC over the same tailnet."
+    Write-Host "PhoneHub setup complete."
+    Write-Host "Primary control: Samsung Secure encrypted Internet relay."
+    Write-Host "Screen/Camera: WebRTC over the Internet."
+    Write-Host "USB/local authorized ADB + scrcpy remains an optional fast path."
+    Write-Host "Tailscale is not required by PhoneHub."
 }
 
 function DoStart {
