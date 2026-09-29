@@ -2,9 +2,14 @@ param()
 $ErrorActionPreference="Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 $Root=Split-Path -Parent $MyInvocation.MyCommand.Path
-$Apk=Join-Path $Root "dist\PhoneHub-Companion-7.0.0-dev18.apk"
 $Pkg="com.phonehub.companion"
-if(-not(Test-Path $Apk)){throw "APK not found: $Apk"}
+$Dist=Join-Path $Root "dist"
+$ApkItem=Get-ChildItem $Dist -Filter "PhoneHub-Companion-*.apk" -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+if(-not $ApkItem){throw "No PhoneHub Companion APK found in $Dist. Run BUILD_PHONEHUB_V7.ps1 first."}
+$Apk=$ApkItem.FullName
+Write-Host "Installing: $($ApkItem.Name)"
 if(-not(Get-Command adb -ErrorAction SilentlyContinue)){throw "adb not found."}
 
 $devices = @(& adb devices | Select-Object -Skip 1 | ForEach-Object {
