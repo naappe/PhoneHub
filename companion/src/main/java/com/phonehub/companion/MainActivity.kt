@@ -2,7 +2,6 @@ package com.phonehub.companion
 
 import android.Manifest
 import android.app.Activity
-import android.media.projection.MediaProjectionManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -23,12 +22,11 @@ import androidx.core.content.ContextCompat
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var setupButton: Button
+    private lateinit var screenButton: Button
 
     private val runtimePermissionRequest = 7
-    private val screenProjectionRequest = 8
     private var waitingForNotificationAccess = false
     private var waitingForBatteryAccess = false
-    private var screenConsentInFlight = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,25 +85,23 @@ class MainActivity : Activity() {
         }
 
         val screenHint = label(
-            "Remote screen\nWhen the PC requests Screen, Android may ask you to approve screen sharing. Approve it once for that live session; Samsung Secure then continues automatically.",
+            "Remote screen\nSamsung Secure now uses Android Screen Access snapshots instead of casting or MediaProjection. Enable it once; there is no Start casting prompt for each session.",
             14f, Color.rgb(71, 85, 105)
         ).apply {
             setPadding(dp(18), dp(16), dp(18), dp(16))
             background = rounded(Color.rgb(238, 242, 255), 16)
         }
-        val screenButton = Button(this).apply {
-            text = "Start screen sharing"
+        screenButton = Button(this).apply {
             isAllCaps = false
             textSize = 15f
             setTextColor(Color.WHITE)
             background = rounded(Color.rgb(37, 99, 235), 14)
             setOnClickListener {
-                if (ScreenCaptureService.active) {
-                    refreshStatus("Screen sharing is already active and ready for the PC.")
-                    text = "Screen sharing active"
-                    isEnabled = false
+                if (PhoneHubScreenAccessService.isReady()) {
+                    refreshStatus("Screen access is ready for the PC.")
                 } else {
-                    requestScreenProjection()
+                    refreshStatus("Enable Samsung Secure Screen Access, then return here.")
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 }
             }
         }
@@ -119,11 +115,6 @@ class MainActivity : Activity() {
         page.addView(screenButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(12) })
         setContentView(page)
 
-        if (intent?.getBooleanExtra("request_screen_share", false) == true) {
-            intent?.removeExtra("request_screen_share")
-            requestScreenProjection()
-        }
-
         if (intent?.getBooleanExtra("pc_enroll", false) == true) {
             CompanionService.enable(this)
             CompanionService.start(this)
@@ -136,10 +127,6 @@ class MainActivity : Activity() {
     override fun onNewIntent(newIntent: Intent) {
         super.onNewIntent(newIntent)
         setIntent(newIntent)
-        if (newIntent.getBooleanExtra("request_screen_share", false)) {
-            newIntent.removeExtra("request_screen_share")
-            requestScreenProjection()
-        }
     }
 
     override fun onResume() {
@@ -167,31 +154,6 @@ class MainActivity : Activity() {
 
         if (CompanionService.isEnabled(this)) CompanionService.start(this)
         refreshStatus()
-    }
-
-    private fun requestScreenProjection() {
-        if (screenConsentInFlight) return
-        if (ScreenCaptureService.active) {
-            refreshStatus("Screen sharing is already active. Return to PhoneHub on the PC.")
-            return
-        }
-        val manager = getSystemService(MediaProjectionManager::class.java)
-        screenConsentInFlight = true
-        refreshStatus("Approve Android's screen sharing prompt. PhoneHub will connect automatically after approval.")
-        startActivityForResult(manager.createScreenCaptureIntent(), screenProjectionRequest)
-    }
-
-    @Deprecated("Deprecated in Android API; retained for MediaProjection consent compatibility.")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != screenProjectionRequest) return
-        screenConsentInFlight = false
-        if (resultCode == RESULT_OK && data != null) {
-            ScreenCaptureService.start(this, resultCode, data)
-            refreshStatus("Screen sharing started. You can return to PhoneHub on the PC.")
-        } else {
-            refreshStatus("Screen sharing was not approved.")
-        }
     }
 
     private fun beginSetup() {
@@ -291,6 +253,9 @@ class MainActivity : Activity() {
 
         setupButton.text = if (complete) "Setup complete" else "Complete setup"
         setupButton.visibility = if (complete) View.GONE else View.VISIBLE
+        val screenReady = PhoneHubScreenAccessService.isReady()
+        screenButton.text = if (screenReady) "Screen access ready" else "Enable screen access"
+        screenButton.isEnabled = !screenReady
 
         val lines = mutableListOf<String>()
         lines.add(if (enabled) "● Secure connection ready" else "○ Secure connection setup required")
@@ -299,6 +264,7 @@ class MainActivity : Activity() {
         lines.add(if (notifications) "● Notifications allowed" else "○ Notifications approval required")
         lines.add(if (notificationAccess) "● Notification access allowed" else "○ Notification access required")
         lines.add(if (background) "● Background reconnect enabled" else "○ Background reconnect approval required")
+        lines.add(if (screenReady) "● Screen access ready" else "○ Screen access not enabled")
         if (complete) {
             lines.add("")
             lines.add("Internet relay ready • USB not required")
