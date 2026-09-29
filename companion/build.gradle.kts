@@ -17,8 +17,8 @@ android {
         applicationId = "com.phonehub.companion"
         minSdk = 26
         targetSdk = 35
-        versionCode = 97
-        versionName = "7.0.0-dev29"
+        versionCode = 98
+        versionName = "7.0.0-dev30"
     }
     buildTypes {
         getByName("release") {
