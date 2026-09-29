@@ -147,6 +147,7 @@ class CompanionServer:
         self._keys[actual_id] = r["pair_key"]
         self._save_keys()
         self._save_endpoint(d)
+        self.save_device(d.device_name, d.address, actual_id, d.command_port)
         return r
 
     def command(self, d, command_type, extra=None):
