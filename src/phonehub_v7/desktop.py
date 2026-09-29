@@ -215,10 +215,10 @@ class Window(QMainWindow):
     def task_done(self,tag,result):
         if tag=="status":
             self._busy=False
-            if isinstance(result,Exception):self.connection.setText(f"CONNECTED: Connected | status unavailable: {result}");return
+            if isinstance(result,Exception):self.connection.setText(f"Status refresh delayed - {result}");self.connection.setStyleSheet("color:#b45309;font-weight:600");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setText(f"CONNECTED:  Connected securely  |  {d.address}  |  AES-256-GCM");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
+            self.connection.setStyleSheet("");self.connection.setText(f"Connected securely | {d.address} | AES-256-GCM");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
             self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Encrypted Companion")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
             self.network.value.setText(s.get("network","-"));self.network.detail.setText("Active connection")
@@ -293,7 +293,7 @@ class Window(QMainWindow):
     def refresh(self):
         ds=self.server.devices()
         if not ds:
-            self.connection.setText("CONNECTED:  Waiting for PhoneHub Companion");self.updated.setText("Offline");return
+            self.connection.setStyleSheet("");self.connection.setText("Waiting for PhoneHub Companion");self.updated.setText("Offline");return
         if self._busy:return
         d=ds[0];self._busy=True;self.run_task("status",lambda:(d,self.server.device_status(d)))
 
