@@ -171,87 +171,31 @@ class Window(QMainWindow):
         self.screen_status.setText("Starting remote WebRTC screen...");self.screen_view.setText("Connecting remote live screen...")
         self.screen_client.start(d)
 
-    def wireless_adb_path(self):
-        p=Path.home()/".phonehub";p.mkdir(parents=True,exist_ok=True);return p/"wireless_adb_target.txt"
 
-    def tailscale_adb_candidates(self):
-        exe=shutil.which("tailscale")
-        if not exe:return []
-        flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
-        try:
-            r=subprocess.run([exe,"status","--json"],capture_output=True,text=True,timeout=8,creationflags=flags)
-            if r.returncode!=0:return []
-            data=json.loads(r.stdout or "{}")
-        except Exception:
-            return []
-        out=[]
-        peers=data.get("Peer",{}) or {}
-        values=peers.values() if isinstance(peers,dict) else peers
-        for peer in values:
-            if not isinstance(peer,dict):continue
-            online=peer.get("Online",True)
-            if online is False:continue
-            os_name=str(peer.get("OS","") or "").lower()
-            host=str(peer.get("HostName","") or "").lower()
-            dns=str(peer.get("DNSName","") or "").lower()
-            if "android" not in os_name and "android" not in host and "android" not in dns:
-                continue
-            for ip in peer.get("TailscaleIPs",[]) or []:
-                if ":" in str(ip):continue
-                target=f"{ip}:5555"
-                if target not in out:out.append(target)
-        return out
 
     def _start_scrcpy_local(self,d):
         if not shutil.which("adb"):return {"ok":False,"reason":"ADB is not installed"}
         if not shutil.which("scrcpy"):return {"ok":False,"reason":"scrcpy is not installed"}
         flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
-        devices=subprocess.run(["adb","devices"],capture_output=True,text=True,timeout=5,creationflags=flags)
-        connected=[]
-        for line in (devices.stdout or "").splitlines()[1:]:
-            parts=line.split()
-            if len(parts)>=2 and parts[1]=="device" and ":" in parts[0]:
-                connected.append(parts[0])
+        target=f"{d.address}:5555"
 
-        candidates=[]
-        def add(value):
-            value=(value or "").strip()
-            if value and value not in candidates:candidates.append(value)
+        try:
+            with socket.create_connection((d.address,5555),timeout=1.0):pass
+        except OSError:
+            return {"ok":False,"reason":f"ADB over Tailscale is not reachable at {target}"}
 
-        if d.address!="REMOTE":add(f"{d.address}:5555")
-        for value in self.tailscale_adb_candidates():add(value)
-        try:add(self.wireless_adb_path().read_text(encoding="utf-8"))
-        except Exception:pass
-        for value in connected:add(value)
+        try:
+            connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
+            output=((connect.stdout or "")+" "+(connect.stderr or "")).strip()
+            low=output.lower()
+            if connect.returncode!=0 or ("connected to" not in low and "already connected" not in low):
+                return {"ok":False,"reason":output or f"ADB connection failed at {target}"}
+        except Exception as e:
+            return {"ok":False,"reason":str(e)}
 
-        failures=[]
-        for target in candidates:
-            try:
-                host,port_text=target.rsplit(":",1);port=int(port_text)
-            except Exception:
-                failures.append(f"{target}: invalid target");continue
-            try:
-                with socket.create_connection((host,port),timeout=1.0):pass
-            except OSError:
-                failures.append(f"{target}: unreachable");continue
-            if target not in connected:
-                try:
-                    connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
-                    output=((connect.stdout or "")+" "+(connect.stderr or "")).strip()
-                    low=output.lower()
-                    if connect.returncode!=0 or ("connected to" not in low and "already connected" not in low):
-                        failures.append(f"{target}: {output or 'ADB connection failed'}");continue
-                except Exception as e:
-                    failures.append(f"{target}: {e}");continue
-            try:self.wireless_adb_path().write_text(target,encoding="utf-8")
-            except Exception:pass
-            args=["scrcpy","-s",target,"--window-title=PhoneHub Screen - Local Control","--max-size=1600","--max-fps=60","--video-bit-rate=8M","--no-audio","--stay-awake"]
-            process=subprocess.Popen(args,creationflags=flags)
-            return {"ok":True,"process":process,"target":target}
-
-        reason="no reachable authorized wireless ADB target"
-        if failures:reason+=" ("+"; ".join(failures[:3])+")"
-        return {"ok":False,"reason":reason}
+        args=["scrcpy","-s",target,"--window-title=PhoneHub Screen - Tailscale Control","--max-size=1600","--max-fps=60","--video-bit-rate=8M","--no-audio","--stay-awake"]
+        process=subprocess.Popen(args,creationflags=flags)
+        return {"ok":True,"process":process,"target":target}
 
 
     def show_screen_state(self,state):
@@ -359,16 +303,16 @@ class Window(QMainWindow):
     def camera_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Camera");h.setObjectName("heading");self.camera_status_label=QLabel("Camera idle");self.camera_status_label.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.camera_status_label);l.addLayout(top)
-        help_text=QLabel("Camera uses local scrcpy/ADB when reachable and encrypted WebRTC through Samsung Secure when the phone is on another network.");help_text.setWordWrap(True);l.addWidget(help_text)
+        help_text=QLabel("Camera uses scrcpy/ADB over the phone's Tailscale address when reachable, with Samsung Secure WebRTC fallback over the same private network.");help_text.setWordWrap(True);l.addWidget(help_text)
         controls=QHBoxLayout();self.camera_lens=QComboBox();self.camera_lens.addItems(["Back camera","Front camera"]);self.camera_start_button=QPushButton("Open camera");self.camera_stop_button=QPushButton("Stop camera");self.camera_start_button.clicked.connect(self.start_camera);self.camera_stop_button.clicked.connect(self.stop_camera);controls.addWidget(self.camera_lens);controls.addWidget(self.camera_start_button);controls.addWidget(self.camera_stop_button);controls.addStretch();l.addLayout(controls)
-        self.camera_view=QLabel("Open the camera from this PC. PhoneHub chooses local scrcpy or remote WebRTC automatically.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
+        self.camera_view=QLabel("Open the camera from this PC. PhoneHub chooses Tailscale ADB/scrcpy first, then WebRTC fallback.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
         return p
 
     def refresh_camera_status(self):
         if self._camera_process is not None and self._camera_process.poll() is None:
             self._camera_active=True;self.camera_status_label.setText("SCRCPY CAMERA ACTIVE")
         else:
-            self._camera_active=False;self._camera_process=None;self.camera_status_label.setText("Ready | local scrcpy or remote WebRTC")
+            self._camera_active=False;self._camera_process=None;self.camera_status_label.setText("Ready | Tailscale scrcpy or WebRTC fallback")
 
     def start_camera(self):
         if self._camera_process is not None and self._camera_process.poll() is None:
@@ -396,52 +340,33 @@ class Window(QMainWindow):
     def _start_scrcpy_camera(self,lens):
         if not shutil.which("adb"):return {"ok":False,"reason":"ADB is not installed"}
         if not shutil.which("scrcpy"):return {"ok":False,"reason":"scrcpy is not installed"}
+        ds=self.server.devices()
+        if not ds:return {"ok":False,"reason":"No enrolled Tailscale phone"}
+        d=ds[0]
+        target=f"{d.address}:5555"
         flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
-        devices=subprocess.run(["adb","devices"],capture_output=True,text=True,timeout=5,creationflags=flags)
-        connected=[]
-        for line in (devices.stdout or "").splitlines()[1:]:
-            parts=line.split()
-            if len(parts)>=2 and parts[1]=="device":connected.append(parts[0])
 
-        candidates=[]
-        def add(value):
-            value=(value or "").strip()
-            if value and value not in candidates:candidates.append(value)
+        try:
+            with socket.create_connection((d.address,5555),timeout=1.0):pass
+        except OSError:
+            return {"ok":False,"reason":f"ADB over Tailscale is not reachable at {target}"}
 
-        for value in self.tailscale_adb_candidates():add(value)
-        try:add(self.wireless_adb_path().read_text(encoding="utf-8"))
-        except Exception:pass
-        for value in connected:add(value)
+        try:
+            connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
+            output=((connect.stdout or "")+" "+(connect.stderr or "")).strip()
+            low=output.lower()
+            if connect.returncode!=0 or ("connected to" not in low and "already connected" not in low):
+                return {"ok":False,"reason":output or f"ADB connection failed at {target}"}
+        except Exception as e:
+            return {"ok":False,"reason":str(e)}
 
-        failures=[]
-        for target in candidates:
-            if ":" in target:
-                try:
-                    host,port_text=target.rsplit(":",1);port=int(port_text)
-                    with socket.create_connection((host,port),timeout=1.0):pass
-                except Exception:
-                    failures.append(f"{target}: unreachable");continue
-                if target not in connected:
-                    try:
-                        connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
-                        output=((connect.stdout or "")+" "+(connect.stderr or "")).strip()
-                        low=output.lower()
-                        if connect.returncode!=0 or ("connected to" not in low and "already connected" not in low):
-                            failures.append(f"{target}: {output or 'ADB connection failed'}");continue
-                    except Exception as e:
-                        failures.append(f"{target}: {e}");continue
-            try:self.wireless_adb_path().write_text(target,encoding="utf-8")
-            except Exception:pass
-            args=["scrcpy","-s",target,"--video-source=camera",f"--camera-facing={lens}","--no-audio",f"--window-title=PhoneHub Camera - {lens.title()}"]
-            try:
-                process=subprocess.Popen(args,creationflags=flags)
-                return {"ok":True,"process":process,"target":target,"lens":lens}
-            except Exception as e:
-                failures.append(f"{target}: {e}")
+        args=["scrcpy","-s",target,"--video-source=camera",f"--camera-facing={lens}","--no-audio",f"--window-title=PhoneHub Camera - {lens.title()}"]
+        try:
+            process=subprocess.Popen(args,creationflags=flags)
+            return {"ok":True,"process":process,"target":target,"lens":lens}
+        except Exception as e:
+            return {"ok":False,"reason":str(e)}
 
-        reason="no reachable authorized ADB target"
-        if failures:reason+=" ("+"; ".join(failures[:3])+")"
-        return {"ok":False,"reason":reason}
 
     def info_page(self,title,body):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,32,36,32);h=QLabel(title);h.setObjectName("heading");l.addWidget(h);d=QLabel(body);d.setWordWrap(True);l.addWidget(d);l.addStretch();return p
