@@ -1,20 +1,15 @@
 package com.phonehub.companion
 
-import android.Manifest
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 
 object CapabilityManager {
-    fun cameraAllowed(context: Context): Boolean =
-        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     fun notificationsRuntimeAllowed(context: Context): Boolean =
         Build.VERSION.SDK_INT < 33 ||
@@ -60,16 +55,13 @@ object CapabilityManager {
     }
 
     fun requiredApprovalsComplete(context: Context): Boolean =
-        CompanionService.isEnabled(context) &&
-            cameraAllowed(context) &&
-            notificationsRuntimeAllowed(context) &&
+        CompanionService.isEnabled(context) &&            notificationsRuntimeAllowed(context) &&
             notificationAccessAllowed(context) &&
             backgroundAllowed(context)
 
     fun missingRequired(context: Context): List<String> {
         val missing = mutableListOf<String>()
         if (!CompanionService.isEnabled(context)) missing.add("secure_connection")
-        if (!cameraAllowed(context)) missing.add("camera")
         if (!notificationsRuntimeAllowed(context)) missing.add("notifications_permission")
         if (!notificationAccessAllowed(context)) missing.add("notification_access")
         if (!backgroundAllowed(context)) missing.add("background_reconnect")
@@ -82,8 +74,7 @@ object CapabilityManager {
             .put("enrollment_complete", missing.isEmpty())
             .put("missing_required", JSONArray(missing))
             .put("secure_connection", CompanionService.isEnabled(context))
-            .put("camera", cameraAllowed(context))
-            .put("notifications_permission", notificationsRuntimeAllowed(context))
+                        .put("notifications_permission", notificationsRuntimeAllowed(context))
             .put("notification_access", notificationAccessAllowed(context))
             .put("background_reconnect", backgroundAllowed(context))
             .put("boot_reconnect", true)
@@ -92,6 +83,7 @@ object CapabilityManager {
             .put("policy_bridge", true)
             .put("device_admin", deviceAdminActive(context))
             .put("device_owner", deviceOwner(context))
+            .put("scrcpy_camera_available", true)
             .put("screen_capture_available", true)
             .put("screen_session_authorization_required", true)
             .put("usb_required_after_setup", false)
