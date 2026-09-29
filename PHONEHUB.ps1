@@ -98,6 +98,85 @@ function DoInstall {
     Write-Host "Installed $($apk.Name) on $s"
 }
 
+
+function GetPhoneTailscaleIp([string]$DeviceSerial) {
+    try {
+        $lines = @(& adb -s $DeviceSerial shell ip -4 addr show 2>$null)
+        foreach($line in $lines) {
+            if($line -match 'inet\s+(100\.\d+\.\d+\.\d+)/') { return $matches[1] }
+        }
+    } catch {}
+    return ""
+}
+
+function SaveWirelessAdbTarget([string]$Target) {
+    if(-not $Target) { return }
+    $dir = Join-Path $HOME ".phonehub"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    Set-Content -Path (Join-Path $dir "wireless_adb_target.txt") -Value $Target -Encoding UTF8
+}
+
+function ConfigurePhoneHubTransport {
+    Title "One-Time Phone Enrollment"
+    $s = AdbSerial $Serial
+
+    Write-Host "Granting Samsung Secure permissions..."
+    & adb -s $s shell pm grant $Pkg android.permission.CAMERA 2>$null
+    & adb -s $s shell pm grant $Pkg android.permission.POST_NOTIFICATIONS 2>$null
+
+    Write-Host "Enabling notification bridge where Android permits it..."
+    & adb -s $s shell cmd notification allow_listener "$Pkg/.PhoneHubNotificationListener" 2>$null
+
+    Write-Host "Allowing Samsung Secure background reconnect..."
+    & adb -s $s shell dumpsys deviceidle whitelist "+$Pkg" 2>$null
+
+    Write-Host "Preparing persistent ADB transport..."
+    $tsIp = GetPhoneTailscaleIp $s
+
+    & adb -s $s tcpip 5555 | Out-Host
+    Start-Sleep -Seconds 2
+
+    $target = ""
+    if($tsIp) {
+        $candidate = "$($tsIp):5555"
+        Write-Host "Testing Tailscale ADB: $candidate"
+        & adb connect $candidate | Out-Host
+        if((& adb devices) -match [regex]::Escape($candidate)) {
+            $target = $candidate
+        }
+    }
+
+    if(-not $target) {
+        $wifiIp = ""
+        try {
+            $route = (& adb -s $s shell ip route 2>$null | Select-String -Pattern 'src\s+(\d+\.\d+\.\d+\.\d+)' | Select-Object -First 1)
+            if($route -and $route.Matches.Count -gt 0) { $wifiIp = $route.Matches[0].Groups[1].Value }
+        } catch {}
+        if($wifiIp) {
+            $candidate = "$($wifiIp):5555"
+            & adb connect $candidate | Out-Host
+            if((& adb devices) -match [regex]::Escape($candidate)) { $target = $candidate }
+        }
+    }
+
+    if($target) {
+        SaveWirelessAdbTarget $target
+        Write-Host "Persistent ADB target saved: $target"
+    } else {
+        Write-Host "ADB TCP is enabled on port 5555. PhoneHub will discover the Tailscale target automatically when available."
+    }
+
+    Write-Host "Starting Samsung Secure one-time enrollment..."
+    & adb -s $s shell am start -n "$Pkg/.MainActivity" --ez pc_enroll true | Out-Host
+    Start-Sleep -Seconds 2
+
+    Write-Host ""
+    Write-Host "PhoneHub transport setup complete."
+    Write-Host "Screen: scrcpy over authorized ADB/Tailscale."
+    Write-Host "Camera: scrcpy camera over authorized ADB/Tailscale."
+    Write-Host "Samsung Secure: policy, status, notifications, reconnect and remote fallback."
+}
+
 function DoStart {
     Title "Start"
     if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "Python 3 is required." }
@@ -196,7 +275,7 @@ switch($Action){
     "clean" { DoClean }
     "status" { DoStatus }
     "exe" { DoExe }
-    "setup" { DoUpdate; DoBuild; DoInstall; DoStart }
+    "setup" { DoUpdate; DoBuild; DoInstall; ConfigurePhoneHubTransport; DoStart }
     default {
         Title "Master Command"
         Write-Host ".\PHONEHUB.ps1 update|build|install|start|setup|backup|remove|clean|status|exe"
