@@ -31,8 +31,19 @@ class CompanionService : Service() {
         fun isEnabled(c:Context)=c.getSharedPreferences(PREFS,0).getBoolean(ENABLED,false)
         fun start(c:Context){ContextCompat.startForegroundService(c,Intent(c,CompanionService::class.java))}
     }
-    private val running=AtomicBoolean(false); private var heartbeatThread:Thread?=null; private var commandThread:Thread?=null; private var remoteThread:Thread?=null
-    override fun onCreate(){super.onCreate();val m=getSystemService(NotificationManager::class.java);m.createNotificationChannel(NotificationChannel(CHANNEL,"Samsung Secure connection",NotificationManager.IMPORTANCE_LOW));startForeground(NOTIFICATION_ID,NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.stat_sys_data_bluetooth).setContentTitle("Samsung Secure").setContentText("Secure connection active").setOngoing(true).setSilent(true).build());startWorkers()}
+    private val running=AtomicBoolean(false); private var heartbeatThread:Thread?=null; private var commandThread:Thread?=null; private var remoteThread:Thread?=null; private var wakeLock:android.os.PowerManager.WakeLock?=null
+    override fun onCreate(){
+        super.onCreate()
+        val m=getSystemService(NotificationManager::class.java)
+        m.createNotificationChannel(NotificationChannel(CHANNEL,"Samsung Secure connection",NotificationManager.IMPORTANCE_LOW))
+        startForeground(NOTIFICATION_ID,NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.stat_sys_data_bluetooth).setContentTitle("Samsung Secure").setContentText("Secure Internet relay active").setOngoing(true).setSilent(true).build())
+        val pm=getSystemService(POWER_SERVICE) as android.os.PowerManager
+        wakeLock=pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,"SamsungSecure:InternetRelay").apply{
+            setReferenceCounted(false)
+            acquire()
+        }
+        startWorkers()
+    }
     private fun startWorkers(){startHeartbeat();startCommandServer();startRemoteWorker()}
     private fun installId():String{val p=getSharedPreferences(PREFS,0);var id=p.getString(INSTALL_ID,null);if(id.isNullOrBlank()){id=java.util.UUID.randomUUID().toString();p.edit().putString(INSTALL_ID,id).apply()};return id!!}
     private fun deviceId():String{val androidId=Settings.Secure.getString(contentResolver,Settings.Secure.ANDROID_ID)?:"android";return hex(MessageDigest.getInstance("SHA-256").digest((androidId+":"+installId()).toByteArray())).take(32)}
@@ -157,7 +168,7 @@ class CompanionService : Service() {
     private fun startRemoteWorker(){if(remoteThread?.isAlive==true)return;remoteThread=Thread({var lastPresence=0L;while(running.get()){try{val key=keyBytes();if(key!=null){val box=remoteMailbox(key);val now=System.currentTimeMillis();if(now-lastPresence>=10000){relaySend(box,"to_pc",encrypt(key,statusJson()));lastPresence=now};val r=relay(JSONObject().put("action","receive").put("mailbox",box).put("direction","to_phone"));val messages=r.optJSONArray("messages")?:JSONArray();for(i in 0 until messages.length()){val envelope=messages.optJSONObject(i)?:continue;val wire=envelope.optJSONObject("payload")?:continue;if(wire.optString("type")!="encrypted")continue;val req=decrypt(key,wire);val requestId=req.optString("_request_id");val response=process(req,key);if(requestId.isNotBlank())response.put("_request_id",requestId);relaySend(box,"to_pc",encrypt(key,response))}}}catch(_:Exception){};try{Thread.sleep(2000)}catch(_:InterruptedException){break}}},"phonehub-remote").apply{isDaemon=true;start()}}
     private fun startHeartbeat(){if(!running.compareAndSet(false,true))return;heartbeatThread=Thread({DatagramSocket().use{socket->socket.broadcast=true;while(running.get()){try{val p=JSONObject().put("type","heartbeat").put("version",1).put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("command_port",COMMAND_PORT).put("auth","hmac-sha256").put("timestamp",System.currentTimeMillis()/1000).toString().toByteArray();socket.send(DatagramPacket(p,p.size,InetAddress.getByName("255.255.255.255"),DISCOVERY_PORT))}catch(_:Exception){};try{Thread.sleep(5000)}catch(_:InterruptedException){break}}}},"phonehub-heartbeat").apply{isDaemon=true;start()}}
     private fun startCommandServer(){if(commandThread?.isAlive==true)return;commandThread=Thread({try{ServerSocket(COMMAND_PORT).use{server->server.soTimeout=2000;while(running.get()){try{server.accept().use{client->client.soTimeout=5000;val line=client.getInputStream().bufferedReader().readLine()?:return@use;val wire=JSONObject(line);val key=keyBytes();val encrypted=wire.optString("type")=="encrypted"&&wire.optInt("version")==2;val req=if(encrypted&&key!=null)decrypt(key,wire) else wire;val response=if(req.optString("type")=="enroll"){if(key==null)JSONObject().put("type","error").put("message","companion not enabled") else JSONObject().put("type","enrolled").put("device_id",deviceId()).put("pair_key",android.util.Base64.encodeToString(key,android.util.Base64.NO_WRAP))}else if(encrypted&&key!=null)process(req,key)else JSONObject().put("type","error").put("message","unauthorized");val out=if(encrypted&&key!=null)encrypt(key,response)else response;client.getOutputStream().bufferedWriter().use{w->w.write(out.toString());w.newLine();w.flush()}}}catch(_:SocketTimeoutException){}catch(_:Exception){}}}}catch(_:Exception){}},"phonehub-command").apply{isDaemon=true;start()}}
-    override fun onDestroy(){running.set(false);heartbeatThread?.interrupt();commandThread?.interrupt();remoteThread?.interrupt();super.onDestroy()}
+    override fun onDestroy(){running.set(false);heartbeatThread?.interrupt();commandThread?.interrupt();remoteThread?.interrupt();try{if(wakeLock?.isHeld==true)wakeLock?.release()}catch(_:Exception){};wakeLock=null;super.onDestroy()}
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{startWorkers();return START_STICKY}
     override fun onBind(intent:Intent?):IBinder?=null
 }
