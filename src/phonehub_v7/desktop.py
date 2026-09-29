@@ -10,7 +10,7 @@ from .webrtc_stream import WebRtcScreenClient
 def gb(n): return f"{n/1073741824:.1f} GB"
 
 class Card(QFrame):
-    def __init__(self,title,value="—",detail="",progress=False):
+    def __init__(self,title,value="-",detail="",progress=False):
         super().__init__();self.setObjectName("card")
         lay=QVBoxLayout(self);lay.setContentsMargins(20,18,20,18);lay.setSpacing(7)
         t=QLabel(title);t.setObjectName("cardTitle");self.value=QLabel(value);self.value.setObjectName("cardValue");self.detail=QLabel(detail);self.detail.setObjectName("cardDetail")
@@ -60,7 +60,7 @@ class Window(QMainWindow):
     def home(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
         top=QHBoxLayout();h=QLabel("Home");h.setObjectName("heading");self.updated=QLabel("Waiting for device");self.updated.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.updated)
-        self.connection=QLabel("●  Looking for your phone…");self.connection.setObjectName("status")
+        self.connection=QLabel("CONNECTED:  Looking for your phone...");self.connection.setObjectName("status")
         l.addLayout(top);l.addWidget(self.connection)
         row1=QHBoxLayout();self.device=Card("DEVICE");self.battery=Card("BATTERY",progress=True);self.network=Card("NETWORK")
         for x in [self.device,self.battery,self.network]:row1.addWidget(x)
@@ -103,12 +103,12 @@ class Window(QMainWindow):
         ds=self.server.devices()
         if not ds:self.screen_status.setText("Phone offline");return
         d=ds[0];self._screen_device=d;self._screen_active=True;self.screen_view.setPixmap(QPixmap())
-        self.screen_status.setText("Checking high-performance wireless screen…")
-        self.screen_view.setText("Looking for authorized wireless ADB / scrcpy…")
+        self.screen_status.setText("Checking high-performance wireless screen...")
+        self.screen_view.setText("Looking for authorized wireless ADB / scrcpy...")
         self.run_task("screen_local",lambda:self._start_scrcpy_local(d))
 
     def _start_webrtc(self,d):
-        self.screen_status.setText("Starting remote WebRTC screen…");self.screen_view.setText("Connecting remote live screen…")
+        self.screen_status.setText("Starting remote WebRTC screen...");self.screen_view.setText("Connecting remote live screen...")
         self.screen_client.start(d)
 
     def wireless_adb_path(self):
@@ -186,7 +186,7 @@ class Window(QMainWindow):
     def apps_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(14)
         top=QHBoxLayout();h=QLabel("Apps");h.setObjectName("heading");self.app_count=QLabel("Waiting for phone");self.app_count.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.app_count);l.addLayout(top)
-        tools=QHBoxLayout();self.app_search=QLineEdit();self.app_search.setPlaceholderText("Search apps or package…");self.app_search.textChanged.connect(self.filter_apps);self.app_filter=QComboBox();self.app_filter.addItems(["All apps","User apps","System apps"]);self.app_filter.currentIndexChanged.connect(self.filter_apps);tools.addWidget(self.app_search,1);tools.addWidget(self.app_filter);l.addLayout(tools)
+        tools=QHBoxLayout();self.app_search=QLineEdit();self.app_search.setPlaceholderText("Search apps or package...");self.app_search.textChanged.connect(self.filter_apps);self.app_filter=QComboBox();self.app_filter.addItems(["All apps","User apps","System apps"]);self.app_filter.currentIndexChanged.connect(self.filter_apps);tools.addWidget(self.app_search,1);tools.addWidget(self.app_filter);l.addLayout(tools)
         self.app_table=QTableWidget(0,4);self.app_table.setHorizontalHeaderLabels(["App","Package","Type","State"]);self.app_table.verticalHeader().setVisible(False);self.app_table.setSelectionBehavior(QAbstractItemView.SelectItems);self.app_table.setSelectionMode(QAbstractItemView.ExtendedSelection);self.app_table.setEditTriggers(QAbstractItemView.NoEditTriggers);self.app_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeToContents);self.app_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);self.app_table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeToContents);self.app_table.horizontalHeader().setSectionResizeMode(3,QHeaderView.ResizeToContents);self.app_table.setContextMenuPolicy(Qt.CustomContextMenu);self.app_table.customContextMenuRequested.connect(self.app_menu);self.app_table.cellDoubleClicked.connect(self.open_policy);l.addWidget(self.app_table,1)
         self._apps=[];self.load_app_cache();return p
 
@@ -204,48 +204,48 @@ class Window(QMainWindow):
         p=Path.home()/".phonehub";p.mkdir(parents=True,exist_ok=True);return p/"apps_cache.json"
     def load_app_cache(self):
         try:
-            self._apps=json.loads(self.cache_path().read_text(encoding="utf-8"));self.app_count.setText(f"{len(self._apps)} cached • refreshing…");self.filter_apps()
+            self._apps=json.loads(self.cache_path().read_text(encoding="utf-8"));self.app_count.setText(f"{len(self._apps)} cached | refreshing...");self.filter_apps()
         except Exception:pass
     def save_app_cache(self):
         try:self.cache_path().write_text(json.dumps(self._apps,ensure_ascii=False),encoding="utf-8")
         except Exception:pass
     def load_apps(self,d):
         if self._apps_loading:return
-        self._apps_loading=True;self.app_count.setText("Loading apps…");self.run_task("apps",lambda:self.server.apps(d))
+        self._apps_loading=True;self.app_count.setText("Loading apps...");self.run_task("apps",lambda:self.server.apps(d))
     def task_done(self,tag,result):
         if tag=="status":
             self._busy=False
-            if isinstance(result,Exception):self.connection.setText(f"● Connected • status unavailable: {result}");return
+            if isinstance(result,Exception):self.connection.setText(f"CONNECTED: Connected | status unavailable: {result}");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setText(f"●  Connected securely  •  {d.address}  •  AES-256-GCM");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
+            self.connection.setText(f"CONNECTED:  Connected securely  |  {d.address}  |  AES-256-GCM");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
             self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Encrypted Companion")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
-            self.network.value.setText(s.get("network","—"));self.network.detail.setText("Active connection")
+            self.network.value.setText(s.get("network","-"));self.network.detail.setText("Active connection")
             total=s.get("storage_total",0);free=s.get("storage_free",0);used=max(0,total-free);self.storage.value.setText(gb(free));self.storage.bar.setValue(int(used*100/total) if total else 0);self.storage.detail.setText(f"free of {gb(total)}")
             mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
-            self.android.value.setText(str(s.get("android_version","—")));self.android.detail.setText(f"SDK {s.get('sdk','—')}")
+            self.android.value.setText(str(s.get("android_version","-")));self.android.detail.setText(f"SDK {s.get('sdk','-')}")
             if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
         elif tag=="screen_local":
             if isinstance(result,Exception):
                 result={"ok":False,"reason":str(result)}
             if result.get("ok"):
-                self._scrcpy_process=result["process"];self.screen_status.setText("LOCAL LIVE CONTROL • scrcpy • up to 60 FPS")
+                self._scrcpy_process=result["process"];self.screen_status.setText("LOCAL LIVE CONTROL | scrcpy | up to 60 FPS")
                 self.screen_view.setText("PhoneHub Screen is open in the high-performance scrcpy control window.\n\nMouse, keyboard and touch control are active through wireless ADB.\nNo screenshot loop and no WebRTC relay are being used.")
             else:
                 d=self._screen_device
                 reason=result.get("reason","local scrcpy unavailable")
-                self.screen_status.setText(f"Local scrcpy unavailable • {reason} • trying WebRTC")
+                self.screen_status.setText(f"Local scrcpy unavailable | {reason} | trying WebRTC")
                 if d is not None:self._start_webrtc(d)
         elif tag=="policy_get":
             if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
             p=result.get("policy",{})
             for key,cb in self.policy_checks.items():cb.setChecked(bool(p.get(key,cb.isChecked())));cb.setEnabled(True)
-            self.policy_save.setEnabled(True);self.policy_status.setText("Policy loaded from phone • remote encrypted sync ready")
+            self.policy_save.setEnabled(True);self.policy_status.setText("Policy loaded from phone | remote encrypted sync ready")
         elif tag=="policy_set":
             self.policy_save.setEnabled(True)
             if isinstance(result,Exception):self.policy_status.setText(f"Save failed: {result}");return
-            self.policy_status.setText("Saved on phone • Android-restricted controls are stored but are not silently enforced")
+            self.policy_status.setText("Saved on phone | Android-restricted controls are stored but are not silently enforced")
         elif tag=="apps":
             self._apps_loading=False
             if isinstance(result,Exception):self.app_count.setText(f"Apps unavailable: {result}");return
@@ -278,7 +278,7 @@ class Window(QMainWindow):
     def open_policy(self,row,col):self.select_policy(row)
     def select_policy(self,row):
         app=self.app_table.item(row,0).text();pkg=self.app_table.item(row,1).text()
-        self.policy_title.setText(app);self.policy_package.setText(pkg);self.stack.setCurrentIndex(3);self.policy_status.setText("Loading policy from phone…")
+        self.policy_title.setText(app);self.policy_package.setText(pkg);self.stack.setCurrentIndex(3);self.policy_status.setText("Loading policy from phone...")
         for cb in self.policy_checks.values():cb.setEnabled(False)
         self.policy_save.setEnabled(False)
         ds=self.server.devices()
@@ -288,12 +288,12 @@ class Window(QMainWindow):
         if not pkg or "." not in pkg:return
         ds=self.server.devices()
         if not ds:self.policy_status.setText("Phone is offline");return
-        policy={key:cb.isChecked() for key,cb in self.policy_checks.items()};self.policy_save.setEnabled(False);self.policy_status.setText("Saving encrypted policy to phone…")
+        policy={key:cb.isChecked() for key,cb in self.policy_checks.items()};self.policy_save.setEnabled(False);self.policy_status.setText("Saving encrypted policy to phone...")
         self.run_task("policy_set",lambda:self.server.policy_set(ds[0],pkg,policy))
     def refresh(self):
         ds=self.server.devices()
         if not ds:
-            self.connection.setText("●  Waiting for PhoneHub Companion");self.updated.setText("Offline");return
+            self.connection.setText("CONNECTED:  Waiting for PhoneHub Companion");self.updated.setText("Offline");return
         if self._busy:return
         d=ds[0];self._busy=True;self.run_task("status",lambda:(d,self.server.device_status(d)))
 
