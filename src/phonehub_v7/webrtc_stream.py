@@ -74,24 +74,9 @@ class WebRtcScreenClient:
 
         self._terminal_error = False
         if self.mode == "screen":
-            self.on_state("Checking Android screen-sharing authorization…")
-            prep = await asyncio.to_thread(self.server.screen_prepare, device)
-            if prep.get("type") == "screen_consent_required":
-                self.on_state("Approve the Android screen-sharing prompt on the phone…")
-                deadline = time.monotonic() + 60
-                while time.monotonic() < deadline and generation == self._generation:
-                    await asyncio.sleep(2)
-                    status = await asyncio.to_thread(self.server.screen_status, device)
-                    if status.get("active"):
-                        break
-                else:
-                    self._terminal_error = True
-                    self.on_state("Live screen failed: Android screen-sharing approval was not completed.")
-                    return
-            elif prep.get("type") != "screen_ready":
-                self._terminal_error = True
-                self.on_state("Live screen failed: " + prep.get("message","Could not prepare Android screen sharing."))
-                return
+            # Screen capture is explicitly started on the phone. Do not block
+            # negotiation behind a second prepare/status round trip.
+            self.on_state("Connecting to active Android screen share…")
         self.on_state("Negotiating direct WebRTC camera…" if self.mode == "camera" else "Negotiating direct WebRTC screen…")
         config = RTCConfiguration(
             iceServers=[
