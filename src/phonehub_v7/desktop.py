@@ -380,7 +380,7 @@ class Window(QMainWindow):
                 self.setup_hint.setText(f"{result.get('model','Android phone')} is connected, but PhoneHub Companion is not installed. Click Set up connected phone.")
                 self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(False)
             elif state=="installed_not_connected":
-                self.setup_hint.setText(f"Samsung Secure is installed on {result.get('model','the phone')}, but it is not connected. Click Open Samsung Secure and complete the one-time setup.")
+                self.setup_hint.setText(f"Samsung Secure is installed on {result.get('model','the phone')}, but the secure bridge is not connected. Click Open Samsung Secure and complete the one-time connection setup.")
                 self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(True)
             elif state=="no_phone":
                 self.setup_hint.setText("No PhoneHub connection. For first setup or repair, connect the phone by USB, unlock it and allow USB debugging.")
@@ -397,7 +397,7 @@ class Window(QMainWindow):
             if isinstance(result,Exception):self.connection.setText(f"Status refresh delayed - {result}");self.connection.setStyleSheet("color:#b45309;font-weight:600");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));self.setup_hint.setText("Samsung Secure is installed, enrolled and connected correctly.");self.open_companion_button.setEnabled(False)
+            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));self.setup_hint.setText("Samsung Secure connection and policy bridge are ready. All other functions are controlled from this PC.");self.open_companion_button.setEnabled(False)
             self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Samsung Secure | auto reconnect")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
             self.network.value.setText(s.get("network","N/A"));self.network.detail.setText("Active connection")
