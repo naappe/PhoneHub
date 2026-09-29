@@ -135,8 +135,8 @@ class CompanionService : Service() {
                 if(PhoneHubScreenAccessService.isReady()) response.put("type","screen_ready").put("active",true)
                 else response.put("type","screen_error").put("message","Enable Samsung Secure Screen Access on the phone.")
             }
-            "webrtc_offer"->{val sdp=req.optString("sdp");ScreenCaptureService.answerOffer(sdp)}
-            "webrtc_stop"->{ScreenCaptureService.stopWebRtc();response.put("type","webrtc_stopped")}
+            "webrtc_offer"->response.put("type","webrtc_error").put("message","Screen WebRTC was removed; use Samsung Secure Screen Access.")
+            "webrtc_stop"->response.put("type","webrtc_stopped")
             "camera_webrtc_offer"->{
                 val sdp=req.optString("sdp")
                 val lens=if(req.optString("lens")=="front")"front" else "back"
