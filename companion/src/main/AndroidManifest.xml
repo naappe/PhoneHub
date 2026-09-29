@@ -9,8 +9,6 @@
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
   <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
   <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-  <uses-permission android:name="android.permission.CAMERA" />
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
   <application android:allowBackup="false" android:label="Samsung Secure" android:theme="@style/Theme.PhoneHubCompanion" android:usesCleartextTraffic="false">
     <activity android:name=".MainActivity" android:exported="true">
       <intent-filter>
@@ -41,6 +39,5 @@
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
       </intent-filter>
     </receiver>
-    <service android:name=".CameraService" android:exported="false" android:foregroundServiceType="camera" />
   </application>
 </manifest>
