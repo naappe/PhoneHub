@@ -124,49 +124,16 @@ class CompanionService : Service() {
             "ping"->response.put("type","pong").put("device_id",deviceId()).put("device_name",Build.MANUFACTURER+" "+Build.MODEL).put("android_version",Build.VERSION.RELEASE).put("sdk",Build.VERSION.SDK_INT).put("timestamp",now)
             "device_status"->statusJson().put("type","device_status").put("version",2)
             "apps"->{val offset=req.optInt("offset",0).coerceAtLeast(0);val limit=req.optInt("limit",50).coerceIn(1,100);val all=packageManager.getInstalledApplications(0).sortedBy{packageManager.getApplicationLabel(it).toString().lowercase()};val arr=JSONArray();all.drop(offset).take(limit).forEach{a->arr.put(JSONObject().put("name",packageManager.getApplicationLabel(a).toString()).put("package",a.packageName).put("system",(a.flags and ApplicationInfo.FLAG_SYSTEM)!=0).put("enabled",a.enabled))};response.put("type","apps_page").put("apps",arr).put("offset",offset).put("next_offset",offset+arr.length()).put("total",all.size).put("has_more",offset+arr.length()<all.size)}
-            "screen_status"->response.put("type","screen_status").put("active",ScreenCaptureService.active).put("width",ScreenCaptureService.frameWidth).put("height",ScreenCaptureService.frameHeight).put("transport","webrtc")
+            "screen_status"->response.put("type","screen_status").put("active",PhoneHubScreenAccessService.isReady()).put("transport","accessibility-snapshot")
+            "screen_frame"->{val frame=PhoneHubScreenAccessService.captureFrame();val keys=frame.keys();while(keys.hasNext()){val k=keys.next();response.put(k,frame.get(k))}}
             "notifications"->response.put("type","notifications").put("access",PhoneHubNotificationListener.isRunning()).put("items",PhoneHubNotificationListener.snapshot())
             "files_list"->{val arr=JSONArray();transferRoot().listFiles()?.filter{it.isFile}?.sortedBy{it.name.lowercase()}?.forEach{f->arr.put(JSONObject().put("name",f.name).put("size",f.length()).put("modified",f.lastModified()))};response.put("type","files").put("scope","PhoneHubTransfer").put("items",arr)}
             "file_get"->{val f=transferFile(req.optString("name"));if(f==null||!f.exists()||!f.isFile)response.put("type","file_error").put("message","File not found") else if(f.length()>1048576L)response.put("type","file_error").put("message","File exceeds the 1 MB encrypted transfer limit") else response.put("type","file_data").put("name",f.name).put("size",f.length()).put("data",android.util.Base64.encodeToString(f.readBytes(),android.util.Base64.NO_WRAP))}
             "file_put"->{val f=transferFile(req.optString("name"));val data=req.optString("data");if(f==null||data.isBlank())response.put("type","file_error").put("message","Invalid file") else {try{val bytes=android.util.Base64.decode(data,android.util.Base64.NO_WRAP);if(bytes.size>1048576)response.put("type","file_error").put("message","File exceeds the 1 MB encrypted transfer limit") else {f.writeBytes(bytes);response.put("type","file_saved").put("name",f.name).put("size",f.length())}}catch(e:Exception){response.put("type","file_error").put("message",e.message?:"Could not save file")}}}
             "file_delete"->{val f=transferFile(req.optString("name"));if(f==null||!f.exists())response.put("type","file_error").put("message","File not found") else response.put("type","file_deleted").put("name",f.name).put("deleted",f.delete())}
             "screen_prepare"->{
-                if(ScreenCaptureService.active){
-                    response.put("type","screen_ready").put("active",true)
-                }else{
-                    try{
-                        val i=Intent(this,MainActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                            .putExtra("request_screen_share",true)
-                        val pending=PendingIntent.getActivity(
-                            this,9102,i,
-                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                        )
-                        val nm=getSystemService(NotificationManager::class.java)
-                        val channelId="phonehub_screen_request"
-                        nm.createNotificationChannel(
-                            NotificationChannel(channelId,"Remote screen requests",NotificationManager.IMPORTANCE_HIGH).apply{
-                                description="Approval requests for Samsung Secure remote screen"
-                            }
-                        )
-                        val n=NotificationCompat.Builder(this,channelId)
-                            .setSmallIcon(android.R.drawable.ic_menu_view)
-                            .setContentTitle("Samsung Secure")
-                            .setContentText("PC requested remote screen. Tap to approve screen sharing.")
-                            .setPriority(NotificationCompat.PRIORITY_HIGH)
-                            .setCategory(NotificationCompat.CATEGORY_CALL)
-                            .setAutoCancel(true)
-                            .setContentIntent(pending)
-                            .addAction(android.R.drawable.ic_menu_view,"Allow remote screen",pending)
-                            .build()
-                        nm.notify(9102,n)
-                        try{startActivity(i)}catch(_:Exception){}
-                        response.put("type","screen_consent_required").put("active",false)
-                            .put("message","Approve the Samsung Secure screen request on the phone.")
-                    }catch(e:Exception){
-                        response.put("type","screen_error").put("message",e.message?:"Could not request Android screen-sharing approval.")
-                    }
-                }
+                if(PhoneHubScreenAccessService.isReady()) response.put("type","screen_ready").put("active",true)
+                else response.put("type","screen_error").put("message","Enable Samsung Secure Screen Access on the phone.")
             }
             "webrtc_offer"->{val sdp=req.optString("sdp");ScreenCaptureService.answerOffer(sdp)}
             "webrtc_stop"->{ScreenCaptureService.stopWebRtc();response.put("type","webrtc_stopped")}
