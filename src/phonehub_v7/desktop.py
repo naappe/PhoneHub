@@ -42,11 +42,11 @@ class Window(QMainWindow):
         self.stack=QStackedWidget()
         self.screen_signals=ScreenSignals();self.screen_signals.frame.connect(self.show_screen_frame);self.screen_signals.state.connect(self.show_screen_state)
         self.screen_client=WebRtcScreenClient(self.server,self.screen_signals.frame.emit,self.screen_signals.state.emit)
-        names=["Home","Screen","Apps","App Policy","Policies","Notifications","Files","Automation","Logs","Settings"]
+        names=["Home","Screen","Apps","App Policy","Policies","Notifications","Files","Camera","Automation","Logs","Settings"]
         for i,name in enumerate(names):
             b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));nl.addWidget(b)
             if i==0:b.setChecked(True)
-        nl.addStretch();nl.addWidget(QLabel("Secure Companion"))
+        nl.addStretch();nl.addWidget(QLabel("PC Control Center"))
         outer.addWidget(nav);outer.addWidget(self.stack,1)
         self.stack.addWidget(self.home());self.stack.addWidget(self.screen_page());self.stack.addWidget(self.apps_page());self.stack.addWidget(self.policy_page())
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
