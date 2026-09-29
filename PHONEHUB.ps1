@@ -127,6 +127,203 @@ function GetPhoneTailscaleIp([string]$DeviceSerial) {
             if($line -match 'inet\s+(100\.\d+\.\d+\.\d+)/') { return $matches[1] }
         }
     } catch {}
+
+    # Fallback: ask the PC Tailscale client for Android peers.
+    if(Get-Command tailscale -ErrorAction SilentlyContinue) {
+        try {
+            $json = & tailscale status --json 2>$null | ConvertFrom-Json
+            foreach($peer in $json.Peer.PSObject.Properties.Value) {
+                if($peer.Online -eq $false) { continue }
+                $os = [string]$peer.OS
+                if($os -notmatch 'android') { continue }
+                foreach($ip in @($peer.TailscaleIPs)) {
+                    if($ip -match '^100\.\d+\.\d+\.\d+
+
+function SaveTailscaleDevice([string]$Ip) {
+    if(-not $Ip) { throw "Tailscale IP is required." }
+    $dir = Join-Path $HOME ".phonehub"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $device = @{
+        device_id = "pending"
+        device_name = "Android"
+        tailscale_ip = $Ip
+        command_port = 47322
+    }
+    $device | ConvertTo-Json | Set-Content -Path (Join-Path $dir "tailscale_device.json") -Encoding UTF8
+}
+
+function ConfigurePhoneHubTransport {
+    Title "One-Time Tailscale Enrollment"
+    $s = AdbSerial $Serial
+
+    Write-Host "Granting Samsung Secure permissions..."
+    Invoke-AdbOptional $s @("shell","pm","grant",$Pkg,"android.permission.CAMERA") | Out-Null
+    Invoke-AdbOptional $s @("shell","pm","grant",$Pkg,"android.permission.POST_NOTIFICATIONS") | Out-Null
+
+    Write-Host "Enabling notification bridge where Android permits it..."
+    Invoke-AdbOptional $s @("shell","cmd","notification","allow_listener","$Pkg/.PhoneHubNotificationListener") | Out-Null
+
+    Write-Host "Allowing Samsung Secure background reconnect..."
+    Invoke-AdbOptional $s @("shell","dumpsys","deviceidle","whitelist","+$Pkg") | Out-Null
+
+    $tsIp = WaitForPhoneTailscaleIp $s 90
+    if(-not $tsIp) {
+        throw "Tailscale is not connected on the phone. Sign in/enable Tailscale on Android, wait until it shows connected, then run .\PHONEHUB.ps1 setup again."
+    }
+
+    SaveTailscaleDevice $tsIp
+    Write-Host "PhoneHub network fabric: Tailscale $tsIp"
+
+    Write-Host "Preparing unattended ADB/scrcpy path..."
+    & adb -s $s tcpip 5555 | Out-Host
+    Start-Sleep -Seconds 2
+
+    $target = "$($tsIp):5555"
+    & adb connect $target | Out-Host
+    $adbReady = ((& adb devices) -match [regex]::Escape($target))
+    if($adbReady) {
+        Write-Host "ADB over Tailscale ready: $target"
+    } else {
+        Write-Host "ADB :5555 is not reachable yet. Samsung Secure command/WebRTC path remains available on Tailscale."
+    }
+
+    Write-Host "Starting Samsung Secure enrollment..."
+    & adb -s $s shell am start -n "$Pkg/.MainActivity" --ez pc_enroll true | Out-Host
+    Start-Sleep -Seconds 2
+
+    Write-Host ""
+    Write-Host "PhoneHub Tailscale setup complete."
+    Write-Host "Control: encrypted TCP over $($tsIp):47322"
+    Write-Host "Screen/Camera preferred path: scrcpy over $target"
+    Write-Host "Fallback media path: Samsung Secure WebRTC over the same tailnet."
+}
+
+function DoStart {
+    Title "Start"
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "Python 3 is required." }
+    $env:PYTHONPATH = Join-Path $Root "src"
+    $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
+    python -c "import PySide6,sys; v=tuple(map(int,PySide6.__version__.split('.')[:3])); sys.exit(0 if v >= (6,11,2) else 1)" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Updating Qt/PySide6 for this Python version..."
+        python -m pip install --disable-pip-version-check --upgrade "PySide6>=6.11.2,<7"
+        if ($LASTEXITCODE -ne 0) { throw "Could not update PySide6." }
+    }
+    python -c "import aiortc, numpy" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        python -m pip install --disable-pip-version-check "aiortc==1.15.0" "numpy>=2,<3"
+        if ($LASTEXITCODE -ne 0) { throw "Could not install PhoneHub runtime dependencies." }
+    }
+    Write-Host "Python: $(python --version 2>&1)"
+    Write-Host "PySide6: $(& python -c 'import PySide6; print(PySide6.__version__)')"
+    python -m phonehub_v7.desktop
+}
+
+function SaveBaseline([bool]$RemoveAfter) {
+    Title $(if($RemoveAfter){"Backup + Remove"}else{"Backup"})
+    $s = AdbSerial $Serial
+    $model = (& adb -s $s shell getprop ro.product.model).Trim()
+    $safeModel = ($model -replace '[^A-Za-z0-9._-]','_')
+    $out = Join-Path $Root ("phone-baselines\{0}-{1}" -f $safeModel,(Get-Date -Format "yyyyMMdd-HHmmss"))
+    New-Item -ItemType Directory -Force -Path $out | Out-Null
+    $manufacturer = (& adb -s $s shell getprop ro.product.manufacturer).Trim()
+    $android = (& adb -s $s shell getprop ro.build.version.release).Trim()
+    $sdk = (& adb -s $s shell getprop ro.build.version.sdk).Trim()
+    $fingerprint = (& adb -s $s shell getprop ro.build.fingerprint).Trim()
+    $androidId = (& adb -s $s shell settings get secure android_id).Trim()
+    @("PhoneHub Android Baseline","Manufacturer: $manufacturer","Model: $model","Android: $android","SDK: $sdk","Android ID: $androidId","Serial: $s","Build fingerprint: $fingerprint") | Set-Content (Join-Path $out "device-info.txt") -Encoding UTF8
+    & adb -s $s shell getprop | Set-Content (Join-Path $out "getprop.txt") -Encoding UTF8
+    & adb -s $s shell dumpsys battery | Set-Content (Join-Path $out "battery.txt") -Encoding UTF8
+    & adb -s $s shell wm size | Set-Content (Join-Path $out "display.txt") -Encoding UTF8
+    $paths = @(& adb -s $s shell pm path $Pkg 2>$null | ForEach-Object { if ($_ -match '^package:(.+)$') { $matches[1].Trim() } })
+    if ($paths.Count -gt 0) {
+        & adb -s $s shell dumpsys package $Pkg | Set-Content (Join-Path $out "companion-package-dump.txt") -Encoding UTF8
+        $apkDir=Join-Path $out "installed-apk"; New-Item -ItemType Directory -Force -Path $apkDir | Out-Null
+        foreach($remote in $paths){ & adb -s $s pull $remote (Join-Path $apkDir (Split-Path $remote -Leaf)) | Out-Host }
+    } else {
+        "PhoneHub Companion was not installed." | Set-Content (Join-Path $out "companion-not-installed.txt") -Encoding UTF8
+    }
+    Write-Host "Baseline saved: $out"
+    if ($RemoveAfter -and $paths.Count -gt 0) { & adb -s $s uninstall $Pkg | Out-Host }
+}
+
+function DoClean {
+    Title "Clean"
+    try { & (Join-Path $Root "gradlew.bat") --stop *> $null } catch {}
+    foreach($p in @((Join-Path $Root ".gradle"),(Join-Path $Root "companion\build"),(Join-Path $Root "dist"),(Join-Path $Root "src\phonehub.egg-info"))){ if(Test-Path $p){Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue} }
+    Get-ChildItem $Root -Directory -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {$_.Name -eq "__pycache__"} | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "Cleanup complete."
+}
+
+function DoExe {
+    Title "Build Windows EXE"
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "Python 3 is required." }
+    python -c "import PyInstaller, PySide6" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Installing EXE builder..."
+        python -m pip install --disable-pip-version-check pyinstaller "PySide6>=6.8,<7"
+        if ($LASTEXITCODE -ne 0) { throw "Could not install PyInstaller." }
+    }
+    $work = Join-Path $env:TEMP "phonehub-exe-build"
+    $spec = Join-Path $env:TEMP "phonehub-exe-spec"
+    Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $spec -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $work,$spec | Out-Null
+    python -m PyInstaller --noconfirm --clean --onefile --windowed --name PhoneHub --paths (Join-Path $Root "src") --distpath $Root --workpath $work --specpath $spec (Join-Path $Root "src\phonehub_v7\launcher.py")
+    if ($LASTEXITCODE -ne 0) { throw "PhoneHub.exe build failed." }
+    if (-not (Test-Path (Join-Path $Root "PhoneHub.exe"))) { throw "PhoneHub.exe was not created." }
+    Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $spec -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "Created: $(Join-Path $Root "PhoneHub.exe")"
+}
+
+function DoStatus {
+    Title "Status"
+    Write-Host "Version: $(VersionName)"
+    Write-Host "Git: $(& git rev-parse --short HEAD)"
+    Write-Host "Branch: $(& git branch --show-current)"
+    if(Get-Command adb -ErrorAction SilentlyContinue){ & adb devices }
+    git status --short
+}
+
+switch($Action){
+    "update" { DoUpdate }
+    "build" { DoBuild }
+    "install" { DoInstall }
+    "start" { DoStart }
+    "backup" { SaveBaseline $false }
+    "remove" { SaveBaseline $true }
+    "clean" { DoClean }
+    "status" { DoStatus }
+    "exe" { DoExe }
+    "setup" { DoUpdate; DoBuild; DoInstall; ConfigurePhoneHubTransport; DoStart }
+    default {
+        Title "Master Command"
+        Write-Host ".\PHONEHUB.ps1 update|build|install|start|setup|backup|remove|clean|status|exe"
+    }
+}) { return $ip }
+                }
+            }
+        } catch {}
+    }
+
+    return ""
+}
+
+function WaitForPhoneTailscaleIp([string]$DeviceSerial, [int]$TimeoutSeconds = 90) {
+    $ip = GetPhoneTailscaleIp $DeviceSerial
+    if($ip) { return $ip }
+
+    Write-Host "Tailscale address not active yet. Opening Tailscale on the phone..."
+    Invoke-AdbOptional $DeviceSerial @("shell","monkey","-p","com.tailscale.ipn","-c","android.intent.category.LAUNCHER","1") | Out-Null
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        $ip = GetPhoneTailscaleIp $DeviceSerial
+        if($ip) { return $ip }
+        Write-Host "Waiting for phone to join the tailnet..."
+    }
     return ""
 }
 
