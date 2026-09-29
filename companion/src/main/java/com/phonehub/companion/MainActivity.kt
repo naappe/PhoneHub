@@ -1,4 +1,4 @@
-package com.phonehub.companion
+﻿package com.phonehub.companion
 
 import android.Manifest
 import android.app.Activity
@@ -76,6 +76,9 @@ class MainActivity : Activity() {
     }
 
     private fun enableCompanion() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 9)
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7)
@@ -84,3 +87,5 @@ class MainActivity : Activity() {
         status.text = "PhoneHub Companion\n\nAutomatic service is enabled."
     }
 }
+
+

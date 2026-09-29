@@ -43,9 +43,8 @@ class Window(QMainWindow):
         self.screen_signals=ScreenSignals();self.screen_signals.frame.connect(self.show_screen_frame);self.screen_signals.state.connect(self.show_screen_state)
         self.screen_client=WebRtcScreenClient(self.server,self.screen_signals.frame.emit,self.screen_signals.state.emit)
         names=["Home","Screen","Apps","App Policy","Policies","Notifications","Files","Automation","Logs","Settings"]
-        self.nav_buttons=[]
         for i,name in enumerate(names):
-            b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));self.nav_buttons.append(b);nl.addWidget(b)
+            b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));nl.addWidget(b)
             if i==0:b.setChecked(True)
         nl.addStretch();nl.addWidget(QLabel("Secure Companion"))
         outer.addWidget(nav);outer.addWidget(self.stack,1)
@@ -79,13 +78,8 @@ class Window(QMainWindow):
         return p
 
     def page_changed(self,index):
-        if hasattr(self,"nav_buttons") and 0<=index<len(self.nav_buttons):
-            self.nav_buttons[index].setChecked(True)
         if index==1:
             self.start_live_screen()
-        elif index==3 and self.policy_title.text()=="Select an app":
-            row=self.app_table.currentRow() if hasattr(self,"app_table") else -1
-            if row>=0:self.select_policy(row)
         elif self._screen_active:
             self.stop_live_screen()
 
@@ -193,7 +187,7 @@ class Window(QMainWindow):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(14)
         top=QHBoxLayout();h=QLabel("Apps");h.setObjectName("heading");self.app_count=QLabel("Waiting for phone");self.app_count.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.app_count);l.addLayout(top)
         tools=QHBoxLayout();self.app_search=QLineEdit();self.app_search.setPlaceholderText("Search apps or package...");self.app_search.textChanged.connect(self.filter_apps);self.app_filter=QComboBox();self.app_filter.addItems(["All apps","User apps","System apps"]);self.app_filter.currentIndexChanged.connect(self.filter_apps);tools.addWidget(self.app_search,1);tools.addWidget(self.app_filter);l.addLayout(tools)
-        self.app_table=QTableWidget(0,4);self.app_table.setHorizontalHeaderLabels(["App","Package","Type","State"]);self.app_table.verticalHeader().setVisible(False);self.app_table.setSelectionBehavior(QAbstractItemView.SelectItems);self.app_table.setSelectionMode(QAbstractItemView.ExtendedSelection);self.app_table.setEditTriggers(QAbstractItemView.NoEditTriggers);self.app_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeToContents);self.app_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);self.app_table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeToContents);self.app_table.horizontalHeader().setSectionResizeMode(3,QHeaderView.ResizeToContents);self.app_table.setContextMenuPolicy(Qt.CustomContextMenu);self.app_table.customContextMenuRequested.connect(self.app_menu);self.app_table.cellDoubleClicked.connect(self.open_policy);self.app_table.cellClicked.connect(lambda row,col:self._remember_app_row(row));l.addWidget(self.app_table,1)
+        self.app_table=QTableWidget(0,4);self.app_table.setHorizontalHeaderLabels(["App","Package","Type","State"]);self.app_table.verticalHeader().setVisible(False);self.app_table.setSelectionBehavior(QAbstractItemView.SelectItems);self.app_table.setSelectionMode(QAbstractItemView.ExtendedSelection);self.app_table.setEditTriggers(QAbstractItemView.NoEditTriggers);self.app_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeToContents);self.app_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);self.app_table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeToContents);self.app_table.horizontalHeader().setSectionResizeMode(3,QHeaderView.ResizeToContents);self.app_table.setContextMenuPolicy(Qt.CustomContextMenu);self.app_table.customContextMenuRequested.connect(self.app_menu);self.app_table.cellDoubleClicked.connect(self.open_policy);l.addWidget(self.app_table,1)
         self._apps=[];self.load_app_cache();return p
 
     def policy_page(self):
@@ -248,13 +242,8 @@ class Window(QMainWindow):
             p=result.get("policy",{});e=result.get("enforcement",{});mode=e.get("mode","standard")
             for key,cb in self.policy_checks.items():cb.setChecked(bool(p.get(key,cb.isChecked())));cb.setEnabled(True)
             self.policy_save.setEnabled(True);self.policy_mode.setText("Enforcement mode: Device Owner" if mode=="device_owner" else "Enforcement mode: Standard Android")
-            if mode=="device_owner":
-                self.policy_status.setText("Policy loaded | strong app controls available")
-                for key in ("keep_installed","allow_usage","suspend","protect_changes"):self.policy_checks[key].setEnabled(True)
-            else:
-                self.policy_status.setText("Standard Android mode | strong app controls are unavailable without Device Owner")
-                for key in ("keep_installed","allow_usage","suspend","protect_changes"):self.policy_checks[key].setEnabled(False)
-                for key in ("show_notifications","forward_notifications","auto_apply"):self.policy_checks[key].setEnabled(True)
+            if mode=="device_owner":self.policy_status.setText("Policy loaded | strong app controls available")
+            else:self.policy_status.setText("Policy loaded | settings sync now; Android requires Device Owner for suspend/uninstall protection")
         elif tag=="policy_set":
             self.policy_save.setEnabled(True)
             if isinstance(result,Exception):self.policy_status.setText(f"Save failed: {result}");return
@@ -290,7 +279,6 @@ class Window(QMainWindow):
         elif chosen==a2:QApplication.clipboard().setText(pkg)
         elif chosen==a3:QApplication.clipboard().setText("\t".join(self.app_table.item(row,i).text() for i in range(4)))
         elif chosen==a4:self.select_policy(row)
-    def _remember_app_row(self,row):self._last_app_row=row
     def open_policy(self,row,col):self.select_policy(row)
     def select_policy(self,row):
         app=self.app_table.item(row,0).text();pkg=self.app_table.item(row,1).text()

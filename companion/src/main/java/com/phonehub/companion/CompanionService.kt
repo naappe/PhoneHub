@@ -1,7 +1,6 @@
-package com.phonehub.companion
+﻿package com.phonehub.companion
 
 import android.app.*
-import android.app.admin.DevicePolicyManager
 import android.content.*
 import android.os.*
 import android.provider.Settings
@@ -79,23 +78,6 @@ class CompanionService : Service() {
     private fun policies():JSONObject{val raw=getSharedPreferences(PREFS,0).getString(POLICIES,"{}")?:"{}";return try{JSONObject(raw)}catch(_:Exception){JSONObject()}}
     private fun savePolicies(value:JSONObject){getSharedPreferences(PREFS,0).edit().putString(POLICIES,value.toString()).apply()}
     private fun policyDefaults(pkg:String)=JSONObject().put("package",pkg).put("keep_installed",true).put("allow_usage",true).put("suspend",false).put("show_notifications",true).put("forward_notifications",false).put("protect_changes",false).put("auto_apply",true)
-    private fun devicePolicyManager()=getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
-    private fun adminComponent()=ComponentName(this,PhoneHubDeviceAdminReceiver::class.java)
-    private fun isDeviceOwner():Boolean=try{devicePolicyManager().isDeviceOwnerApp(packageName)}catch(_:Exception){false}
-    private fun enforcementJson():JSONObject{val owner=isDeviceOwner();return JSONObject().put("mode",if(owner)"device_owner" else "standard").put("policy_storage",true).put("auto_apply",true).put("suspend",owner).put("usage_block",owner).put("notification_control",false).put("keep_installed",owner).put("protect_changes",owner)}
-    private fun applyPolicy(pkg:String,p:JSONObject):JSONObject{
-        val result=JSONObject().put("mode",if(isDeviceOwner())"device_owner" else "standard").put("package",pkg)
-        if(!isDeviceOwner())return result.put("applied",false).put("reason","PhoneHub Companion is not Device Owner. Policy is stored and ready, but Android blocks strong app enforcement in standard mode.")
-        if(pkg==packageName)return result.put("applied",false).put("reason","PhoneHub cannot suspend or uninstall-block its own Companion package.")
-        val dpm=devicePolicyManager();val admin=adminComponent()
-        return try{
-            val blockUninstall=p.optBoolean("keep_installed",true)||p.optBoolean("protect_changes",false)
-            dpm.setUninstallBlocked(admin,pkg,blockUninstall)
-            val shouldSuspend=p.optBoolean("suspend",false)||!p.optBoolean("allow_usage",true)
-            val failed=dpm.setPackagesSuspended(admin,arrayOf(pkg),shouldSuspend)
-            result.put("applied",failed.isEmpty()).put("uninstall_blocked",blockUninstall).put("suspended",shouldSuspend).put("failed_packages",JSONArray(failed))
-        }catch(e:Exception){result.put("applied",false).put("reason",e.message?:"Android rejected this policy")}
-    }
     private fun process(req:JSONObject,key:ByteArray):JSONObject{
         val response=JSONObject().put("version",2);val ts=req.optLong("timestamp",0);val nonce=req.optString("nonce");val sig=req.optString("signature");val now=System.currentTimeMillis()/1000;val canonical=req.optString("type")+"|"+ts+"|"+nonce
         if(nonce.isBlank()||kotlin.math.abs(now-ts)>30||!secureEquals(hmac(key,canonical),sig))return response.put("type","error").put("message","unauthorized")
@@ -104,11 +86,14 @@ class CompanionService : Service() {
             "device_status"->statusJson().put("type","device_status").put("version",2)
             "apps"->{val offset=req.optInt("offset",0).coerceAtLeast(0);val limit=req.optInt("limit",50).coerceIn(1,100);val all=packageManager.getInstalledApplications(0).sortedBy{packageManager.getApplicationLabel(it).toString().lowercase()};val arr=JSONArray();all.drop(offset).take(limit).forEach{a->arr.put(JSONObject().put("name",packageManager.getApplicationLabel(a).toString()).put("package",a.packageName).put("system",(a.flags and ApplicationInfo.FLAG_SYSTEM)!=0).put("enabled",a.enabled))};response.put("type","apps_page").put("apps",arr).put("offset",offset).put("next_offset",offset+arr.length()).put("total",all.size).put("has_more",offset+arr.length()<all.size)}
             "screen_status"->response.put("type","screen_status").put("active",ScreenCaptureService.active).put("width",ScreenCaptureService.frameWidth).put("height",ScreenCaptureService.frameHeight).put("transport","webrtc")
+            "camera_status"->response.put("type","camera_status").put("active",CameraService.active).put("lens",CameraService.lens).put("last_frame_at",CameraService.lastFrameAt)
+            "camera_start"->{val requested=if(req.optString("lens")=="front")"front" else "back";if(ContextCompat.checkSelfPermission(this,android.Manifest.permission.CAMERA)!=android.content.pm.PackageManager.PERMISSION_GRANTED)response.put("type","camera_error").put("message","Camera permission is not granted on the phone.") else {try{CameraService.start(this,requested);response.put("type","camera_starting").put("lens",requested)}catch(e:Exception){response.put("type","camera_error").put("message",e.message?:e.javaClass.simpleName)}}}
+            "camera_stop"->{CameraService.stop(this);response.put("type","camera_stopped")}
             "webrtc_offer"->{val sdp=req.optString("sdp");ScreenCaptureService.answerOffer(sdp)}
             "webrtc_stop"->{ScreenCaptureService.stopWebRtc();response.put("type","webrtc_stopped")}
-            "policy_get"->{val pkg=req.optString("package");val all=policies();val p=all.optJSONObject(pkg)?:policyDefaults(pkg);response.put("type","app_policy").put("package",pkg).put("policy",p).put("stored_on_device",all.has(pkg)).put("enforcement",enforcementJson())}
-            "policy_set"->{val pkg=req.optString("package");if(pkg.isBlank())response.put("type","error").put("message","package required") else {val incoming=req.optJSONObject("policy")?:JSONObject();val p=policyDefaults(pkg);listOf("keep_installed","allow_usage","suspend","show_notifications","forward_notifications","protect_changes","auto_apply").forEach{name->if(incoming.has(name))p.put(name,incoming.optBoolean(name))};val all=policies();all.put(pkg,p);savePolicies(all);val applied=if(p.optBoolean("auto_apply",true))applyPolicy(pkg,p) else JSONObject().put("applied",false).put("reason","Auto apply is off");response.put("type","policy_saved").put("package",pkg).put("policy",p).put("stored_on_device",true).put("enforcement",enforcementJson()).put("apply_result",applied).put("message",if(applied.optBoolean("applied",false))"Policy saved and enforced by Android." else applied.optString("reason","Policy saved."))}}
-            "capabilities"->response.put("type","capabilities").put("notifications",false).put("files",true).put("camera",false).put("screen_control",false).put("app_inventory",true).put("remote_app_policy",true).put("screen_capture",true).put("screen_webrtc",true).put("device_owner",isDeviceOwner()).put("policy_enforcement",enforcementJson())
+            "policy_get"->{val pkg=req.optString("package");val all=policies();val p=all.optJSONObject(pkg)?:policyDefaults(pkg);response.put("type","app_policy").put("package",pkg).put("policy",p).put("stored_on_device",all.has(pkg)).put("enforcement",JSONObject().put("policy_storage",true).put("auto_apply",true).put("suspend",false).put("usage_block",false).put("notification_control",false).put("keep_installed",false).put("protect_changes",false))}
+            "policy_set"->{val pkg=req.optString("package");if(pkg.isBlank())response.put("type","error").put("message","package required") else {val incoming=req.optJSONObject("policy")?:JSONObject();val p=policyDefaults(pkg);listOf("keep_installed","allow_usage","suspend","show_notifications","forward_notifications","protect_changes","auto_apply").forEach{name->if(incoming.has(name))p.put(name,incoming.optBoolean(name))};val all=policies();all.put(pkg,p);savePolicies(all);response.put("type","policy_saved").put("package",pkg).put("policy",p).put("stored_on_device",true).put("message","Policy saved on Companion. Controls requiring Android device-owner or notification access are stored but not enforced yet.")}}
+            "capabilities"->response.put("type","capabilities").put("notifications",false).put("files",true).put("camera",true).put("screen_control",false).put("app_inventory",true).put("remote_app_policy",true).put("screen_capture",true).put("screen_webrtc",true)
             else->response.put("type","error").put("message","unsupported command")
         }
     }
@@ -121,3 +106,4 @@ class CompanionService : Service() {
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{startWorkers();return START_STICKY}
     override fun onBind(intent:Intent?):IBinder?=null
 }
+
