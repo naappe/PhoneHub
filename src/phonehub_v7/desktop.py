@@ -43,8 +43,9 @@ class Window(QMainWindow):
         self.screen_signals=ScreenSignals();self.screen_signals.frame.connect(self.show_screen_frame);self.screen_signals.state.connect(self.show_screen_state)
         self.screen_client=WebRtcScreenClient(self.server,self.screen_signals.frame.emit,self.screen_signals.state.emit)
         names=["Home","Screen","Apps","App Policy","Policies","Notifications","Files","Automation","Logs","Settings"]
+        self.nav_buttons=[]
         for i,name in enumerate(names):
-            b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));nl.addWidget(b)
+            b=QPushButton(name);b.setCheckable(True);b.setAutoExclusive(True);b.clicked.connect(lambda _,x=i:self.stack.setCurrentIndex(x));self.nav_buttons.append(b);nl.addWidget(b)
             if i==0:b.setChecked(True)
         nl.addStretch();nl.addWidget(QLabel("Secure Companion"))
         outer.addWidget(nav);outer.addWidget(self.stack,1)
@@ -78,6 +79,8 @@ class Window(QMainWindow):
         return p
 
     def page_changed(self,index):
+        if hasattr(self,"nav_buttons") and 0<=index<len(self.nav_buttons):
+            self.nav_buttons[index].setChecked(True)
         if index==1:
             self.start_live_screen()
         elif index==3 and self.policy_title.text()=="Select an app":
@@ -245,8 +248,13 @@ class Window(QMainWindow):
             p=result.get("policy",{});e=result.get("enforcement",{});mode=e.get("mode","standard")
             for key,cb in self.policy_checks.items():cb.setChecked(bool(p.get(key,cb.isChecked())));cb.setEnabled(True)
             self.policy_save.setEnabled(True);self.policy_mode.setText("Enforcement mode: Device Owner" if mode=="device_owner" else "Enforcement mode: Standard Android")
-            if mode=="device_owner":self.policy_status.setText("Policy loaded | strong app controls available")
-            else:self.policy_status.setText("Policy loaded | settings sync now; Android requires Device Owner for suspend/uninstall protection")
+            if mode=="device_owner":
+                self.policy_status.setText("Policy loaded | strong app controls available")
+                for key in ("keep_installed","allow_usage","suspend","protect_changes"):self.policy_checks[key].setEnabled(True)
+            else:
+                self.policy_status.setText("Standard Android mode | strong app controls are unavailable without Device Owner")
+                for key in ("keep_installed","allow_usage","suspend","protect_changes"):self.policy_checks[key].setEnabled(False)
+                for key in ("show_notifications","forward_notifications","auto_apply"):self.policy_checks[key].setEnabled(True)
         elif tag=="policy_set":
             self.policy_save.setEnabled(True)
             if isinstance(result,Exception):self.policy_status.setText(f"Save failed: {result}");return
