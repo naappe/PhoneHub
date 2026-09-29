@@ -13,6 +13,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object CapabilityManager {
+    fun cameraAllowed(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
     fun notificationsRuntimeAllowed(context: Context): Boolean =
         Build.VERSION.SDK_INT < 33 ||
             ContextCompat.checkSelfPermission(
@@ -61,6 +64,7 @@ object CapabilityManager {
 
     fun requiredApprovalsComplete(context: Context): Boolean =
         CompanionService.isEnabled(context) &&
+            cameraAllowed(context) &&
             notificationsRuntimeAllowed(context) &&
             notificationAccessAllowed(context) &&
             backgroundAllowed(context)
@@ -68,6 +72,7 @@ object CapabilityManager {
     fun missingRequired(context: Context): List<String> {
         val missing = mutableListOf<String>()
         if (!CompanionService.isEnabled(context)) missing.add("secure_connection")
+        if (!cameraAllowed(context)) missing.add("remote_camera")
         if (!notificationsRuntimeAllowed(context)) missing.add("notifications_permission")
         if (!notificationAccessAllowed(context)) missing.add("notification_access")
         if (!backgroundAllowed(context)) missing.add("background_reconnect")
@@ -80,6 +85,7 @@ object CapabilityManager {
             .put("enrollment_complete", missing.isEmpty())
             .put("missing_required", JSONArray(missing))
             .put("secure_connection", CompanionService.isEnabled(context))
+            .put("remote_camera", cameraAllowed(context))
             .put("notifications_permission", notificationsRuntimeAllowed(context))
             .put("notification_access", notificationAccessAllowed(context))
             .put("background_reconnect", backgroundAllowed(context))
