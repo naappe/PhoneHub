@@ -24,17 +24,18 @@ import javax.crypto.spec.SecretKeySpec
 class CompanionService : Service() {
     companion object {
         private const val CHANNEL="phonehub_connection"; private const val NOTIFICATION_ID=7001
-        private const val PREFS="phonehub"; private const val ENABLED="companion_enabled"; private const val PAIR_KEY="pair_key"; private const val POLICIES="app_policies"
+        private const val PREFS="phonehub"; private const val ENABLED="companion_enabled"; private const val PAIR_KEY="pair_key"; private const val INSTALL_ID="install_id"; private const val POLICIES="app_policies"
         private const val DISCOVERY_PORT=47321; private const val COMMAND_PORT=47322
         private const val RELAY_URL="https://tmupbruwmwlrmewhoodn.supabase.co/functions/v1/phonehub-relay"
-        fun enable(c:Context){val p=c.getSharedPreferences(PREFS,0);if(!p.contains(PAIR_KEY)){val b=ByteArray(32);java.security.SecureRandom().nextBytes(b);p.edit().putString(PAIR_KEY,android.util.Base64.encodeToString(b,android.util.Base64.NO_WRAP)).apply()};p.edit().putBoolean(ENABLED,true).apply();start(c)}
+        fun enable(c:Context){val p=c.getSharedPreferences(PREFS,0);if(!p.contains(INSTALL_ID))p.edit().putString(INSTALL_ID,java.util.UUID.randomUUID().toString()).apply();if(!p.contains(PAIR_KEY)){val b=ByteArray(32);java.security.SecureRandom().nextBytes(b);p.edit().putString(PAIR_KEY,android.util.Base64.encodeToString(b,android.util.Base64.NO_WRAP)).apply()};p.edit().putBoolean(ENABLED,true).apply();start(c)}
         fun isEnabled(c:Context)=c.getSharedPreferences(PREFS,0).getBoolean(ENABLED,false)
         fun start(c:Context){ContextCompat.startForegroundService(c,Intent(c,CompanionService::class.java))}
     }
     private val running=AtomicBoolean(false); private var heartbeatThread:Thread?=null; private var commandThread:Thread?=null; private var remoteThread:Thread?=null
     override fun onCreate(){super.onCreate();val m=getSystemService(NotificationManager::class.java);m.createNotificationChannel(NotificationChannel(CHANNEL,"PhoneHub connection",NotificationManager.IMPORTANCE_LOW));startForeground(NOTIFICATION_ID,NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.stat_sys_data_bluetooth).setContentTitle("PhoneHub").setContentText("Companion service active").setOngoing(true).setSilent(true).build());startWorkers()}
     private fun startWorkers(){startHeartbeat();startCommandServer();startRemoteWorker()}
-    private fun deviceId()=Settings.Secure.getString(contentResolver,Settings.Secure.ANDROID_ID)?:"android"
+    private fun installId():String{val p=getSharedPreferences(PREFS,0);var id=p.getString(INSTALL_ID,null);if(id.isNullOrBlank()){id=java.util.UUID.randomUUID().toString();p.edit().putString(INSTALL_ID,id).apply()};return id!!}
+    private fun deviceId():String{val androidId=Settings.Secure.getString(contentResolver,Settings.Secure.ANDROID_ID)?:"android";return hex(MessageDigest.getInstance("SHA-256").digest((androidId+":"+installId()).toByteArray())).take(32)}
     private fun keyBytes():ByteArray?{val s=getSharedPreferences(PREFS,0).getString(PAIR_KEY,null)?:return null;return android.util.Base64.decode(s,android.util.Base64.NO_WRAP)}
     private fun hmac(key:ByteArray,data:String):String{val m=Mac.getInstance("HmacSHA256");m.init(SecretKeySpec(key,"HmacSHA256"));return m.doFinal(data.toByteArray()).joinToString(""){"%02x".format(it)}}
     private fun secureEquals(a:String,b:String)=MessageDigest.isEqual(a.toByteArray(),b.toByteArray())
@@ -126,7 +127,7 @@ class CompanionService : Service() {
             "webrtc_stop"->{ScreenCaptureService.stopWebRtc();response.put("type","webrtc_stopped")}
             "policy_get"->{val pkg=req.optString("package");val all=policies();val p=all.optJSONObject(pkg)?:policyDefaults(pkg);response.put("type","app_policy").put("package",pkg).put("policy",p).put("stored_on_device",all.has(pkg)).put("enforcement",enforcementJson())}
             "policy_set"->{val pkg=req.optString("package");if(pkg.isBlank())response.put("type","error").put("message","package required") else {val incoming=req.optJSONObject("policy")?:JSONObject();val p=policyDefaults(pkg);listOf("keep_installed","allow_usage","suspend","show_notifications","forward_notifications","protect_changes","auto_apply").forEach{name->if(incoming.has(name))p.put(name,incoming.optBoolean(name))};val all=policies();all.put(pkg,p);savePolicies(all);val applied=if(p.optBoolean("auto_apply",true))applyPolicy(pkg,p) else JSONObject().put("applied",false).put("reason","Auto apply is off");response.put("type","policy_saved").put("package",pkg).put("policy",p).put("stored_on_device",true).put("enforcement",enforcementJson()).put("apply_result",applied).put("message",if(applied.optBoolean("applied",false))"Policy saved and enforced by Android." else applied.optString("reason","Policy saved."))}}
-            "capabilities"->response.put("type","capabilities").put("notifications",PhoneHubNotificationListener.isRunning()).put("files",true).put("camera",true).put("camera_frames",true).put("screen_control",false).put("app_inventory",true).put("remote_app_policy",true).put("screen_capture",true).put("screen_webrtc",true).put("network_reconnect",true).put("usb_required_after_setup",false).put("relay_transport","encrypted_internet").put("device_owner",isDeviceOwner()).put("policy_enforcement",enforcementJson())
+            "capabilities"->response.put("type","capabilities").put("notifications",PhoneHubNotificationListener.isRunning()).put("files",true).put("camera",true).put("camera_frames",true).put("screen_control",false).put("app_inventory",true).put("remote_app_policy",true).put("screen_capture",true).put("screen_webrtc",true).put("network_reconnect",true).put("usb_required_after_setup",false).put("relay_transport","encrypted_internet").put("pairing_scope","per_phone_install").put("automatic_local_reenroll",true).put("device_owner",isDeviceOwner()).put("policy_enforcement",enforcementJson())
             else->response.put("type","error").put("message","unsupported command")
         }
     }
