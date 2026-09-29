@@ -34,7 +34,7 @@ class Task(QRunnable):
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False;self._scrcpy_process=None;self._screen_device=None
+        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False;self._scrcpy_process=None;self._screen_device=None;self._camera_active=False;self._camera_busy=False
         self.setWindowTitle("PhoneHub 7");self.resize(1100,700);self.setMinimumSize(820,560)
         root=QWidget();self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         nav=QFrame();nav.setObjectName("nav");nav.setFixedWidth(220);nl=QVBoxLayout(nav);nl.setContentsMargins(18,24,18,24)
@@ -52,10 +52,13 @@ class Window(QMainWindow):
         self.stack.addWidget(self.info_page("Policies","Reusable policy profiles will be applied to selected apps."))
         self.stack.addWidget(self.info_page("Notifications","PC notification center: filtering, forwarding rules, history and actions will be managed here. The phone remains a thin Android notification bridge."))
         self.stack.addWidget(self.info_page("Files","PC file manager: browse permitted phone storage, transfer files, queues and history will be managed here."))
+        self.stack.addWidget(self.camera_page())
         self.stack.addWidget(self.info_page("Automation","PC automation engine: device events, schedules, policy actions and workflows will be configured here."))
         self.stack.addWidget(self.info_page("Logs","PC audit log: secure connections, commands, policy changes, transfers and errors will appear here."))
         self.stack.addWidget(self.info_page("Settings","PC-side connection, pairing, protection, backup, updates and new-phone setup will live here."))
-        self.stack.currentChanged.connect(self.page_changed);self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000);QTimer.singleShot(400,self.refresh)
+        self.stack.currentChanged.connect(self.page_changed);self.apply_style();self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(5000)
+        self.camera_timer=QTimer(self);self.camera_timer.timeout.connect(self.request_camera_frame);self.camera_timer.setInterval(900)
+        QTimer.singleShot(400,self.refresh)
 
     def home(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
@@ -82,6 +85,10 @@ class Window(QMainWindow):
             self.start_live_screen()
         elif self._screen_active:
             self.stop_live_screen()
+        if index==7:
+            self.refresh_camera_status()
+        elif self._camera_active:
+            self.stop_camera()
 
     def stop_live_screen(self):
         self._screen_active=False
@@ -180,6 +187,39 @@ class Window(QMainWindow):
         except Exception as e:
             self.screen_status.setText(f"Live frame display failed: {e}");self._screen_active=False
 
+
+    def camera_page(self):
+        p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
+        top=QHBoxLayout();h=QLabel("Camera");h.setObjectName("heading");self.camera_status_label=QLabel("Camera idle");self.camera_status_label.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.camera_status_label);l.addLayout(top)
+        help_text=QLabel("Camera is controlled here on the PC. Android only provides the permission-protected camera bridge and always shows its foreground-service notification while active.");help_text.setWordWrap(True);l.addWidget(help_text)
+        controls=QHBoxLayout();self.camera_lens=QComboBox();self.camera_lens.addItems(["Back camera","Front camera"]);self.camera_start_button=QPushButton("Start camera");self.camera_stop_button=QPushButton("Stop camera");self.camera_start_button.clicked.connect(self.start_camera);self.camera_stop_button.clicked.connect(self.stop_camera);controls.addWidget(self.camera_lens);controls.addWidget(self.camera_start_button);controls.addWidget(self.camera_stop_button);controls.addStretch();l.addLayout(controls)
+        self.camera_view=QLabel("Start the camera from the PC");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
+        return p
+
+    def refresh_camera_status(self):
+        ds=self.server.devices()
+        if not ds:self.camera_status_label.setText("Phone offline");return
+        self.run_task("camera_status",lambda:self.server.camera_status(ds[0]))
+
+    def start_camera(self):
+        ds=self.server.devices()
+        if not ds:self.camera_status_label.setText("Phone offline");return
+        lens="front" if self.camera_lens.currentIndex()==1 else "back"
+        self.camera_status_label.setText("Starting camera...")
+        self.run_task("camera_start",lambda:self.server.camera_start(ds[0],lens))
+
+    def stop_camera(self):
+        self.camera_timer.stop();self._camera_active=False
+        ds=self.server.devices()
+        if ds:self.run_task("camera_stop",lambda:self.server.camera_stop(ds[0]))
+        self.camera_view.setPixmap(QPixmap());self.camera_view.setText("Camera stopped")
+
+    def request_camera_frame(self):
+        if not self._camera_active or self._camera_busy:return
+        ds=self.server.devices()
+        if not ds:self.camera_status_label.setText("Phone offline");self.camera_timer.stop();self._camera_active=False;return
+        self._camera_busy=True;self.run_task("camera_frame",lambda:self.server.camera_frame(ds[0]))
+
     def info_page(self,title,body):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,32,36,32);h=QLabel(title);h.setObjectName("heading");l.addWidget(h);d=QLabel(body);d.setWordWrap(True);l.addWidget(d);l.addStretch();return p
 
@@ -237,6 +277,27 @@ class Window(QMainWindow):
                 reason=result.get("reason","local scrcpy unavailable")
                 self.screen_status.setText(f"Local scrcpy unavailable | {reason} | trying WebRTC")
                 if d is not None:self._start_webrtc(d)
+        elif tag=="camera_status":
+            if isinstance(result,Exception):self.camera_status_label.setText(f"Camera unavailable: {result}");return
+            active=bool(result.get("active"));self._camera_active=active
+            self.camera_status_label.setText(("Active" if active else "Idle")+" | "+str(result.get("lens","back"))+" camera")
+            if active and not self.camera_timer.isActive():self.camera_timer.start()
+        elif tag=="camera_start":
+            if isinstance(result,Exception):self.camera_status_label.setText(f"Start failed: {result}");return
+            if result.get("type")=="camera_error":
+                self.camera_status_label.setText(result.get("message","Camera permission required"));self.camera_view.setText("Open PhoneHub Companion once and grant Camera permission.");return
+            self._camera_active=True;self.camera_status_label.setText("Camera starting...");self.camera_timer.start()
+        elif tag=="camera_stop":
+            self._camera_active=False;self.camera_timer.stop();self.camera_status_label.setText("Camera stopped")
+        elif tag=="camera_frame":
+            self._camera_busy=False
+            if isinstance(result,Exception):self.camera_status_label.setText(f"Frame failed: {result}");return
+            if result.get("type")=="camera_frame":
+                image=QImage.fromData(result.get("jpeg_bytes",b""))
+                if not image.isNull():
+                    pix=QPixmap.fromImage(image);self.camera_view.setPixmap(pix.scaled(self.camera_view.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation));self.camera_status_label.setText("Live | "+str(result.get("lens","back"))+" camera")
+            elif result.get("type")=="camera_no_frame":
+                self.camera_status_label.setText("Waiting for camera frame...")
         elif tag=="policy_get":
             if isinstance(result,Exception):self.policy_status.setText(f"Policy unavailable: {result}");return
             p=result.get("policy",{});e=result.get("enforcement",{});mode=e.get("mode","standard")
