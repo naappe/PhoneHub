@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0"
 set "PYTHONPATH=%~dp0src"
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 
 where python >nul 2>&1 || (
   echo [PhoneHub] Python 3 is required.
@@ -37,5 +39,6 @@ if errorlevel 1 (
 )
 
 echo [PhoneHub 7] Starting Companion + hybrid scrcpy/WebRTC controller...
+python -c "import phonehub_v7.desktop as d; print('[PhoneHub 7] PC module:', d.__file__)"
 python -m phonehub_v7.desktop
 exit /b %errorlevel%
