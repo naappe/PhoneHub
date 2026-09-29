@@ -67,6 +67,14 @@ class CompanionServer:
             offset=int(page.get("next_offset",offset+50))
     def capabilities(self,d):return self.command(d,"capabilities")
     def screen_status(self,d):return self.command(d,"screen_status")
+    def camera_status(self,d):return self.command(d,"camera_status")
+    def camera_start(self,d,lens="back"):return self.command(d,"camera_start",{"lens":lens})
+    def camera_stop(self,d):return self.command(d,"camera_stop")
+    def camera_frame(self,d):
+        r=self.command(d,"camera_frame")
+        if r.get("type")=="camera_frame" and r.get("jpeg"):
+            r["jpeg_bytes"]=base64.b64decode(r["jpeg"])
+        return r
     def webrtc_offer(self,d,sdp):return self.command(d,"webrtc_offer",{"sdp":sdp})
     def webrtc_stop(self,d):return self.command(d,"webrtc_stop")
     def policy_get(self,d,package):return self.command(d,"policy_get",{"package":package})
