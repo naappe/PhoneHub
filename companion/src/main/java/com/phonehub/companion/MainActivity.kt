@@ -18,8 +18,7 @@ import androidx.core.content.ContextCompat
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var setupButton: Button
-    private val setupPermissionsRequest = 7
-    private var waitingForNotificationAccess = false
+    private val notificationPermissionRequest = 7
     private var waitingForBatteryAccess = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,7 +31,7 @@ class MainActivity : Activity() {
         }
 
         val description = TextView(this).apply {
-            text = "One-time secure setup. After setup, the phone reconnects automatically over Wi-Fi or mobile data. USB is not required for normal use."
+            text = "Secure connection and Android policy bridge only. All controls, files, camera, screen, notifications and automation are managed from the PC."
             textSize = 16f
             setPadding(48, 0, 48, 28)
         }
@@ -43,7 +42,7 @@ class MainActivity : Activity() {
         }
 
         setupButton = Button(this).apply {
-            text = "Complete one-time setup"
+            text = "Complete one-time connection setup"
             setOnClickListener { beginSetup() }
         }
 
@@ -57,60 +56,45 @@ class MainActivity : Activity() {
         })
 
         if (CompanionService.isEnabled(this)) CompanionService.start(this)
-        refreshSetupStatus()
+        refreshStatus()
     }
 
     override fun onResume() {
         super.onResume()
 
-        if (waitingForNotificationAccess && notificationAccessGranted()) {
-            waitingForNotificationAccess = false
-            continueSetup()
-            return
-        }
-
-        if (waitingForBatteryAccess && batteryBackgroundAllowed()) {
+        if (waitingForBatteryAccess && backgroundAllowed()) {
             waitingForBatteryAccess = false
-            continueSetup()
+            CompanionService.start(this)
+            refreshStatus("Setup complete. Close this app and use Samsung Secure on the PC.")
             return
         }
 
         if (CompanionService.isEnabled(this)) CompanionService.start(this)
-        refreshSetupStatus()
+        refreshStatus()
     }
 
     private fun beginSetup() {
         CompanionService.enable(this)
 
-        val needed = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            needed.add(Manifest.permission.CAMERA)
-        }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            needed.add(Manifest.permission.POST_NOTIFICATIONS)
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                notificationPermissionRequest
+            )
+            return
         }
 
-        if (needed.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, needed.toTypedArray(), setupPermissionsRequest)
-        } else {
-            continueSetup()
-        }
+        continueSetup()
     }
 
     private fun continueSetup() {
         CompanionService.enable(this)
 
-        if (!notificationAccessGranted()) {
-            waitingForNotificationAccess = true
-            refreshSetupStatus("Android approval required. Enable Samsung Secure notification access, then return.")
-            startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
-            return
-        }
-
-        if (!batteryBackgroundAllowed()) {
+        if (!backgroundAllowed()) {
             waitingForBatteryAccess = true
-            refreshSetupStatus("Android approval required. Allow Samsung Secure to run without battery restriction.")
+            refreshStatus("One Android approval remains: allow background operation so the secure connection can reconnect automatically.")
             try {
                 startActivity(
                     Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -124,19 +108,10 @@ class MainActivity : Activity() {
         }
 
         CompanionService.start(this)
-        refreshSetupStatus("Setup complete. You can close this app and remove USB.")
+        refreshStatus("Setup complete. Close this app and use Samsung Secure on the PC.")
     }
 
-    private fun notificationAccessGranted(): Boolean {
-        return try {
-            val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: ""
-            enabled.contains(packageName, ignoreCase = true)
-        } catch (_: Exception) {
-            PhoneHubNotificationListener.isRunning()
-        }
-    }
-
-    private fun batteryBackgroundAllowed(): Boolean {
+    private fun backgroundAllowed(): Boolean {
         return try {
             val pm = getSystemService(PowerManager::class.java)
             pm.isIgnoringBatteryOptimizations(packageName)
@@ -147,24 +122,23 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == setupPermissionsRequest) continueSetup()
+        if (requestCode == notificationPermissionRequest) continueSetup()
     }
 
-    private fun refreshSetupStatus(extra: String? = null) {
-        val bridge = CompanionService.isEnabled(this)
-        val camera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        val notificationAccess = notificationAccessGranted()
-        val background = batteryBackgroundAllowed()
+    private fun refreshStatus(extra: String? = null) {
+        val enabled = CompanionService.isEnabled(this)
+        val background = backgroundAllowed()
+        val complete = enabled && background
 
-        val complete = bridge && camera && notificationAccess && background
-        setupButton.text = if (complete) "Setup complete" else "Complete one-time setup"
+        setupButton.text = if (complete) "Connection setup complete" else "Complete one-time connection setup"
         setupButton.isEnabled = !complete
 
-        status.text = when {
-            complete -> "Ready\nBackground reconnect enabled\nUSB not required"
-            !extra.isNullOrBlank() -> extra
-            bridge -> "Setup is not complete yet. Tap below once to finish Android approvals."
-            else -> "One-time setup required."
-        }
+        val lines = mutableListOf<String>()
+        lines.add(if (enabled) "Secure connection: ready" else "Secure connection: setup required")
+        lines.add("Policy bridge: ready")
+        lines.add(if (background) "Background reconnect: enabled" else "Background reconnect: approval required")
+        if (complete) lines.add("USB: not required")
+        if (!extra.isNullOrBlank()) lines.add(extra)
+        status.text = lines.joinToString("\n")
     }
 }
