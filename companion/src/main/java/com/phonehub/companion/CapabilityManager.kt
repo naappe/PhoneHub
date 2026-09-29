@@ -96,8 +96,9 @@ object CapabilityManager {
             .put("device_admin", deviceAdminActive(context))
             .put("device_owner", deviceOwner(context))
             .put("scrcpy_camera_available", true)
-            .put("screen_capture_available", true)
-            .put("screen_session_authorization_required", true)
+            .put("screen_capture_available", PhoneHubScreenAccessService.isReady())
+            .put("screen_transport", "accessibility_snapshot")
+            .put("screen_session_authorization_required", false)
             .put("usb_required_after_setup", false)
             .put("phone_role", "connection_policy_bridge")
     }
