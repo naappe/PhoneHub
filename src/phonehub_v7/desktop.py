@@ -64,10 +64,8 @@ class Window(QMainWindow):
     def settings_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(14)
         h=QLabel("Settings");h.setObjectName("heading");l.addWidget(h)
-        info=QLabel("Add each enrolled phone by its Tailscale address. PhoneHub saves every phone separately.");info.setWordWrap(True);l.addWidget(info)
-        row=QHBoxLayout();self.phone_name_input=QLineEdit();self.phone_name_input.setPlaceholderText("Phone name (for example My Samsung)");self.phone_ip_input=QLineEdit();self.phone_ip_input.setPlaceholderText("Tailscale IP (100.x.x.x)");row.addWidget(self.phone_name_input);row.addWidget(self.phone_ip_input);l.addLayout(row)
-        self.save_phone_button=QPushButton("Save & Connect");self.save_phone_button.clicked.connect(self.save_tailscale_phone);l.addWidget(self.save_phone_button)
-        self.saved_phone_status=QLabel("Saved phones will be remembered for future starts.");self.saved_phone_status.setWordWrap(True);l.addWidget(self.saved_phone_status);l.addStretch()
+        info=QLabel("Samsung Secure uses PhoneHub's encrypted Internet connection. No Tailscale IP or VPN setup is required.");info.setWordWrap(True);l.addWidget(info)
+        status=QLabel("New phones are paired during the one-time USB enrollment. After pairing, normal control works through Samsung Secure over the Internet.");status.setWordWrap(True);l.addWidget(status);l.addStretch()
         return p
 
     def save_tailscale_phone(self):
@@ -142,7 +140,7 @@ class Window(QMainWindow):
     def screen_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Ready for live screen");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
-        self.screen_help=QLabel("After one-time enrollment, USB is not required. PhoneHub uses the phone's private Tailscale address on any network. Screen control uses scrcpy over authorized ADB when reachable, otherwise WebRTC fallback.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
+        self.screen_help=QLabel("After one-time enrollment, USB is not required. Samsung Secure uses the encrypted Internet relay for control and WebRTC for the live screen. Authorized local/USB ADB can use scrcpy as an optional fast path.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
         self.screen_view=QLabel("Open this page to connect the live screen");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
         self.screen_button=QPushButton("Reconnect live screen");self.screen_button.clicked.connect(self.reconnect_live_screen);l.addWidget(self.screen_button)
         return p
@@ -195,26 +193,14 @@ class Window(QMainWindow):
         if not shutil.which("adb"):return {"ok":False,"reason":"ADB is not installed"}
         if not shutil.which("scrcpy"):return {"ok":False,"reason":"scrcpy is not installed"}
         flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
-        target=f"{d.address}:5555"
-
         try:
-            with socket.create_connection((d.address,5555),timeout=1.0):pass
-        except OSError:
-            return {"ok":False,"reason":f"ADB over Tailscale is not reachable at {target}"}
-
-        try:
-            connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
-            output=((connect.stdout or "")+" "+(connect.stderr or "")).strip()
-            low=output.lower()
-            if connect.returncode!=0 or ("connected to" not in low and "already connected" not in low):
-                return {"ok":False,"reason":output or f"ADB connection failed at {target}"}
-        except Exception as e:
-            return {"ok":False,"reason":str(e)}
-
-        args=["scrcpy","-s",target,"--window-title=PhoneHub Screen - Tailscale Control","--max-size=1600","--max-fps=60","--video-bit-rate=8M","--no-audio","--stay-awake"]
-        process=subprocess.Popen(args,creationflags=flags)
-        return {"ok":True,"process":process,"target":target}
-
+            out=subprocess.run(["adb","devices"],capture_output=True,text=True,timeout=5,creationflags=flags).stdout.splitlines()[1:]
+            targets=[line.split()[0] for line in out if line.strip().endswith("\tdevice")]
+            if not targets:return {"ok":False,"reason":"No authorized local/USB ADB device"}
+            target=targets[0]
+            process=subprocess.Popen(["scrcpy","-s",target,"--window-title=PhoneHub Screen","--max-size=1600","--max-fps=60","--video-bit-rate=8M","--no-audio","--stay-awake"],creationflags=flags)
+            return {"ok":True,"process":process,"target":target}
+        except Exception as e:return {"ok":False,"reason":str(e)}
 
     def show_screen_state(self,state):
         self.screen_status.setText(state)
@@ -321,16 +307,16 @@ class Window(QMainWindow):
     def camera_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Camera");h.setObjectName("heading");self.camera_status_label=QLabel("Camera idle");self.camera_status_label.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.camera_status_label);l.addLayout(top)
-        help_text=QLabel("Camera uses scrcpy/ADB over the phone's Tailscale address when reachable, with Samsung Secure WebRTC fallback over the same private network.");help_text.setWordWrap(True);l.addWidget(help_text)
+        help_text=QLabel("Camera uses Samsung Secure WebRTC over the Internet. Authorized local/USB ADB can use scrcpy as an optional fast path.");help_text.setWordWrap(True);l.addWidget(help_text)
         controls=QHBoxLayout();self.camera_lens=QComboBox();self.camera_lens.addItems(["Back camera","Front camera"]);self.camera_start_button=QPushButton("Open camera");self.camera_stop_button=QPushButton("Stop camera");self.camera_start_button.clicked.connect(self.start_camera);self.camera_stop_button.clicked.connect(self.stop_camera);controls.addWidget(self.camera_lens);controls.addWidget(self.camera_start_button);controls.addWidget(self.camera_stop_button);controls.addStretch();l.addLayout(controls)
-        self.camera_view=QLabel("Open the camera from this PC. PhoneHub chooses Tailscale ADB/scrcpy first, then WebRTC fallback.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
+        self.camera_view=QLabel("Open the camera from this PC. PhoneHub uses local/USB scrcpy when available, otherwise Samsung Secure WebRTC.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
         return p
 
     def refresh_camera_status(self):
         if self._camera_process is not None and self._camera_process.poll() is None:
             self._camera_active=True;self.camera_status_label.setText("SCRCPY CAMERA ACTIVE")
         else:
-            self._camera_active=False;self._camera_process=None;self.camera_status_label.setText("Ready | Tailscale scrcpy or WebRTC fallback")
+            self._camera_active=False;self._camera_process=None;self.camera_status_label.setText("Ready | local scrcpy or Internet WebRTC")
 
     def start_camera(self):
         if self._camera_process is not None and self._camera_process.poll() is None:
@@ -358,33 +344,15 @@ class Window(QMainWindow):
     def _start_scrcpy_camera(self,lens):
         if not shutil.which("adb"):return {"ok":False,"reason":"ADB is not installed"}
         if not shutil.which("scrcpy"):return {"ok":False,"reason":"scrcpy is not installed"}
-        ds=self.server.devices()
-        if not ds:return {"ok":False,"reason":"No enrolled Tailscale phone"}
-        d=ds[0]
-        target=f"{d.address}:5555"
         flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
-
         try:
-            with socket.create_connection((d.address,5555),timeout=1.0):pass
-        except OSError:
-            return {"ok":False,"reason":f"ADB over Tailscale is not reachable at {target}"}
-
-        try:
-            connect=subprocess.run(["adb","connect",target],capture_output=True,text=True,timeout=8,creationflags=flags)
-            output=((connect.stdout or "")+" "+(connect.stderr or "")).strip()
-            low=output.lower()
-            if connect.returncode!=0 or ("connected to" not in low and "already connected" not in low):
-                return {"ok":False,"reason":output or f"ADB connection failed at {target}"}
-        except Exception as e:
-            return {"ok":False,"reason":str(e)}
-
-        args=["scrcpy","-s",target,"--video-source=camera",f"--camera-facing={lens}","--no-audio",f"--window-title=PhoneHub Camera - {lens.title()}"]
-        try:
-            process=subprocess.Popen(args,creationflags=flags)
+            out=subprocess.run(["adb","devices"],capture_output=True,text=True,timeout=5,creationflags=flags).stdout.splitlines()[1:]
+            targets=[line.split()[0] for line in out if line.strip().endswith("\tdevice")]
+            if not targets:return {"ok":False,"reason":"No authorized local/USB ADB device"}
+            target=targets[0]
+            process=subprocess.Popen(["scrcpy","-s",target,"--video-source=camera",f"--camera-facing={lens}","--no-audio",f"--window-title=PhoneHub Camera - {lens.title()}"],creationflags=flags)
             return {"ok":True,"process":process,"target":target,"lens":lens}
-        except Exception as e:
-            return {"ok":False,"reason":str(e)}
-
+        except Exception as e:return {"ok":False,"reason":str(e)}
 
     def info_page(self,title,body):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,32,36,32);h=QLabel(title);h.setObjectName("heading");l.addWidget(h);d=QLabel(body);d.setWordWrap(True);l.addWidget(d);l.addStretch();return p
@@ -445,7 +413,7 @@ class Window(QMainWindow):
             if isinstance(result,Exception):self.connection.setText(f"Status refresh delayed - {result}");self.connection.setStyleSheet("color:#b45309;font-weight:600");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setStyleSheet("");transport="TAILSCALE";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));caps=s.get("capabilities",{}) or {};missing=list(caps.get("missing_required",[]) or []);complete=bool(caps.get("enrollment_complete",not missing));friendly={"secure_connection":"secure connection","remote_camera":"remote camera","camera":"camera","notifications_permission":"notifications permission","notification_access":"notification access","background_reconnect":"background reconnect"};self.setup_hint.setText("Phone enrollment complete. Samsung Secure will reconnect automatically; normal control stays on this PC." if complete else "Phone setup needs attention: "+", ".join(friendly.get(x,x.replace("_"," ")) for x in missing)+".");self.setup_button.setVisible(not complete);self.setup_button.setEnabled(not complete);self.open_companion_button.setVisible(False);self.open_companion_button.setEnabled(False)
+            self.connection.setStyleSheet("");transport="INTERNET RELAY";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));caps=s.get("capabilities",{}) or {};missing=list(caps.get("missing_required",[]) or []);complete=bool(caps.get("enrollment_complete",not missing));friendly={"secure_connection":"secure connection","remote_camera":"remote camera","camera":"camera","notifications_permission":"notifications permission","notification_access":"notification access","background_reconnect":"background reconnect"};self.setup_hint.setText("Phone enrollment complete. Samsung Secure will reconnect automatically; normal control stays on this PC." if complete else "Phone setup needs attention: "+", ".join(friendly.get(x,x.replace("_"," ")) for x in missing)+".");self.setup_button.setVisible(not complete);self.setup_button.setEnabled(not complete);self.open_companion_button.setVisible(False);self.open_companion_button.setEnabled(False)
             self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Samsung Secure | auto reconnect")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
             self.network.value.setText(s.get("network","N/A"));self.network.detail.setText("Active connection")
