@@ -24,6 +24,7 @@ class MainActivity : Activity() {
     private val screenProjectionRequest = 8
     private var waitingForNotificationAccess = false
     private var waitingForBatteryAccess = false
+    private var screenConsentInFlight = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,6 +61,7 @@ class MainActivity : Activity() {
         })
 
         if (intent?.getBooleanExtra("request_screen_share", false) == true) {
+            intent?.removeExtra("request_screen_share")
             requestScreenProjection()
         }
 
@@ -75,7 +77,10 @@ class MainActivity : Activity() {
     override fun onNewIntent(newIntent: Intent) {
         super.onNewIntent(newIntent)
         setIntent(newIntent)
-        if (newIntent.getBooleanExtra("request_screen_share", false)) requestScreenProjection()
+        if (newIntent.getBooleanExtra("request_screen_share", false)) {
+            newIntent.removeExtra("request_screen_share")
+            requestScreenProjection()
+        }
     }
 
     override fun onResume() {
@@ -106,11 +111,13 @@ class MainActivity : Activity() {
     }
 
     private fun requestScreenProjection() {
+        if (screenConsentInFlight) return
         if (ScreenCaptureService.active) {
             refreshStatus("Screen sharing is already active. Return to PhoneHub on the PC.")
             return
         }
         val manager = getSystemService(MediaProjectionManager::class.java)
+        screenConsentInFlight = true
         refreshStatus("Approve Android's screen sharing prompt. PhoneHub will connect automatically after approval.")
         startActivityForResult(manager.createScreenCaptureIntent(), screenProjectionRequest)
     }
@@ -119,6 +126,7 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != screenProjectionRequest) return
+        screenConsentInFlight = false
         if (resultCode == RESULT_OK && data != null) {
             ScreenCaptureService.start(this, resultCode, data)
             refreshStatus("Screen sharing started. You can return to PhoneHub on the PC.")
