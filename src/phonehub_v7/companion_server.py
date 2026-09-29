@@ -94,6 +94,9 @@ class CompanionServer:
     def screen_status(self,d):return self.command(d,"screen_status")
     def webrtc_offer(self,d,sdp):return self.command(d,"webrtc_offer",{"sdp":sdp})
     def webrtc_stop(self,d):return self.command(d,"webrtc_stop")
+    def camera_webrtc_offer(self,d,sdp,lens="back"):
+        return self.command(d,"camera_webrtc_offer",{"sdp":sdp,"lens":lens})
+    def camera_webrtc_stop(self,d):return self.command(d,"camera_webrtc_stop")
     def policy_get(self,d,package):return self.command(d,"policy_get",{"package":package})
     def policy_set(self,d,package,policy):return self.command(d,"policy_set",{"package":package,"policy":policy})
     def _mailbox(self,did,key):
