@@ -10,7 +10,7 @@ from .webrtc_stream import WebRtcScreenClient
 def gb(n): return f"{n/1073741824:.1f} GB"
 
 class Card(QFrame):
-    def __init__(self,title,value="-",detail="",progress=False):
+    def __init__(self,title,value="N/A",detail="",progress=False):
         super().__init__();self.setObjectName("card")
         lay=QVBoxLayout(self);lay.setContentsMargins(20,18,20,18);lay.setSpacing(7)
         t=QLabel(title);t.setObjectName("cardTitle");self.value=QLabel(value);self.value.setObjectName("cardValue");self.detail=QLabel(detail);self.detail.setObjectName("cardDetail")
@@ -60,7 +60,7 @@ class Window(QMainWindow):
     def home(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
         top=QHBoxLayout();h=QLabel("Home");h.setObjectName("heading");self.updated=QLabel("Waiting for device");self.updated.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.updated)
-        self.connection=QLabel("CONNECTED:  Looking for your phone...");self.connection.setObjectName("status")
+        self.connection=QLabel("Looking for your phone...");self.connection.setObjectName("status")
         l.addLayout(top);l.addWidget(self.connection)
         row1=QHBoxLayout();self.device=Card("DEVICE");self.battery=Card("BATTERY",progress=True);self.network=Card("NETWORK")
         for x in [self.device,self.battery,self.network]:row1.addWidget(x)
@@ -221,10 +221,10 @@ class Window(QMainWindow):
             self.connection.setStyleSheet("");self.connection.setText(f"Connected securely | {d.address} | AES-256-GCM");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
             self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Encrypted Companion")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
-            self.network.value.setText(s.get("network","-"));self.network.detail.setText("Active connection")
+            self.network.value.setText(s.get("network","N/A"));self.network.detail.setText("Active connection")
             total=s.get("storage_total",0);free=s.get("storage_free",0);used=max(0,total-free);self.storage.value.setText(gb(free));self.storage.bar.setValue(int(used*100/total) if total else 0);self.storage.detail.setText(f"free of {gb(total)}")
             mt=s.get("memory_total",0);mf=s.get("memory_free",0);self.memory.value.setText(gb(mf));self.memory.bar.setValue(int((mt-mf)*100/mt) if mt else 0);self.memory.detail.setText(f"available of {gb(mt)}")
-            self.android.value.setText(str(s.get("android_version","-")));self.android.detail.setText(f"SDK {s.get('sdk','-')}")
+            self.android.value.setText(str(s.get("android_version","N/A")));self.android.detail.setText(f"SDK {s.get('sdk','N/A')}")
             if self.current!=d.device_id:self.current=d.device_id;self.load_apps(d)
         elif tag=="screen_local":
             if isinstance(result,Exception):
@@ -299,7 +299,7 @@ class Window(QMainWindow):
 
     def apply_style(self):
         self.setStyleSheet("""
-        QWidget{background:#f5f7fb;color:#172033;font-family:'Segoe UI';font-size:14px}
+        QWidget{background:#f5f7fb;color:#172033;font-family:Arial;font-size:14px}
         QLabel{background:transparent}
         #nav{background:#ffffff;border-right:1px solid #e4e9f1}
         #brand{font-size:22px;font-weight:700;color:#111827}
