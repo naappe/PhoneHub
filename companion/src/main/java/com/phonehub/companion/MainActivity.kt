@@ -28,7 +28,7 @@ class MainActivity : Activity() {
         }
 
         val description = TextView(this).apply {
-            text = "This phone is the secure Android bridge.\nAll management and controls live on your PC."
+            text = "This phone is the secure Android bridge.\nAfter one-time setup, USB is not required. PhoneHub reconnects over Wi-Fi or mobile data and all management lives on your PC."
             textSize = 16f
             setPadding(48, 0, 48, 28)
         }
@@ -100,7 +100,7 @@ class MainActivity : Activity() {
 
         if (CompanionService.isEnabled(this)) {
             CompanionService.start(this)
-            updateStatus("Bridge enabled\nOpen PhoneHub on your PC")
+            updateStatus("Bridge enabled\nUSB not required - open PhoneHub on your PC")
         } else {
             updateStatus("One-time setup required\nTap Enable PhoneHub bridge")
         }
@@ -129,7 +129,7 @@ class MainActivity : Activity() {
         }
 
         CompanionService.enable(this)
-        updateStatus("Bridge enabled\nPhoneHub is controlled from your PC")
+        updateStatus("Bridge enabled\nUSB can be removed - PhoneHub will reconnect over the network")
     }
 
     private fun updateStatus(message: String) {
