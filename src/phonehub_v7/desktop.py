@@ -75,7 +75,7 @@ class Window(QMainWindow):
     def screen_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Ready for live screen");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
-        self.screen_help=QLabel("PhoneHub automatically uses high-performance scrcpy control on a reachable local wireless-ADB connection. Remote networks fall back to encrypted WebRTC.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
+        self.screen_help=QLabel("After one-time enrollment, USB is not required. PhoneHub uses the local network when available and the encrypted internet relay when the phone is elsewhere. Screen control uses local scrcpy when authorized, otherwise encrypted WebRTC.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
         self.screen_view=QLabel("Open this page to connect the live screen");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
         self.screen_button=QPushButton("Reconnect live screen");self.screen_button.clicked.connect(self.reconnect_live_screen);l.addWidget(self.screen_button)
         return p
@@ -328,8 +328,8 @@ class Window(QMainWindow):
             if isinstance(result,Exception):self.connection.setText(f"Status refresh delayed - {result}");self.connection.setStyleSheet("color:#b45309;font-weight:600");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setStyleSheet("");self.connection.setText(f"Connected securely | {d.address} | AES-256-GCM");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
-            self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Encrypted Companion")
+            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
+            self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Encrypted Companion | auto reconnect")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
             self.network.value.setText(s.get("network","N/A"));self.network.detail.setText("Active connection")
             total=s.get("storage_total",0);free=s.get("storage_free",0);used=max(0,total-free);self.storage.value.setText(gb(free));self.storage.bar.setValue(int(used*100/total) if total else 0);self.storage.detail.setText(f"free of {gb(total)}")
