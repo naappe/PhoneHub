@@ -121,6 +121,16 @@ class CompanionService : Service() {
             "file_delete"->{val f=transferFile(req.optString("name"));if(f==null||!f.exists())response.put("type","file_error").put("message","File not found") else response.put("type","file_deleted").put("name",f.name).put("deleted",f.delete())}
             "webrtc_offer"->{val sdp=req.optString("sdp");ScreenCaptureService.answerOffer(sdp)}
             "webrtc_stop"->{ScreenCaptureService.stopWebRtc();response.put("type","webrtc_stopped")}
+            "camera_webrtc_offer"->{
+                val sdp=req.optString("sdp")
+                val lens=if(req.optString("lens")=="front")"front" else "back"
+                if(!CapabilityManager.cameraAllowed(this)){
+                    response.put("type","camera_webrtc_error").put("message","Remote camera permission is not granted.")
+                }else{
+                    CameraWebRtcService.startAndAnswer(this,lens,sdp)
+                }
+            }
+            "camera_webrtc_stop"->{CameraWebRtcService.stopWebRtc();CameraWebRtcService.stop(this);response.put("type","camera_webrtc_stopped")}
             "policy_get"->{val pkg=req.optString("package");val all=policies();val p=all.optJSONObject(pkg)?:policyDefaults(pkg);response.put("type","app_policy").put("package",pkg).put("policy",p).put("stored_on_device",all.has(pkg)).put("enforcement",enforcementJson())}
             "policy_set"->{val pkg=req.optString("package");if(pkg.isBlank())response.put("type","error").put("message","package required") else {val incoming=req.optJSONObject("policy")?:JSONObject();val p=policyDefaults(pkg);listOf("keep_installed","allow_usage","suspend","show_notifications","forward_notifications","protect_changes","auto_apply").forEach{name->if(incoming.has(name))p.put(name,incoming.optBoolean(name))};val all=policies();all.put(pkg,p);savePolicies(all);val applied=if(p.optBoolean("auto_apply",true))applyPolicy(pkg,p) else JSONObject().put("applied",false).put("reason","Auto apply is off");response.put("type","policy_saved").put("package",pkg).put("policy",p).put("stored_on_device",true).put("enforcement",enforcementJson()).put("apply_result",applied).put("message",if(applied.optBoolean("applied",false))"Policy saved and enforced by Android." else applied.optString("reason","Policy saved."))}}
             "capabilities"->response.put("type","capabilities").put("state",CapabilityManager.json(this)).put("notifications_listener_running",PhoneHubNotificationListener.isRunning()).put("camera_frames",true).put("remote_app_policy",true).put("screen_webrtc",true).put("relay_transport","encrypted_internet").put("pairing_scope","per_phone_install").put("automatic_local_reenroll",true).put("phone_ui","minimal").put("policy_enforcement",enforcementJson())
