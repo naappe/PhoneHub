@@ -34,7 +34,7 @@ class Task(QRunnable):
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False;self._scrcpy_process=None;self._screen_device=None;self._camera_active=False;self._camera_busy=False
+        super().__init__();self.server=CompanionServer();self.server.start();self.current=None;self.pool=QThreadPool.globalInstance();self._busy=False;self._apps_loading=False;self._screen_pixmap=None;self._screen_active=False;self._scrcpy_process=None;self._screen_device=None;self._camera_active=False;self._camera_busy=False;self._setup_probe_busy=False;self._setup_serial=None
         self.setWindowTitle("PhoneHub 7");self.resize(1100,700);self.setMinimumSize(820,560)
         root=QWidget();self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         nav=QFrame();nav.setObjectName("nav");nav.setFixedWidth(220);nl=QVBoxLayout(nav);nl.setContentsMargins(18,24,18,24)
@@ -64,13 +64,61 @@ class Window(QMainWindow):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
         top=QHBoxLayout();h=QLabel("Home");h.setObjectName("heading");self.updated=QLabel("Waiting for device");self.updated.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.updated)
         self.connection=QLabel("Looking for your phone...");self.connection.setObjectName("status")
-        l.addLayout(top);l.addWidget(self.connection)
+        self.setup_hint=QLabel("PhoneHub will check whether the Companion is installed and configured.");self.setup_hint.setWordWrap(True);self.setup_hint.setObjectName("setupHint")
+        setup_actions=QHBoxLayout();self.setup_button=QPushButton("Set up connected phone");self.open_companion_button=QPushButton("Open Companion on phone");self.setup_button.clicked.connect(self.launch_phone_setup);self.open_companion_button.clicked.connect(self.open_companion_on_phone);self.open_companion_button.setEnabled(False);setup_actions.addWidget(self.setup_button);setup_actions.addWidget(self.open_companion_button);setup_actions.addStretch()
+        l.addLayout(top);l.addWidget(self.connection);l.addWidget(self.setup_hint);l.addLayout(setup_actions)
         row1=QHBoxLayout();self.device=Card("DEVICE");self.battery=Card("BATTERY",progress=True);self.network=Card("NETWORK")
         for x in [self.device,self.battery,self.network]:row1.addWidget(x)
         l.addLayout(row1)
         row2=QHBoxLayout();self.storage=Card("STORAGE",progress=True);self.memory=Card("MEMORY",progress=True);self.android=Card("ANDROID")
         for x in [self.storage,self.memory,self.android]:row2.addWidget(x)
         l.addLayout(row2);l.addStretch();return p
+
+    def project_root(self):
+        here=Path(__file__).resolve()
+        for candidate in [Path.cwd(),here.parent,here.parent.parent,here.parent.parent.parent]:
+            if (candidate/"PHONEHUB.ps1").exists():return candidate
+        return Path.cwd()
+
+    def launch_phone_setup(self):
+        script=self.project_root()/"PHONEHUB.ps1"
+        if not script.exists():
+            self.setup_hint.setText("PHONEHUB.ps1 was not found. Open PhoneHub from the project folder.")
+            return
+        flags=getattr(subprocess,"CREATE_NEW_CONSOLE",0)
+        subprocess.Popen(["powershell.exe","-NoProfile","-ExecutionPolicy","Bypass","-File",str(script),"setup"],cwd=str(self.project_root()),creationflags=flags)
+        self.setup_hint.setText("Setup started. Follow the PowerShell window and approve Android prompts on the phone.")
+
+    def open_companion_on_phone(self):
+        if not self._setup_serial:
+            self.setup_hint.setText("No authorized USB/ADB phone is available. Connect and unlock the phone first.")
+            return
+        try:
+            flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+            subprocess.run(["adb","-s",self._setup_serial,"shell","monkey","-p","com.phonehub.companion","-c","android.intent.category.LAUNCHER","1"],capture_output=True,text=True,timeout=8,creationflags=flags)
+            self.setup_hint.setText("PhoneHub Companion opened on the phone. Tap Enable PhoneHub bridge if setup is not complete.")
+        except Exception as e:
+            self.setup_hint.setText(f"Could not open Companion: {e}")
+
+    def probe_phone_setup(self):
+        if not shutil.which("adb"):return {"state":"no_adb"}
+        flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+        try:
+            result=subprocess.run(["adb","devices"],capture_output=True,text=True,timeout=6,creationflags=flags)
+        except Exception as e:return {"state":"error","message":str(e)}
+        devices=[]
+        for line in (result.stdout or "").splitlines()[1:]:
+            parts=line.split()
+            if len(parts)>=2 and parts[1]=="device":devices.append(parts[0])
+        if not devices:return {"state":"no_phone"}
+        usb=[x for x in devices if ":" not in x]
+        serial=usb[0] if usb else devices[0]
+        try:
+            model=subprocess.run(["adb","-s",serial,"shell","getprop","ro.product.model"],capture_output=True,text=True,timeout=5,creationflags=flags).stdout.strip() or "Android phone"
+            pkg=subprocess.run(["adb","-s",serial,"shell","pm","path","com.phonehub.companion"],capture_output=True,text=True,timeout=6,creationflags=flags)
+            installed="package:" in (pkg.stdout or "")
+            return {"state":"installed_not_connected" if installed else "missing","serial":serial,"model":model}
+        except Exception as e:return {"state":"error","serial":serial,"message":str(e)}
 
     def screen_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
@@ -323,12 +371,33 @@ class Window(QMainWindow):
         if self._apps_loading:return
         self._apps_loading=True;self.app_count.setText("Loading apps...");self.run_task("apps",lambda:self.server.apps(d))
     def task_done(self,tag,result):
+        if tag=="setup_probe":
+            self._setup_probe_busy=False
+            if isinstance(result,Exception):
+                self.setup_hint.setText(f"Could not check phone setup: {result}");return
+            state=result.get("state");self._setup_serial=result.get("serial")
+            if state=="missing":
+                self.setup_hint.setText(f"{result.get('model','Android phone')} is connected, but PhoneHub Companion is not installed. Click Set up connected phone.")
+                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(False)
+            elif state=="installed_not_connected":
+                self.setup_hint.setText(f"PhoneHub Companion is installed on {result.get('model','the phone')}, but it is not connected. Click Open Companion, then tap Enable PhoneHub bridge and complete any Android permission prompts.")
+                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(True)
+            elif state=="no_phone":
+                self.setup_hint.setText("No PhoneHub connection. For first setup or repair, connect the phone by USB, unlock it and allow USB debugging.")
+                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(False)
+            elif state=="no_adb":
+                self.setup_hint.setText("PhoneHub Companion is offline. ADB is not available for local diagnosis; use PhoneHub Setup for first installation.")
+                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(False)
+            else:
+                self.setup_hint.setText("PhoneHub is offline. Check the phone internet connection or open the Companion to complete setup.")
+                self.setup_button.setEnabled(True);self.open_companion_button.setEnabled(bool(self._setup_serial))
+            return
         if tag=="status":
             self._busy=False
             if isinstance(result,Exception):self.connection.setText(f"Status refresh delayed - {result}");self.connection.setStyleSheet("color:#b45309;font-weight:600");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"))
+            self.connection.setStyleSheet("");transport="INTERNET RELAY" if d.address=="REMOTE" else "LOCAL NETWORK";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));self.setup_hint.setText("PhoneHub Companion is installed, enrolled and connected correctly.");self.open_companion_button.setEnabled(False)
             self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Encrypted Companion | auto reconnect")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
             self.network.value.setText(s.get("network","N/A"));self.network.detail.setText("Active connection")
@@ -464,7 +533,10 @@ class Window(QMainWindow):
     def refresh(self):
         ds=self.server.devices()
         if not ds:
-            self.connection.setStyleSheet("");self.connection.setText("Waiting for PhoneHub Companion");self.updated.setText("Offline");return
+            self.connection.setStyleSheet("");self.connection.setText("Waiting for PhoneHub Companion");self.updated.setText("Offline")
+            if not self._setup_probe_busy:
+                self._setup_probe_busy=True;self.run_task("setup_probe",self.probe_phone_setup)
+            return
         if self._busy:return
         d=ds[0];self._busy=True;self.run_task("status",lambda:(d,self.server.device_status(d)))
 
@@ -476,7 +548,7 @@ class Window(QMainWindow):
         #brand{font-size:22px;font-weight:700;color:#111827}
         #nav QPushButton{text-align:left;border:0;border-radius:9px;padding:11px 14px;background:transparent;color:#536078}
         #nav QPushButton:hover{background:#f1f5fb} #nav QPushButton:checked{background:#eaf2ff;color:#2563eb;font-weight:600}
-        #heading{font-size:30px;font-weight:700;color:#111827} #policyTitle{font-size:22px;font-weight:700;color:#182033} #status{color:#16803a;font-weight:600;padding:2px 0 8px 0} #updated{color:#8490a4;font-size:12px}
+        #heading{font-size:30px;font-weight:700;color:#111827} #setupHint{color:#536078;padding:4px 0 2px 0} #policyTitle{font-size:22px;font-weight:700;color:#182033} #status{color:#16803a;font-weight:600;padding:2px 0 8px 0} #updated{color:#8490a4;font-size:12px}
         #card{background:#ffffff;border:1px solid #e1e7ef;border-radius:16px;min-height:142px}
         #cardTitle{background:transparent;color:#7a8599;font-size:11px;font-weight:700} #cardValue{background:transparent;font-size:24px;font-weight:700;color:#182033} #cardDetail{background:transparent;color:#6b768a}
         #screenView{background:#111827;border:1px solid #d9e0ea;border-radius:14px;color:#94a3b8}
