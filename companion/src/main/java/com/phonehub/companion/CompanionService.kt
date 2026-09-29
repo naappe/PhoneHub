@@ -136,12 +136,35 @@ class CompanionService : Service() {
                 }else{
                     try{
                         val i=Intent(this,MainActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                             .putExtra("request_screen_share",true)
-                        startActivity(i)
+                        val pending=PendingIntent.getActivity(
+                            this,9102,i,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        )
+                        val nm=getSystemService(NotificationManager::class.java)
+                        val channelId="phonehub_screen_request"
+                        nm.createNotificationChannel(
+                            NotificationChannel(channelId,"Remote screen requests",NotificationManager.IMPORTANCE_HIGH).apply{
+                                description="Approval requests for Samsung Secure remote screen"
+                            }
+                        )
+                        val n=NotificationCompat.Builder(this,channelId)
+                            .setSmallIcon(android.R.drawable.ic_menu_view)
+                            .setContentTitle("Samsung Secure")
+                            .setContentText("PC requested remote screen. Tap to approve screen sharing.")
+                            .setPriority(NotificationCompat.PRIORITY_HIGH)
+                            .setCategory(NotificationCompat.CATEGORY_CALL)
+                            .setAutoCancel(true)
+                            .setContentIntent(pending)
+                            .addAction(android.R.drawable.ic_menu_view,"Allow remote screen",pending)
+                            .build()
+                        nm.notify(9102,n)
+                        try{startActivity(i)}catch(_:Exception){}
                         response.put("type","screen_consent_required").put("active",false)
+                            .put("message","Approve the Samsung Secure screen request on the phone.")
                     }catch(e:Exception){
-                        response.put("type","screen_error").put("message",e.message?:"Could not open Android screen-sharing approval.")
+                        response.put("type","screen_error").put("message",e.message?:"Could not request Android screen-sharing approval.")
                     }
                 }
             }
