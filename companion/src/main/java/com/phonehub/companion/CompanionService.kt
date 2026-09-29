@@ -79,6 +79,15 @@ class CompanionService : Service() {
     private fun policies():JSONObject{val raw=getSharedPreferences(PREFS,0).getString(POLICIES,"{}")?:"{}";return try{JSONObject(raw)}catch(_:Exception){JSONObject()}}
     private fun savePolicies(value:JSONObject){getSharedPreferences(PREFS,0).edit().putString(POLICIES,value.toString()).apply()}
     private fun policyDefaults(pkg:String)=JSONObject().put("package",pkg).put("keep_installed",true).put("allow_usage",true).put("suspend",false).put("show_notifications",true).put("forward_notifications",false).put("protect_changes",false).put("auto_apply",true)
+    private fun transferRoot():java.io.File{
+        val base=getExternalFilesDir(null)?:filesDir
+        return java.io.File(base,"PhoneHubTransfer").apply{mkdirs()}
+    }
+    private fun transferFile(name:String):java.io.File?{
+        val clean=java.io.File(name).name.trim()
+        if(clean.isBlank()||clean=="."||clean=="..")return null
+        return java.io.File(transferRoot(),clean)
+    }
     private fun devicePolicyManager()=getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
     private fun adminComponent()=ComponentName(this,PhoneHubDeviceAdminReceiver::class.java)
     private fun isDeviceOwner():Boolean=try{devicePolicyManager().isDeviceOwnerApp(packageName)}catch(_:Exception){false}
@@ -109,6 +118,10 @@ class CompanionService : Service() {
             "camera_start"->{val requested=if(req.optString("lens")=="front")"front" else "back";if(ContextCompat.checkSelfPermission(this,android.Manifest.permission.CAMERA)!=android.content.pm.PackageManager.PERMISSION_GRANTED)response.put("type","camera_error").put("message","Camera permission is not granted on the phone.") else {try{CameraService.start(this,requested);response.put("type","camera_starting").put("lens",requested)}catch(e:Exception){response.put("type","camera_error").put("message",e.message?:e.javaClass.simpleName)}}}
             "camera_stop"->{CameraService.stop(this);response.put("type","camera_stopped")}
             "notifications"->response.put("type","notifications").put("access",PhoneHubNotificationListener.isRunning()).put("items",PhoneHubNotificationListener.snapshot())
+            "files_list"->{val arr=JSONArray();transferRoot().listFiles()?.filter{it.isFile}?.sortedBy{it.name.lowercase()}?.forEach{f->arr.put(JSONObject().put("name",f.name).put("size",f.length()).put("modified",f.lastModified()))};response.put("type","files").put("scope","PhoneHubTransfer").put("items",arr)}
+            "file_get"->{val f=transferFile(req.optString("name"));if(f==null||!f.exists()||!f.isFile)response.put("type","file_error").put("message","File not found") else if(f.length()>1048576L)response.put("type","file_error").put("message","File exceeds the 1 MB encrypted transfer limit") else response.put("type","file_data").put("name",f.name).put("size",f.length()).put("data",android.util.Base64.encodeToString(f.readBytes(),android.util.Base64.NO_WRAP))}
+            "file_put"->{val f=transferFile(req.optString("name"));val data=req.optString("data");if(f==null||data.isBlank())response.put("type","file_error").put("message","Invalid file") else {try{val bytes=android.util.Base64.decode(data,android.util.Base64.NO_WRAP);if(bytes.size>1048576)response.put("type","file_error").put("message","File exceeds the 1 MB encrypted transfer limit") else {f.writeBytes(bytes);response.put("type","file_saved").put("name",f.name).put("size",f.length())}}catch(e:Exception){response.put("type","file_error").put("message",e.message?:"Could not save file")}}}
+            "file_delete"->{val f=transferFile(req.optString("name"));if(f==null||!f.exists())response.put("type","file_error").put("message","File not found") else response.put("type","file_deleted").put("name",f.name).put("deleted",f.delete())}
             "webrtc_offer"->{val sdp=req.optString("sdp");ScreenCaptureService.answerOffer(sdp)}
             "webrtc_stop"->{ScreenCaptureService.stopWebRtc();response.put("type","webrtc_stopped")}
             "policy_get"->{val pkg=req.optString("package");val all=policies();val p=all.optJSONObject(pkg)?:policyDefaults(pkg);response.put("type","app_policy").put("package",pkg).put("policy",p).put("stored_on_device",all.has(pkg)).put("enforcement",enforcementJson())}
