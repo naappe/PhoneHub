@@ -44,11 +44,16 @@ class CameraWebRtcService : Service() {
             )
         }
 
-        fun answerOffer(sdp: String): JSONObject {
-            val service = instance
-                ?: return JSONObject().put("type", "camera_webrtc_error")
-                    .put("message", "Remote camera service is not active.")
-            return service.createWebRtcAnswer(sdp)
+        fun startAndAnswer(context: Context, requestedLens: String, sdp: String): JSONObject {
+            start(context, requestedLens)
+            val deadline = System.currentTimeMillis() + 2500
+            while (System.currentTimeMillis() < deadline) {
+                val service = instance
+                if (service != null && active) return service.createWebRtcAnswer(sdp)
+                try { Thread.sleep(50) } catch (_: InterruptedException) { break }
+            }
+            return JSONObject().put("type", "camera_webrtc_error")
+                .put("message", "Remote camera service did not become ready.")
         }
 
         fun stopWebRtc() {
