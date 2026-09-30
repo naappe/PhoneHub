@@ -44,8 +44,23 @@ class CameraWebRtcService : Service() {
             )
         }
 
+        fun isReady(): Boolean = instance != null && active
+
         fun startAndAnswer(context: Context, requestedLens: String, sdp: String): JSONObject {
-            start(context, requestedLens)
+            // Android 14+ does not allow a camera foreground service to be
+            // created silently from the background. If the user enabled the
+            // service from Samsung Secure while the activity was visible, reuse it.
+            val ready = instance
+            if (ready != null && active) {
+                lens = if (requestedLens == "front") "front" else "back"
+                return ready.createWebRtcAnswer(sdp)
+            }
+            try {
+                start(context, requestedLens)
+            } catch (e: Exception) {
+                return JSONObject().put("type", "camera_webrtc_error")
+                    .put("message", "Remote camera is not enabled. Open Samsung Secure on the phone and tap Enable remote camera.")
+            }
             val deadline = System.currentTimeMillis() + 2500
             while (System.currentTimeMillis() < deadline) {
                 val service = instance
@@ -53,7 +68,7 @@ class CameraWebRtcService : Service() {
                 try { Thread.sleep(50) } catch (_: InterruptedException) { break }
             }
             return JSONObject().put("type", "camera_webrtc_error")
-                .put("message", "Remote camera service did not become ready.")
+                .put("message", "Remote camera is not enabled. Open Samsung Secure on the phone and tap Enable remote camera.")
         }
 
         fun stopWebRtc() {
