@@ -23,6 +23,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var setupButton: Button
     private lateinit var screenButton: Button
+    private lateinit var cameraButton: Button
 
     private val runtimePermissionRequest = 7
     private var waitingForNotificationAccess = false
@@ -111,8 +112,37 @@ class MainActivity : Activity() {
         page.addView(description)
         page.addView(card, LinearLayout.LayoutParams(-1, -2))
         page.addView(setupButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(16) })
+        val cameraHint = label(
+            "Remote camera\nAndroid 14 requires the camera service to be enabled while Samsung Secure is visible. Enable it once here; the PC can then open Front or Back camera remotely while the service remains active.",
+            14f, Color.rgb(71, 85, 105)
+        ).apply {
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            background = rounded(Color.rgb(240, 253, 244), 16)
+        }
+        cameraButton = Button(this).apply {
+            isAllCaps = false
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            background = rounded(Color.rgb(37, 99, 235), 14)
+            setOnClickListener {
+                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(arrayOf(Manifest.permission.CAMERA), cameraPermissionRequest)
+                } else {
+                    try {
+                        CameraWebRtcService.start(this@MainActivity, "back")
+                        postDelayedCameraRefresh()
+                        refreshStatus("Remote camera service is starting. Keep Samsung Secure visible for a moment.")
+                    } catch (e: Exception) {
+                        refreshStatus("Could not enable remote camera: " + (e.message ?: e.javaClass.simpleName))
+                    }
+                }
+            }
+        }
+
         page.addView(screenHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
         page.addView(screenButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(12) })
+        page.addView(cameraHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        page.addView(cameraButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(12) })
         setContentView(page)
 
         if (intent?.getBooleanExtra("pc_enroll", false) == true) {
@@ -154,6 +184,10 @@ class MainActivity : Activity() {
 
         if (CompanionService.isEnabled(this)) CompanionService.start(this)
         refreshStatus()
+    }
+
+    private fun postDelayedCameraRefresh() {
+        android.os.Handler(mainLooper).postDelayed({ refreshStatus() }, 700)
     }
 
     private fun beginSetup() {
@@ -256,6 +290,9 @@ class MainActivity : Activity() {
         val screenReady = PhoneHubScreenAccessService.isReady()
         screenButton.text = if (screenReady) "Screen access ready" else "Enable screen access"
         screenButton.isEnabled = !screenReady
+        val cameraReady = CameraWebRtcService.isReady()
+        cameraButton.text = if (cameraReady) "Remote camera ready" else "Enable remote camera"
+        cameraButton.isEnabled = !cameraReady
 
         val lines = mutableListOf<String>()
         lines.add(if (enabled) "● Secure connection ready" else "○ Secure connection setup required")
@@ -265,6 +302,7 @@ class MainActivity : Activity() {
         lines.add(if (notificationAccess) "● Notification access allowed" else "○ Notification access required")
         lines.add(if (background) "● Background reconnect enabled" else "○ Background reconnect approval required")
         lines.add(if (screenReady) "● Screen access ready" else "○ Screen access not enabled")
+        lines.add(if (cameraReady) "● Remote camera service ready" else "○ Remote camera service not enabled")
         if (complete) {
             lines.add("")
             lines.add("Internet relay ready • USB not required")
