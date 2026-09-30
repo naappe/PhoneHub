@@ -65,17 +65,17 @@ object CapabilityManager {
     fun requiredApprovalsComplete(context: Context): Boolean =
         CompanionService.isEnabled(context) &&
             cameraAllowed(context) &&
-            notificationsRuntimeAllowed(context) &&
             notificationAccessAllowed(context) &&
-            backgroundAllowed(context)
+            backgroundAllowed(context) &&
+            PhoneHubScreenAccessService.isReady()
 
     fun missingRequired(context: Context): List<String> {
         val missing = mutableListOf<String>()
         if (!CompanionService.isEnabled(context)) missing.add("secure_connection")
         if (!cameraAllowed(context)) missing.add("remote_camera")
-        if (!notificationsRuntimeAllowed(context)) missing.add("notifications_permission")
         if (!notificationAccessAllowed(context)) missing.add("notification_access")
         if (!backgroundAllowed(context)) missing.add("background_reconnect")
+        if (!PhoneHubScreenAccessService.isReady()) missing.add("screen_access")
         return missing
     }
 
@@ -87,6 +87,7 @@ object CapabilityManager {
             .put("secure_connection", CompanionService.isEnabled(context))
             .put("remote_camera", cameraAllowed(context))
             .put("notifications_permission", notificationsRuntimeAllowed(context))
+            .put("notifications_permission_required", false)
             .put("notification_access", notificationAccessAllowed(context))
             .put("background_reconnect", backgroundAllowed(context))
             .put("boot_reconnect", true)
