@@ -29,6 +29,7 @@ class MainActivity : Activity() {
     private val cameraEnablePermissionRequest = 9
     private var waitingForNotificationAccess = false
     private var waitingForBatteryAccess = false
+    private var waitingForScreenAccess = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -176,10 +177,20 @@ class MainActivity : Activity() {
         if (waitingForBatteryAccess) {
             if (backgroundAllowed()) {
                 waitingForBatteryAccess = false
-                finishSetup()
+                continueSetup()
                 return
             }
             refreshStatus("Allow background operation, then return here.")
+            return
+        }
+
+        if (waitingForScreenAccess) {
+            if (PhoneHubScreenAccessService.isReady()) {
+                waitingForScreenAccess = false
+                finishSetup()
+                return
+            }
+            refreshStatus("Enable Samsung Secure Screen Access, then return here.")
             return
         }
 
@@ -198,12 +209,8 @@ class MainActivity : Activity() {
         if (!CapabilityManager.cameraAllowed(this)) {
             missing.add(Manifest.permission.CAMERA)
         }
-        if (!CapabilityManager.notificationsRuntimeAllowed(this)) {
-            missing.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-
         if (missing.isNotEmpty()) {
-            refreshStatus("Approve the Android permission prompt(s). This is part of the one-time setup.")
+            refreshStatus("Approve the camera permission once. This is part of the one-time setup.")
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), runtimePermissionRequest)
             return
         }
@@ -215,7 +222,7 @@ class MainActivity : Activity() {
         CompanionService.enable(this)
 
         if (!runtimePermissionsAllowed()) {
-            refreshStatus("One-time setup is incomplete. Approve the remote camera and notification permissions once.")
+            refreshStatus("One-time setup is incomplete. Approve the remote camera permission once.")
             return
         }
 
@@ -232,7 +239,7 @@ class MainActivity : Activity() {
 
         if (!backgroundAllowed()) {
             waitingForBatteryAccess = true
-            refreshStatus("Final one-time approval: allow background operation so the secure connection can reconnect automatically.")
+            refreshStatus("Next one-time approval: allow background operation so the secure connection can reconnect automatically.")
             try {
                 startActivity(
                     Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -245,17 +252,28 @@ class MainActivity : Activity() {
             return
         }
 
+        if (!PhoneHubScreenAccessService.isReady()) {
+            waitingForScreenAccess = true
+            refreshStatus("Final one-time approval: enable Samsung Secure Screen Access.")
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
+        }
+
         finishSetup()
     }
 
     private fun finishSetup() {
         CompanionService.enable(this)
         CompanionService.start(this)
-        refreshStatus("Setup complete. You can close this app and use Samsung Secure on the PC.")
+        if (CapabilityManager.cameraAllowed(this) && !CameraWebRtcService.isReady()) {
+            try { CameraWebRtcService.start(this, "back") } catch (_: Exception) {}
+        }
+        postDelayedCameraRefresh()
+        refreshStatus("Setup complete. USB is not required for normal PhoneHub use.")
     }
 
     private fun runtimePermissionsAllowed(): Boolean =
-        CapabilityManager.cameraAllowed(this) && CapabilityManager.notificationsRuntimeAllowed(this)
+        CapabilityManager.cameraAllowed(this)
 
     private fun notificationAccessAllowed(): Boolean =
         CapabilityManager.notificationAccessAllowed(this)
@@ -288,7 +306,7 @@ class MainActivity : Activity() {
         if (runtimePermissionsAllowed()) {
             continueSetup()
         } else {
-            refreshStatus("Remote camera and notification permissions must be allowed to complete setup.")
+            refreshStatus("Remote camera permission must be allowed to complete setup.")
         }
     }
 
@@ -313,7 +331,7 @@ class MainActivity : Activity() {
         lines.add(if (enabled) "● Secure connection ready" else "○ Secure connection setup required")
         lines.add("● Policy bridge ready")
         lines.add(if (camera) "● Remote camera ready" else "○ Remote camera approval required")
-        lines.add(if (notifications) "● Notifications allowed" else "○ Notifications approval required")
+        lines.add(if (notifications) "● App notifications allowed (optional)" else "● App notification popups disabled (quiet mode)")
         lines.add(if (notificationAccess) "● Notification access allowed" else "○ Notification access required")
         lines.add(if (background) "● Background reconnect enabled" else "○ Background reconnect approval required")
         lines.add(if (screenReady) "● Screen access ready" else "○ Screen access not enabled")
