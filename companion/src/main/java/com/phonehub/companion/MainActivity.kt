@@ -26,6 +26,7 @@ class MainActivity : Activity() {
     private lateinit var cameraButton: Button
 
     private val runtimePermissionRequest = 7
+    private val cameraEnablePermissionRequest = 9
     private var waitingForNotificationAccess = false
     private var waitingForBatteryAccess = false
 
@@ -126,7 +127,7 @@ class MainActivity : Activity() {
             background = rounded(Color.rgb(37, 99, 235), 14)
             setOnClickListener {
                 if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                    requestPermissions(arrayOf(Manifest.permission.CAMERA), cameraPermissionRequest)
+                    requestPermissions(arrayOf(Manifest.permission.CAMERA), cameraEnablePermissionRequest)
                 } else {
                     try {
                         CameraWebRtcService.start(this@MainActivity, "back")
@@ -268,6 +269,20 @@ class MainActivity : Activity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == cameraEnablePermissionRequest) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                try {
+                    CameraWebRtcService.start(this, "back")
+                    postDelayedCameraRefresh()
+                    refreshStatus("Remote camera service is starting.")
+                } catch (e: Exception) {
+                    refreshStatus("Could not enable remote camera: " + (e.message ?: e.javaClass.simpleName))
+                }
+            } else {
+                refreshStatus("Camera permission is required for remote camera.")
+            }
+            return
+        }
         if (requestCode != runtimePermissionRequest) return
 
         if (runtimePermissionsAllowed()) {
