@@ -140,7 +140,7 @@ class Window(QMainWindow):
     def screen_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Ready for live screen");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
-        self.screen_help=QLabel("After one-time enrollment, USB is not required. Samsung Secure uses the encrypted Internet relay for control and WebRTC for the live screen. Authorized local/USB ADB can use scrcpy as an optional fast path.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
+        self.screen_help=QLabel("After one-time enrollment, USB is not required. Samsung Secure Screen Access sends encrypted screen snapshots through the Internet relay. No casting or MediaProjection approval is required per session.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
         self.screen_view=QLabel("Open this page to connect the live screen");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
         self.screen_button=QPushButton("Reconnect live screen");self.screen_button.clicked.connect(self.reconnect_live_screen);l.addWidget(self.screen_button)
         return p
@@ -317,16 +317,16 @@ class Window(QMainWindow):
     def camera_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Camera");h.setObjectName("heading");self.camera_status_label=QLabel("Camera idle");self.camera_status_label.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.camera_status_label);l.addLayout(top)
-        help_text=QLabel("Camera uses Samsung Secure WebRTC over the Internet. Authorized local/USB ADB can use scrcpy as an optional fast path.");help_text.setWordWrap(True);l.addWidget(help_text)
+        help_text=QLabel("Camera uses Samsung Secure WebRTC over the Internet. USB, ADB and Developer Options are not required for normal remote camera use.");help_text.setWordWrap(True);l.addWidget(help_text)
         controls=QHBoxLayout();self.camera_lens=QComboBox();self.camera_lens.addItems(["Back camera","Front camera"]);self.camera_start_button=QPushButton("Open camera");self.camera_stop_button=QPushButton("Stop camera");self.camera_start_button.clicked.connect(self.start_camera);self.camera_stop_button.clicked.connect(self.stop_camera);controls.addWidget(self.camera_lens);controls.addWidget(self.camera_start_button);controls.addWidget(self.camera_stop_button);controls.addStretch();l.addLayout(controls)
-        self.camera_view=QLabel("Open the camera from this PC. PhoneHub uses local/USB scrcpy when available, otherwise Samsung Secure WebRTC.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
+        self.camera_view=QLabel("Open the camera from this PC. Samsung Secure provides the encrypted remote WebRTC camera stream.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
         return p
 
     def refresh_camera_status(self):
         if self._camera_process is not None and self._camera_process.poll() is None:
             self._camera_active=True;self.camera_status_label.setText("SCRCPY CAMERA ACTIVE")
         else:
-            self._camera_active=False;self._camera_process=None;self.camera_status_label.setText("Ready | local scrcpy or Internet WebRTC")
+            self._camera_active=False;self._camera_process=None;self.camera_status_label.setText("Ready | Internet WebRTC")
 
     def start_camera(self):
         if self._camera_process is not None and self._camera_process.poll() is None:
@@ -335,8 +335,11 @@ class Window(QMainWindow):
         ds=self.server.devices()
         if not ds:self.camera_status_label.setText("Phone offline");return
         self._camera_device=ds[0];self._camera_lens=lens
-        self.camera_status_label.setText("Checking local scrcpy camera...")
-        self.run_task("camera_local",lambda:self._start_scrcpy_camera(lens))
+        self._camera_active=True
+        self.camera_status_label.setText("Connecting encrypted remote camera...")
+        self.camera_view.setPixmap(QPixmap())
+        self.camera_view.setText("Connecting Samsung Secure WebRTC camera...")
+        self.camera_client.start(self._camera_device,lens)
 
     def stop_camera(self):
         self._camera_active=False
