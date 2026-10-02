@@ -39,7 +39,14 @@ class CompanionServer:
     def enroll(self,d):
         r=self._raw_command(d,{"type":"enroll","version":1})
         if r.get("type")!="enrolled" or not r.get("pair_key"):raise RuntimeError(r.get("message","enrollment failed"))
-        self._keys[d.device_id]=r["pair_key"];self._save_keys();return r
+        actual_id=str(r.get("device_id") or d.device_id)
+        self._keys[actual_id]=r["pair_key"]
+        if d.device_id!=actual_id:self._keys.pop(d.device_id,None)
+        self._save_keys();return r
+
+    def enroll_address(self,address="127.0.0.1",port=DEFAULT_COMMAND_PORT):
+        probe=Companion("pending","Android",address,time.time(),port)
+        return self.enroll(probe)
     def command(self,d,command_type,extra=None):
         def build_and_send():
             if d.device_id not in self._keys:self.enroll(d)
