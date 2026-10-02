@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import subprocess
+import urllib.parse
+import urllib.request
 import sys
 import threading
 import time
@@ -14,6 +18,34 @@ def adb(serial: str, *args: str) -> None:
     subprocess.run(["adb", "-s", serial, *args], check=True)
 
 
+def load_metered_turn() -> None:
+    domain = os.environ.get("PHONEHUB_METERED_DOMAIN", "").strip().removeprefix("https://").rstrip("/")
+    api_key = os.environ.get("PHONEHUB_METERED_API_KEY", "").strip()
+    if not domain or not api_key:
+        return
+    url = f"https://{domain}/api/v1/turn/credentials?apiKey={urllib.parse.quote(api_key)}"
+    with urllib.request.urlopen(url, timeout=15) as response:
+        servers = json.loads(response.read().decode("utf-8"))
+    turn_urls = []
+    username = ""
+    credential = ""
+    for server in servers:
+        urls = server.get("urls", [])
+        if isinstance(urls, str):
+            urls = [urls]
+        for item in urls:
+            if str(item).startswith("turn:") or str(item).startswith("turns:"):
+                turn_urls.append(str(item))
+                username = server.get("username", username)
+                credential = server.get("credential", credential)
+    if not turn_urls:
+        raise RuntimeError("Metered returned no TURN relay endpoints")
+    os.environ["PHONEHUB_TURN_URLS"] = ";".join(turn_urls)
+    os.environ["PHONEHUB_TURN_USERNAME"] = username
+    os.environ["PHONEHUB_TURN_CREDENTIAL"] = credential
+    print(f"TURN: loaded {len(turn_urls)} relay endpoint(s) from Metered")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="PhoneHub cross-network WebRTC camera test. ADB is used only for SDP signaling."
@@ -23,6 +55,7 @@ def main() -> int:
     parser.add_argument("--seconds", type=int, default=35)
     args = parser.parse_args()
 
+    load_metered_turn()
     print("TEST MODE: USB/ADB carries signaling only.")
     print("WebRTC camera media must travel over the PC network and the phone's active Internet network.")
     print("For a real cross-network test: phone Wi-Fi OFF, mobile data ON; PC stays on its normal network.")
