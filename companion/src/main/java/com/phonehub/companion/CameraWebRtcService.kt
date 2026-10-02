@@ -46,14 +46,14 @@ class CameraWebRtcService : Service() {
 
         fun isReady(): Boolean = instance != null && active
 
-        fun startAndAnswer(context: Context, requestedLens: String, sdp: String): JSONObject {
+        fun startAndAnswer(context: Context, requestedLens: String, sdp: String, turnUrls: List<String> = emptyList(), turnUsername: String = "", turnCredential: String = ""): JSONObject {
             // Android 14+ does not allow a camera foreground service to be
             // created silently from the background. If the user enabled the
             // service from Samsung Secure while the activity was visible, reuse it.
             val ready = instance
             if (ready != null && active) {
                 lens = if (requestedLens == "front") "front" else "back"
-                return ready.createWebRtcAnswer(sdp)
+                return ready.createWebRtcAnswer(sdp, turnUrls, turnUsername, turnCredential)
             }
             try {
                 start(context, requestedLens)
@@ -64,7 +64,7 @@ class CameraWebRtcService : Service() {
             val deadline = System.currentTimeMillis() + 2500
             while (System.currentTimeMillis() < deadline) {
                 val service = instance
-                if (service != null && active) return service.createWebRtcAnswer(sdp)
+                if (service != null && active) return service.createWebRtcAnswer(sdp, turnUrls, turnUsername, turnCredential)
                 try { Thread.sleep(50) } catch (_: InterruptedException) { break }
             }
             return JSONObject().put("type", "camera_webrtc_error")
@@ -153,7 +153,7 @@ class CameraWebRtcService : Service() {
     }
 
     @Synchronized
-    private fun createWebRtcAnswer(offerSdp: String): JSONObject {
+    private fun createWebRtcAnswer(offerSdp: String, turnUrls: List<String> = emptyList(), turnUsername: String = "", turnCredential: String = ""): JSONObject {
         if (!active) {
             return JSONObject().put("type", "camera_webrtc_error")
                 .put("message", "Remote camera permission is not available.")
@@ -167,12 +167,19 @@ class CameraWebRtcService : Service() {
             closeWebRtc()
             ensureFactory()
 
-            val config = PeerConnection.RTCConfiguration(
-                listOf(
-                    PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
-                    PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
+            val iceServers = mutableListOf(
+                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+                PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
+            )
+            turnUrls.filter { it.isNotBlank() }.forEach { url ->
+                iceServers.add(
+                    PeerConnection.IceServer.builder(url)
+                        .setUsername(turnUsername)
+                        .setPassword(turnCredential)
+                        .createIceServer()
                 )
-            ).apply {
+            }
+            val config = PeerConnection.RTCConfiguration(iceServers).apply {
                 sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
                 continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
             }
