@@ -338,7 +338,7 @@ class MainActivity : Activity() {
         lines.add(if (cameraReady) "● Remote camera service ready" else "○ Remote camera service not enabled")
         if (complete) {
             lines.add("")
-            lines.add("Internet relay ready • USB not required")
+            lines.add("Local network ready • USB not required after enrollment")
         }
         if (!extra.isNullOrBlank()) lines.add(extra)
         status.text = lines.joinToString("\n")
