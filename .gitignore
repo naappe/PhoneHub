@@ -20,3 +20,28 @@ local.properties
 
 # Local device comparison captures
 phone-baselines/
+
+# AndroidBridge secrets
+AndroidBridge/**/relay_config.json
+AndroidBridge/**/*secret*
+AndroidBridge/**/*.env
+AndroidBridge/**/.env
+AndroidBridge/**/.env.*
+
+# Android/Gradle generated files
+AndroidBridge/**/.gradle/
+AndroidBridge/**/build/
+AndroidBridge/**/*.apk
+AndroidBridge/**/*.aab
+
+# Python generated files
+AndroidBridge/**/__pycache__/
+AndroidBridge/**/*.pyc
+
+# Local AndroidBridge backups
+AndroidBridge/**/*BEFORE*
+AndroidBridge/**/*.bak
+
+# Existing local executable/installers
+PhoneHub.exe
+balenaEtcher-2.1.7.Setup.exe
