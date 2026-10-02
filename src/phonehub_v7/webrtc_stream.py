@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from typing import Callable
@@ -78,12 +79,19 @@ class WebRtcScreenClient:
             # negotiation behind a second prepare/status round trip.
             self.on_state("Connecting to active Android screen share…")
         self.on_state("Negotiating direct WebRTC camera…" if self.mode == "camera" else "Negotiating direct WebRTC screen…")
-        config = RTCConfiguration(
-            iceServers=[
-                RTCIceServer(urls="stun:stun.l.google.com:19302"),
-                RTCIceServer(urls="stun:stun1.l.google.com:19302"),
-            ]
-        )
+        turn_urls = [u.strip() for u in os.environ.get("PHONEHUB_TURN_URLS", "").split(";") if u.strip()]
+        turn_username = os.environ.get("PHONEHUB_TURN_USERNAME", "")
+        turn_credential = os.environ.get("PHONEHUB_TURN_CREDENTIAL", "")
+        ice_servers = [
+            RTCIceServer(urls="stun:stun.l.google.com:19302"),
+            RTCIceServer(urls="stun:stun1.l.google.com:19302"),
+        ]
+        if turn_urls:
+            ice_servers.append(
+                RTCIceServer(urls=turn_urls, username=turn_username, credential=turn_credential)
+            )
+            self.on_state(f"TURN enabled • {len(turn_urls)} relay endpoint(s)")
+        config = RTCConfiguration(iceServers=ice_servers)
         pc = RTCPeerConnection(configuration=config)
         self._pc = pc
         pc.addTransceiver("video", direction="recvonly")
@@ -126,7 +134,8 @@ class WebRtcScreenClient:
             self.on_state(f"Sending offer • PC ICE {pc_ice}")
             if self.mode == "camera":
                 answer = await asyncio.to_thread(
-                    self.server.camera_webrtc_offer, device, local.sdp, self._camera_lens
+                    self.server.camera_webrtc_offer, device, local.sdp, self._camera_lens,
+                    turn_urls, turn_username, turn_credential
                 )
             else:
                 answer = await asyncio.to_thread(self.server.webrtc_offer, device, local.sdp)
