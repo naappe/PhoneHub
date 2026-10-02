@@ -207,6 +207,16 @@ function ConfigurePhoneHubTransport {
     & adb -s $s shell am start -n "$Pkg/.MainActivity" --ez pc_enroll true | Out-Host
     Start-Sleep -Seconds 2
 
+    Write-Host "Pairing this PC with Samsung Secure..."
+    & adb -s $s forward tcp:47322 tcp:47322 | Out-Null
+    try {
+        $env:PYTHONPATH = Join-Path $Root "src"
+        & python -c "from phonehub_v7.companion_server import CompanionServer; r=CompanionServer().enroll_address('127.0.0.1',47322); print('Paired device:',r.get('device_id','unknown'))"
+        if ($LASTEXITCODE -ne 0) { throw "PC pairing failed." }
+    } finally {
+        & adb -s $s forward --remove tcp:47322 2>$null | Out-Null
+    }
+
     Write-Host ""
     Write-Host "PhoneHub setup complete."
     Write-Host "Primary control: Samsung Secure encrypted Internet relay."
