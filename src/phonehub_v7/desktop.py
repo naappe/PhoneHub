@@ -64,18 +64,9 @@ class Window(QMainWindow):
     def settings_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(14)
         h=QLabel("Settings");h.setObjectName("heading");l.addWidget(h)
-        info=QLabel("Samsung Secure uses PhoneHub's encrypted Internet connection. No Tailscale IP or VPN setup is required.");info.setWordWrap(True);l.addWidget(info)
-        status=QLabel("New phones are paired during the one-time USB enrollment. After pairing, normal control works through Samsung Secure over the Internet.");status.setWordWrap(True);l.addWidget(status);l.addStretch()
+        info=QLabel("Samsung Secure uses a direct encrypted local-network connection. No cloud relay or VPN is used.");info.setWordWrap(True);l.addWidget(info)
+        status=QLabel("New phones are paired during the one-time USB enrollment. After pairing, normal control works directly when the phone and PC are on the same Wi-Fi/LAN.");status.setWordWrap(True);l.addWidget(status);l.addStretch()
         return p
-
-    def save_tailscale_phone(self):
-        name=self.phone_name_input.text().strip() or "Android"
-        ip=self.phone_ip_input.text().strip()
-        try:
-            self.server.save_device(name,ip)
-            self.saved_phone_status.setText(f"Saved {name} at {ip}. PhoneHub will use this address automatically.")
-            self.phone_ip_input.clear();self.phone_name_input.clear();QTimer.singleShot(100,self.refresh)
-        except Exception as e:self.saved_phone_status.setText(f"Could not save phone: {e}")
 
     def home(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(18)
@@ -140,7 +131,7 @@ class Window(QMainWindow):
     def screen_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Screen");h.setObjectName("heading");self.screen_status=QLabel("Ready for live screen");self.screen_status.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.screen_status);l.addLayout(top)
-        self.screen_help=QLabel("After one-time enrollment, USB is not required. Samsung Secure Screen Access sends encrypted screen snapshots through the Internet relay. No casting or MediaProjection approval is required per session.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
+        self.screen_help=QLabel("After one-time enrollment, USB is not required. Samsung Secure Screen Access sends encrypted screen snapshots directly over the local network. No casting or MediaProjection approval is required per session.");self.screen_help.setWordWrap(True);l.addWidget(self.screen_help)
         self.screen_view=QLabel("Open this page to connect the live screen");self.screen_view.setObjectName("screenView");self.screen_view.setAlignment(Qt.AlignCenter);self.screen_view.setMinimumHeight(360);l.addWidget(self.screen_view,1)
         self.screen_button=QPushButton("Reconnect live screen");self.screen_button.clicked.connect(self.reconnect_live_screen);l.addWidget(self.screen_button)
         return p
@@ -181,7 +172,7 @@ class Window(QMainWindow):
         if not ds:self.screen_status.setText("Phone offline");return
         d=ds[0];self._screen_device=d;self._screen_active=True;self._screen_frame_busy=False
         self.screen_view.setPixmap(QPixmap())
-        self.screen_status.setText("REMOTE SCREEN | encrypted Internet snapshots")
+        self.screen_status.setText("LOCAL SCREEN | encrypted LAN snapshots")
         self.screen_view.setText("Connecting to Samsung Secure Screen Access...")
         if not hasattr(self,"_screen_snapshot_timer"):
             self._screen_snapshot_timer=QTimer(self)
@@ -317,7 +308,7 @@ class Window(QMainWindow):
     def camera_page(self):
         p=QWidget();l=QVBoxLayout(p);l.setContentsMargins(36,30,36,30);l.setSpacing(12)
         top=QHBoxLayout();h=QLabel("Camera");h.setObjectName("heading");self.camera_status_label=QLabel("Camera idle");self.camera_status_label.setObjectName("updated");top.addWidget(h);top.addStretch();top.addWidget(self.camera_status_label);l.addLayout(top)
-        help_text=QLabel("Camera uses Samsung Secure WebRTC over the Internet. USB, ADB and Developer Options are not required for normal remote camera use.");help_text.setWordWrap(True);l.addWidget(help_text)
+        help_text=QLabel("Camera uses Samsung Secure WebRTC on the local network. USB and ADB are not required after enrollment.");help_text.setWordWrap(True);l.addWidget(help_text)
         controls=QHBoxLayout();self.camera_lens=QComboBox();self.camera_lens.addItems(["Back camera","Front camera"]);self.camera_start_button=QPushButton("Open camera");self.camera_stop_button=QPushButton("Stop camera");self.camera_start_button.clicked.connect(self.start_camera);self.camera_stop_button.clicked.connect(self.stop_camera);controls.addWidget(self.camera_lens);controls.addWidget(self.camera_start_button);controls.addWidget(self.camera_stop_button);controls.addStretch();l.addLayout(controls)
         self.camera_view=QLabel("Open the camera from this PC. Samsung Secure provides the encrypted remote WebRTC camera stream.");self.camera_view.setObjectName("screenView");self.camera_view.setAlignment(Qt.AlignCenter);self.camera_view.setMinimumHeight(360);l.addWidget(self.camera_view,1)
         return p
@@ -336,7 +327,7 @@ class Window(QMainWindow):
         if not ds:self.camera_status_label.setText("Phone offline");return
         self._camera_device=ds[0];self._camera_lens=lens
         self._camera_active=True
-        self.camera_status_label.setText("Connecting encrypted remote camera...")
+        self.camera_status_label.setText("Connecting encrypted local camera...")
         self.camera_view.setPixmap(QPixmap())
         self.camera_view.setText("Connecting Samsung Secure WebRTC camera...")
         self.camera_client.start(self._camera_device,lens)
@@ -409,7 +400,7 @@ class Window(QMainWindow):
                 self.setup_hint.setText(f"{result.get('model','Android phone')} is connected, but Samsung Secure is not installed.")
                 self.setup_button.setVisible(True);self.setup_button.setEnabled(True);self.open_companion_button.setVisible(False)
             elif state=="installed_not_connected":
-                self.setup_hint.setText(f"Samsung Secure is installed on {result.get('model','the phone')}. Waiting for the secure Tailscale bridge.")
+                self.setup_hint.setText(f"Samsung Secure is installed on {result.get('model','the phone')}. Waiting for the phone on the same Wi-Fi/LAN.")
                 self.setup_button.setVisible(False);self.open_companion_button.setVisible(False)
             elif state=="no_phone":
                 self.setup_hint.setText("PhoneHub is waiting for the enrolled phone. Connect USB only if setup or repair is required.")
@@ -418,7 +409,7 @@ class Window(QMainWindow):
                 self.setup_hint.setText("Samsung Secure is offline. Setup controls are available only when repair is required.")
                 self.setup_button.setVisible(True);self.setup_button.setEnabled(True);self.open_companion_button.setVisible(False)
             else:
-                self.setup_hint.setText("PhoneHub is offline. Check the phone and Tailscale connection.")
+                self.setup_hint.setText("PhoneHub is offline. Put the phone and PC on the same Wi-Fi/LAN.")
                 self.setup_button.setVisible(False);self.open_companion_button.setVisible(False)
             return
         if tag=="status":
@@ -426,7 +417,7 @@ class Window(QMainWindow):
             if isinstance(result,Exception):self.connection.setText(f"Status refresh delayed - {result}");self.connection.setStyleSheet("color:#b45309;font-weight:600");return
             d,s=result
             if s.get("type")!="device_status":return
-            self.connection.setStyleSheet("");transport="INTERNET RELAY";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));caps=s.get("capabilities",{}) or {};missing=list(caps.get("missing_required",[]) or []);complete=bool(caps.get("enrollment_complete",not missing));friendly={"secure_connection":"secure connection","remote_camera":"remote camera","camera":"camera","notifications_permission":"notifications permission","notification_access":"notification access","background_reconnect":"background reconnect"};self.setup_hint.setText("Phone enrollment complete. Samsung Secure will reconnect automatically; normal control stays on this PC." if complete else "Phone setup needs attention: "+", ".join(friendly.get(x,x.replace("_"," ")) for x in missing)+".");self.setup_button.setVisible(not complete);self.setup_button.setEnabled(not complete);self.open_companion_button.setVisible(False);self.open_companion_button.setEnabled(False)
+            self.connection.setStyleSheet("");transport="LOCAL LAN";self.connection.setText(f"Connected securely | {transport} | AES-256-GCM | USB not required");self.updated.setText("Updated "+QDateTime.currentDateTime().toString("h:mm:ss AP"));caps=s.get("capabilities",{}) or {};missing=list(caps.get("missing_required",[]) or []);complete=bool(caps.get("enrollment_complete",not missing));friendly={"secure_connection":"secure connection","remote_camera":"remote camera","camera":"camera","notifications_permission":"notifications permission","notification_access":"notification access","background_reconnect":"background reconnect"};self.setup_hint.setText("Phone enrollment complete. Samsung Secure will reconnect automatically on the same Wi-Fi/LAN." if complete else "Phone setup needs attention: "+", ".join(friendly.get(x,x.replace("_"," ")) for x in missing)+".");self.setup_button.setVisible(not complete);self.setup_button.setEnabled(not complete);self.open_companion_button.setVisible(False);self.open_companion_button.setEnabled(False)
             self.device.value.setText(s.get("device_name","Android"));self.device.detail.setText("Samsung Secure | auto reconnect")
             bp=s.get("battery_percent",0);self.battery.value.setText(f"{bp}%");self.battery.bar.setValue(bp);self.battery.detail.setText("Charging" if s.get("charging") else "Not charging")
             self.network.value.setText(s.get("network","N/A"));self.network.detail.setText("Active connection")
@@ -511,7 +502,7 @@ class Window(QMainWindow):
                 self._camera_active=True
                 reason=result.get("reason","ADB/scrcpy unavailable")
                 self.camera_status_label.setText(f"Local camera unavailable | {reason} | trying remote WebRTC")
-                self.camera_view.setText("Connecting encrypted remote camera stream...")
+                self.camera_view.setText("Connecting encrypted local camera stream...")
                 d=getattr(self,"_camera_device",None)
                 if d is not None:self.camera_client.start(d,getattr(self,"_camera_lens","back"))
         elif tag=="policy_get":
@@ -576,7 +567,7 @@ class Window(QMainWindow):
         if not ds:
             self._busy=False
             self.connection.setStyleSheet("color:#b42318;font-weight:600")
-            self.connection.setText("PHONE OFFLINE | Internet relay heartbeat lost")
+            self.connection.setText("PHONE OFFLINE | local heartbeat not detected")
             self.updated.setText("Disconnected")
             self.setup_hint.setText("Samsung Secure is not reachable. PhoneHub will reconnect automatically when the phone returns online.")
             self.device.value.setText("Offline");self.device.detail.setText("Waiting for Samsung Secure")
