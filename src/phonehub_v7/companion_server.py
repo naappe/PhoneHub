@@ -108,8 +108,10 @@ class CompanionServer:
     def camera_webrtc_stop(self,d):return self.command(d,"camera_webrtc_stop")
     def policy_get(self,d,package):return self.command(d,"policy_get",{"package":package})
     def policy_set(self,d,package,policy):return self.command(d,"policy_set",{"package":package,"policy":policy})
-    def _mailbox(self,did,key):
-        return hashlib.sha256((did+":"+base64.b64encode(key).decode()).encode()).hexdigest()
+    def _mailbox(self,did,key=None):
+        # Routing identity is stable across the PC and Android implementations.
+        # Message confidentiality/authentication remains AES-GCM with the paired key.
+        return hashlib.sha256(("phonehub-v2:"+did).encode()).hexdigest()
     def _relay(self,body):
         req=urllib.request.Request(RELAY_URL,data=json.dumps(body,separators=(",",":")).encode(),headers={"Content-Type":"application/json"},method="POST")
         with urllib.request.urlopen(req,timeout=10) as r:return json.loads(r.read().decode())
