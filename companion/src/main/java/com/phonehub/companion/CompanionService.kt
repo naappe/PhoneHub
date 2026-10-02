@@ -53,7 +53,7 @@ class CompanionService : Service() {
     private fun decrypt(key:ByteArray,wire:JSONObject):JSONObject{val nonce=android.util.Base64.decode(wire.optString("nonce"),android.util.Base64.NO_WRAP);val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,SecretKeySpec(key,"AES"),GCMParameterSpec(128,nonce));val plain=cipher.doFinal(android.util.Base64.decode(wire.optString("ciphertext"),android.util.Base64.NO_WRAP));return JSONObject(String(plain,Charsets.UTF_8))}
     private fun encrypt(key:ByteArray,value:JSONObject):JSONObject{val nonce=ByteArray(12);java.security.SecureRandom().nextBytes(nonce);val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,SecretKeySpec(key,"AES"),GCMParameterSpec(128,nonce));val out=cipher.doFinal(value.toString().toByteArray(Charsets.UTF_8));return JSONObject().put("type","encrypted").put("version",2).put("nonce",android.util.Base64.encodeToString(nonce,android.util.Base64.NO_WRAP)).put("ciphertext",android.util.Base64.encodeToString(out,android.util.Base64.NO_WRAP))}
     private fun hex(b:ByteArray)=b.joinToString(""){"%02x".format(it)}
-    private fun remoteMailbox(key:ByteArray)=hex(MessageDigest.getInstance("SHA-256").digest((deviceId()+":"+android.util.Base64.encodeToString(key,android.util.Base64.NO_WRAP)).toByteArray()))
+    private fun remoteMailbox(key:ByteArray)=hex(MessageDigest.getInstance("SHA-256").digest(("phonehub-v2:"+deviceId()).toByteArray()))
     private fun localIpv4Candidates():List<String>{
         val result=linkedSetOf<String>()
         try{
