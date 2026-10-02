@@ -26,7 +26,7 @@ class CompanionServer:
         with self._lock:
             local=[d for d in self._devices.values() if d.online]
             if local:return sorted(local,key=lambda d:d.last_seen,reverse=True)
-            return [Companion(did,s.get("device_name","Android"),"REMOTE",s.get("_seen",0)) for did,s in self._remote_status.items() if time.time()-s.get("_seen",0)<30]
+            return [Companion(did,s.get("device_name","Android"),"REMOTE",s.get("_seen",0)) for did,s in self._remote_status.items() if time.time()-s.get("_seen",0)<20]
     def _raw_command(self,d,payload,timeout=20):
         raw=(json.dumps(payload,separators=(",",":"))+"\n").encode("utf-8")
         with socket.create_connection((d.address,d.command_port),timeout=timeout) as s:
