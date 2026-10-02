@@ -75,8 +75,19 @@ function DoBuild {
     if (-not $password) { throw "Signing password verification failed." }
     try {
         $env:PHONEHUB_STORE_PASSWORD=$password; $env:PHONEHUB_KEY_PASSWORD=$password; $env:PHONEHUB_KEY_ALIAS="phonehub"
-        & (Join-Path $Root "gradlew.bat") :companion:assembleRelease
-        if ($LASTEXITCODE -ne 0) { throw "Android build failed." }
+        $Gradle = Join-Path $Root "gradlew.bat"
+        & $Gradle :companion:assembleRelease
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Build failed. Releasing Gradle/D8 file locks and retrying once..." -ForegroundColor Yellow
+            & $Gradle --stop | Out-Null
+            Start-Sleep -Seconds 2
+            $DexDir = Join-Path $Root "companion\build\intermediates\dex"
+            if (Test-Path $DexDir) {
+                Remove-Item $DexDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            & $Gradle :companion:assembleRelease --no-daemon
+            if ($LASTEXITCODE -ne 0) { throw "Android build failed after automatic file-lock recovery." }
+        }
         New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
         Get-ChildItem $OutDir -Filter "PhoneHub-Companion-*.apk" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
         Copy-Item $Apk $OutApk -Force
