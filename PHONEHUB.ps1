@@ -199,8 +199,9 @@ function ConfigurePhoneHubTransport {
     Write-Host ""
     Write-Host "PhoneHub setup complete."
     Write-Host "Primary control: Samsung Secure encrypted Internet relay."
-    Write-Host "Screen/Camera: WebRTC over the Internet."
-    Write-Host "USB/local authorized ADB + scrcpy remains an optional fast path."
+    Write-Host "Screen: encrypted Accessibility snapshots over the Internet relay (no casting prompt)."
+    Write-Host "Camera: encrypted WebRTC over the Internet."
+    Write-Host "USB/ADB is only needed for installation/development, not normal remote use."
     Write-Host "Tailscale is not required by PhoneHub."
 }
 
