@@ -27,7 +27,7 @@ class CompanionService : Service() {
         private const val PREFS="phonehub"; private const val ENABLED="companion_enabled"; private const val PAIR_KEY="pair_key"; private const val INSTALL_ID="install_id"; private const val POLICIES="app_policies"
         private const val DISCOVERY_PORT=47321; private const val COMMAND_PORT=47322
         private const val RELAY_URL="https://tmupbruwmwlrmewhoodn.supabase.co/functions/v1/phonehub-relay"
-        fun enable(c:Context){val p=c.getSharedPreferences(PREFS,0);if(!p.contains(INSTALL_ID))p.edit().putString(INSTALL_ID,java.util.UUID.randomUUID().toString()).apply();if(!p.contains(PAIR_KEY)){val b=ByteArray(32);java.security.SecureRandom().nextBytes(b);p.edit().putString(PAIR_KEY,android.util.Base64.encodeToString(b,android.util.Base64.NO_WRAP)).apply()};p.edit().putBoolean(ENABLED,true).apply();start(c)}
+        fun enable(c:Context){val p=c.getSharedPreferences(PREFS,0);if(!p.contains(INSTALL_ID))p.edit().putString(INSTALL_ID,java.util.UUID.randomUUID().toString()).apply();if(!p.contains(PAIR_KEY)){val b=ByteArray(32);java.security.SecureRandom().nextBytes(b);p.edit().putString(PAIR_KEY,android.util.Base64.encodeToString(b,android.util.Base64.NO_WRAP)).apply()};p.edit().putBoolean(ENABLED,true).apply();PhoneHubRecovery.schedule(c);start(c)}
         fun isEnabled(c:Context)=c.getSharedPreferences(PREFS,0).getBoolean(ENABLED,false)
         fun start(c:Context){ContextCompat.startForegroundService(c,Intent(c,CompanionService::class.java))}
     }
