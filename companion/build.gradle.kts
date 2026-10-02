@@ -17,8 +17,8 @@ android {
         applicationId = "com.phonehub.companion"
         minSdk = 26
         targetSdk = 35
-        versionCode = 108
-        versionName = "7.0.0-dev40"
+        versionCode = 109
+        versionName = "7.0.0-dev41"
     }
     buildTypes {
         getByName("release") {
@@ -35,5 +35,6 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("io.github.webrtc-sdk:android:150.7871.01")
 }
