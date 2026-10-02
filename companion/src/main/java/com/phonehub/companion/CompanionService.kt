@@ -141,7 +141,14 @@ class CompanionService : Service() {
                 if(!CapabilityManager.cameraAllowed(this)){
                     response.put("type","camera_webrtc_error").put("message","Remote camera permission is not granted.")
                 }else{
-                    CameraWebRtcService.startAndAnswer(this,lens,sdp)
+                    val turnUrlsJson=req.optJSONArray("turn_urls")
+                    val turnUrls=mutableListOf<String>()
+                    if(turnUrlsJson!=null){for(i in 0 until turnUrlsJson.length()){val u=turnUrlsJson.optString(i);if(u.isNotBlank())turnUrls.add(u)}}
+                    CameraWebRtcService.startAndAnswer(
+                        this,lens,sdp,turnUrls,
+                        req.optString("turn_username"),
+                        req.optString("turn_credential")
+                    )
                 }
             }
             "camera_webrtc_stop"->{CameraWebRtcService.stopWebRtc();response.put("type","camera_webrtc_stopped").put("armed",CameraWebRtcService.isReady())}
