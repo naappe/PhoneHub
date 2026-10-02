@@ -131,69 +131,6 @@ function Invoke-AdbOptional {
     }
 }
 
-function GetPhoneTailscaleIp([string]$DeviceSerial) {
-    try {
-        $lines = @(& adb -s $DeviceSerial shell ip -4 addr show 2>$null)
-        foreach($line in $lines) {
-            if($line -match 'inet\s+(100\.\d+\.\d+\.\d+)/') {
-                return $matches[1]
-            }
-        }
-    } catch {}
-
-    if(Get-Command tailscale -ErrorAction SilentlyContinue) {
-        try {
-            $jsonText = (& tailscale status --json 2>$null) -join [Environment]::NewLine
-            if($jsonText) {
-                $json = $jsonText | ConvertFrom-Json
-                $peers = @($json.Peer.PSObject.Properties.Value)
-                foreach($peer in $peers) {
-                    if($peer.Online -eq $false) { continue }
-                    if(([string]$peer.OS) -notmatch 'android') { continue }
-                    foreach($ip in @($peer.TailscaleIPs)) {
-                        if(([string]$ip) -match '^100\.\d+\.\d+\.\d+$') {
-                            return [string]$ip
-                        }
-                    }
-                }
-            }
-        } catch {}
-    }
-
-    return ""
-}
-
-function WaitForPhoneTailscaleIp([string]$DeviceSerial, [int]$TimeoutSeconds = 90) {
-    $ip = GetPhoneTailscaleIp $DeviceSerial
-    if($ip) { return $ip }
-
-    Write-Host "Tailscale address not active yet. Opening Tailscale on the phone..."
-    Invoke-AdbOptional $DeviceSerial @("shell","monkey","-p","com.tailscale.ipn","-c","android.intent.category.LAUNCHER","1") | Out-Null
-
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    while((Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 3
-        $ip = GetPhoneTailscaleIp $DeviceSerial
-        if($ip) { return $ip }
-        Write-Host "Waiting for phone to join the tailnet..."
-    }
-
-    return ""
-}
-
-function SaveTailscaleDevice([string]$Ip) {
-    if(-not $Ip) { throw "Tailscale IP is required." }
-    $dir = Join-Path $HOME ".phonehub"
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $device = @{
-        device_id = "pending"
-        device_name = "Android"
-        tailscale_ip = $Ip
-        command_port = 47322
-    }
-    $device | ConvertTo-Json | Set-Content -Path (Join-Path $dir "tailscale_device.json") -Encoding UTF8
-}
-
 function ConfigurePhoneHubTransport {
     Title "One-Time Samsung Secure Enrollment"
     $s = AdbSerial $Serial
@@ -219,11 +156,10 @@ function ConfigurePhoneHubTransport {
 
     Write-Host ""
     Write-Host "PhoneHub setup complete."
-    Write-Host "Primary control: Samsung Secure encrypted Internet relay."
-    Write-Host "Screen: encrypted Accessibility snapshots over the Internet relay (no casting prompt)."
-    Write-Host "Camera: encrypted WebRTC over the Internet."
-    Write-Host "USB/ADB is only needed for installation/development, not normal remote use."
-    Write-Host "Tailscale is not required by PhoneHub."
+    Write-Host "Primary control: Samsung Secure direct encrypted local network."
+    Write-Host "Screen: encrypted Accessibility snapshots over the local network (no casting prompt)."
+    Write-Host "Camera: WebRTC on the local network (experimental)."
+    Write-Host "USB/ADB is only needed for installation/development; normal use requires the same Wi-Fi/LAN."
 }
 
 function DoStart {
