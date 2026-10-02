@@ -9,7 +9,13 @@ class BootReceiver : BroadcastReceiver() {
         val eligible = intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
         if (eligible && CompanionService.isEnabled(context)) {
-            CompanionService.start(context)
+            PhoneHubRecovery.schedule(context)
+            PhoneHubRecovery.recoverNow(context)
+            try {
+                CompanionService.start(context)
+            } catch (_: Exception) {
+                // WorkManager will retry when Android allows background recovery.
+            }
         }
     }
 }
