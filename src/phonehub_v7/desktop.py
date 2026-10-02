@@ -574,7 +574,21 @@ class Window(QMainWindow):
     def refresh(self):
         ds=self.server.devices()
         if not ds:
-            self.connection.setStyleSheet("");self.connection.setText("Waiting for Samsung Secure");self.updated.setText("Offline")
+            self._busy=False
+            self.connection.setStyleSheet("color:#b42318;font-weight:600")
+            self.connection.setText("PHONE OFFLINE | Internet relay heartbeat lost")
+            self.updated.setText("Disconnected")
+            self.setup_hint.setText("Samsung Secure is not reachable. PhoneHub will reconnect automatically when the phone returns online.")
+            self.device.value.setText("Offline");self.device.detail.setText("Waiting for Samsung Secure")
+            self.battery.value.setText("--");self.battery.bar.setValue(0);self.battery.detail.setText("Unavailable")
+            self.network.value.setText("Offline");self.network.detail.setText("No relay heartbeat")
+            self.storage.value.setText("--");self.storage.bar.setValue(0);self.storage.detail.setText("Unavailable")
+            self.memory.value.setText("--");self.memory.bar.setValue(0);self.memory.detail.setText("Unavailable")
+            self.android.value.setText("--");self.android.detail.setText("Phone offline")
+            if self._screen_active:
+                self.screen_status.setText("PHONE OFFLINE | waiting for Samsung Secure")
+            if self._camera_active:
+                self.camera_status_label.setText("PHONE OFFLINE | camera unavailable")
             if not self._setup_probe_busy:
                 self._setup_probe_busy=True;self.run_task("setup_probe",self.probe_phone_setup)
             return
