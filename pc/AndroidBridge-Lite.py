@@ -761,8 +761,8 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
             return
 
         # Distant-speech DSP:
-        # 1) remove rumble/hiss outside the useful speech band,
-        # 2) FFT noise reduction with a tracking noise floor,
+        # 1) aggressively remove low-frequency wind/rumble below the speech band,
+        # 2) stronger adaptive FFT denoise with a tracking noise floor,
         # 3) boost speech-presence bands around 2.5-4 kHz,
         # 4) dynamically raise quiet/distant speech by up to 20x,
         # 5) peak-limit the result to prevent clipping.
@@ -774,7 +774,7 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
                 "-loglevel", "error",
                 "-fflags", "nobuffer",
                 "-flags", "low_delay",
-                "-af", "highpass=f=120:p=2,lowpass=f=7500:p=2,afftdn=nr=18:nf=-45:tn=1:gs=8,equalizer=f=2500:t=q:w=1:g=4,equalizer=f=4000:t=q:w=1:g=2,dynaudnorm=f=120:g=5:p=0.92:m=20:r=0.18:t=0.0015,alimiter=limit=0.95:level=0:attack=5:release=80",
+                "-af", "highpass=f=180:p=2,lowpass=f=7200:p=2,afftdn=nr=24:nf=-42:tn=1:gs=12,equalizer=f=2500:t=q:w=1:g=4,equalizer=f=4000:t=q:w=1:g=2,dynaudnorm=f=120:g=5:p=0.92:m=20:r=0.12:t=0.0015,alimiter=limit=0.95:level=0:attack=5:release=80",
                 "-i", "pipe:0"
             ],
             stdin=subprocess.PIPE,
@@ -885,6 +885,9 @@ def start_audio():
 
     try:
 
+        # Use Samsung's voice-recognition capture path rather than camcorder audio:
+        # camcorder preserves ambience (including wind); voice-recognition is a
+        # better source for intelligible speech before our PC-side wind filter.
         # scrcpy captures the Samsung microphone but does not play it itself.
         # Its live Opus stream is written to a Windows named pipe. FFplay reads
         # it and applies speech-band filtering, adaptive FFT denoise,
@@ -896,7 +899,7 @@ def start_audio():
                 device,
                 "--no-video",
                 "--no-audio-playback",
-                "--audio-source=mic-camcorder",
+                "--audio-source=mic-voice-recognition",
                 "--audio-codec=opus",
                 "--audio-bit-rate=128K",
                 "--audio-buffer=60",
@@ -911,7 +914,7 @@ def start_audio():
         active_device = device
 
         try:
-            mode_label.config(text="MODE: DISTANT SPEECH MAX")
+            mode_label.config(text="MODE: DISTANT SPEECH MAX - WIND FILTER")
         except:
             pass
 
