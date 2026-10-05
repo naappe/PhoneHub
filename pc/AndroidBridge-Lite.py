@@ -597,7 +597,7 @@ def open_phone_data(mode):
 
 
 def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
-    """Relay scrcpy's live Opus recording through FFplay with real +12 dB DSP."""
+    """Relay scrcpy audio through a speech-focused distant-listening DSP chain."""
     global audio_boost_process
     global audio_pipe_handle
 
@@ -657,8 +657,12 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
         if not connected and ctypes.get_last_error() != ERROR_PIPE_CONNECTED:
             return
 
-        # This is genuine PCM-domain amplification on the PC side:
-        # +12 dB gain followed by a peak limiter to prevent hard clipping.
+        # Distant-speech DSP:
+        # 1) remove rumble/hiss outside the useful speech band,
+        # 2) FFT noise reduction with a tracking noise floor,
+        # 3) boost speech-presence bands around 2.5-4 kHz,
+        # 4) dynamically raise quiet/distant speech by up to 20x,
+        # 5) peak-limit the result to prevent clipping.
         player = subprocess.Popen(
             [
                 ffplay_path,
@@ -667,7 +671,7 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
                 "-loglevel", "error",
                 "-fflags", "nobuffer",
                 "-flags", "low_delay",
-                "-af", "volume=12dB,alimiter=limit=0.95:level=0:attack=5:release=50",
+                "-af", "highpass=f=120:p=2,lowpass=f=7500:p=2,afftdn=nr=18:nf=-45:tn=1:gs=8,equalizer=f=2500:t=q:w=1:g=4,equalizer=f=4000:t=q:w=1:g=2,dynaudnorm=f=120:g=5:p=0.92:m=20:r=0.18:t=0.0015,alimiter=limit=0.95:level=0:attack=5:release=80",
                 "-i", "pipe:0"
             ],
             stdin=subprocess.PIPE,
@@ -753,7 +757,7 @@ def start_audio():
     if not ffplay_path:
         messagebox.showerror(
             "AndroidBridge Audio Boost",
-            "FFplay is required for real +12 dB audio amplification.\n\n"
+            "FFplay is required for distant-speech amplification and noise reduction.\n\n"
             "Install once in PowerShell:\n"
             "winget install -e --id Gyan.FFmpeg"
         )
@@ -780,7 +784,8 @@ def start_audio():
 
         # scrcpy captures the Samsung microphone but does not play it itself.
         # Its live Opus stream is written to a Windows named pipe. FFplay reads
-        # that stream, applies +12 dB gain + limiting, then plays it on the PC.
+        # it and applies speech-band filtering, adaptive FFT denoise,
+        # presence EQ, dynamic quiet-speech gain and peak limiting.
         audio_process = subprocess.Popen(
             [
                 "scrcpy",
@@ -803,7 +808,7 @@ def start_audio():
         active_device = device
 
         try:
-            mode_label.config(text="MODE: AUDIO BOOST +12 dB")
+            mode_label.config(text="MODE: DISTANT SPEECH MAX")
         except:
             pass
 
@@ -1273,7 +1278,7 @@ stop_button.grid(
 
 audio_on_button = tk.Button(
     buttons,
-    text="AUDIO BOOST +12dB",
+    text="DISTANT SPEECH MAX",
     command=start_audio,
     **button_style
 )
