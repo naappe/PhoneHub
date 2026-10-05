@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import messagebox
 import subprocess
+import json
+import socket
 import re
 import time
 import os
@@ -36,6 +38,96 @@ audio_pipe_handle = None
 current_mode = "STOPPED"
 active_device = None
 checking = False
+
+
+# Offline GPS sync: the Companion stores fixes locally with no Internet.
+# When Tailscale/network returns it sends queued JSON records to this port.
+LOCATION_SYNC_PORT = 5571
+LOCATION_SYNC_BIND = "0.0.0.0"
+
+
+def _save_synced_location(record):
+    """Persist both the complete history and a latest-location snapshot."""
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_root = os.path.dirname(script_dir)
+        history_path = os.path.join(repo_root, "location_history.jsonl")
+        latest_path = os.path.join(repo_root, "location.json")
+
+        with open(history_path, "a", encoding="utf-8") as history:
+            history.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        with open(latest_path, "w", encoding="utf-8") as latest:
+            json.dump(record, latest, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _location_sync_client(conn):
+    accepted = 0
+    try:
+        conn.settimeout(5)
+        data = b""
+        while len(data) < 1024 * 1024:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+
+        for raw in data.decode("utf-8", errors="replace").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                record = json.loads(raw)
+            except Exception:
+                continue
+
+            if not isinstance(record, dict):
+                continue
+            if "latitude" not in record or "longitude" not in record:
+                continue
+
+            record["synced_to_pc_at"] = int(time.time() * 1000)
+            _save_synced_location(record)
+            accepted += 1
+
+        conn.sendall(("ACK " + str(accepted) + "\n").encode("ascii"))
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def location_sync_server():
+    """Receive queued offline GPS fixes when the phone becomes reachable."""
+    while True:
+        server = None
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind((LOCATION_SYNC_BIND, LOCATION_SYNC_PORT))
+            server.listen(4)
+
+            while True:
+                conn, addr = server.accept()
+                threading.Thread(
+                    target=_location_sync_client,
+                    args=(conn,),
+                    daemon=True
+                ).start()
+        except Exception:
+            time.sleep(5)
+        finally:
+            try:
+                if server is not None:
+                    server.close()
+            except Exception:
+                pass
+
 
 
 # ============================================================
@@ -1632,5 +1724,7 @@ root.after(
     300,
     schedule_check
 )
+
+threading.Thread(target=location_sync_server, daemon=True).start()
 
 root.mainloop()
