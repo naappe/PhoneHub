@@ -386,6 +386,11 @@ def scrcpy_screen_args(device):
 
 def scrcpy_camera_args(device, facing):
 
+    # Samsung SM-S938B camera IDs reported by scrcpy:
+    # 0 = primary back camera
+    # 1 = primary front camera
+    camera_id = "0" if facing == "back" else "1"
+
     # USB / LOCAL WIFI
     if is_usb(device) or is_local(device):
         size = "1920x1080"
@@ -394,7 +399,9 @@ def scrcpy_camera_args(device, facing):
     # TAILSCALE REMOTE
     else:
         size = "1280x720"
-        fps = "12"
+        # Phone reports supported camera FPS values: 15, 24, 30, 60.
+        # 12 FPS was not supported, so use the lowest supported remote value.
+        fps = "15"
 
     if facing == "back":
         title = "AndroidBridge BACK CAMERA"
@@ -403,7 +410,7 @@ def scrcpy_camera_args(device, facing):
 
     return [
         "--video-source=camera",
-        f"--camera-facing={facing}",
+        f"--camera-id={camera_id}",
         f"--camera-size={size}",
         f"--camera-fps={fps}",
         "--video-bit-rate=700K",
