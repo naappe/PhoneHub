@@ -474,6 +474,24 @@ def _watch_nightvision_log(process):
             if "AndroidBridge LLB" in line:
                 saw_capability = True
 
+            if "AndroidBridge NV diag:" in line:
+                match = re.search(
+                    r"NIGHT_EXTENSION=(true|false), ISO=([^,]+), EXPOSURE_NS=([^,]+), FLASH=(true|false|null)",
+                    line,
+                    re.IGNORECASE
+                )
+                if match:
+                    night_ext, iso_range, exposure_range, flash = match.groups()
+                    detail = (
+                        "NV SENSOR: Night Extension " + night_ext.upper()
+                        + " | ISO " + iso_range
+                        + " | Exposure " + exposure_range + " ns"
+                    )
+                    root.after(
+                        0,
+                        lambda value=detail: nv_diag_label.config(text=value)
+                    )
+
             if "AndroidBridge LLB support: true" in line:
                 root.after(
                     0,
@@ -587,6 +605,11 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         stderr_target = subprocess.DEVNULL
 
         if low_light:
+            try:
+                nv_diag_label.config(text="NV SENSOR: reading Samsung camera capabilities...")
+            except:
+                pass
+
             # Only NIGHT VISION BOOST uses the custom scrcpy v4.1 server.
             # Normal SCREEN/BACK/FRONT profiles remain on the stock server.
             custom_server = os.path.join(
@@ -1156,7 +1179,7 @@ root = tk.Tk()
 
 root.title("AndroidBridge Lite")
 
-root.geometry("560x650")
+root.geometry("560x675")
 
 root.resizable(False, False)
 
@@ -1280,7 +1303,24 @@ mode_label = tk.Label(
 mode_label.pack(
     anchor="w",
     padx=20,
-    pady=(2, 17)
+    pady=(2, 4)
+)
+
+
+nv_diag_label = tk.Label(
+    connection_card,
+    text="",
+    font=("Segoe UI", 8),
+    bg=PANEL,
+    fg=MUTED,
+    wraplength=500,
+    justify="left"
+)
+
+nv_diag_label.pack(
+    anchor="w",
+    padx=20,
+    pady=(0, 13)
 )
 
 
