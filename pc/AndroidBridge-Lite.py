@@ -6,6 +6,11 @@ import time
 import os
 import threading
 
+# AndroidBridge uses the normal adb.exe from PATH. Never inherit an old
+# scrcpy ADB override from an earlier experimental build.
+os.environ.pop("ADB", None)
+os.environ.pop("ANDROIDBRIDGE_REAL_ADB", None)
+
 HIDE = 0x08000000
 
 PHONE_NAME = "jennys-s25-ultra"
@@ -393,23 +398,20 @@ def scrcpy_camera_args(device, facing):
 
     # TAILSCALE REMOTE
     else:
-        size = "1280x720"
-        fps = "15"
+        size = "640x360"
+        fps = "24"
 
     if facing == "back":
         title = "AndroidBridge BACK CAMERA"
     else:
         title = "AndroidBridge FRONT CAMERA"
 
-    camera_id = "0" if facing == "back" else "1"
-
     return [
         "--video-source=camera",
-        f"--camera-id={camera_id}",
+        f"--camera-facing={facing}",
         f"--camera-size={size}",
         f"--camera-fps={fps}",
-        "--video-bit-rate=700K",
-        "--video-buffer=0",
+        "--video-bit-rate=800K",
         "--video-codec=h264",
         "--no-audio",
         f"--window-title={title}"
@@ -606,10 +608,7 @@ def start_audio():
                 "-s",
                 device,
                 "--no-video",
-                "--audio-source=mic-voice-recognition",
-                "--audio-codec=opus",
-                "--audio-bit-rate=96K",
-                "--audio-buffer=20"
+                "--audio-source=mic-voice-communication"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
