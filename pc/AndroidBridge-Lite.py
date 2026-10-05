@@ -5,6 +5,9 @@ import re
 import time
 import os
 import threading
+import shutil
+import ctypes
+from ctypes import wintypes
 
 # AndroidBridge uses the normal adb.exe from PATH. Never inherit an old
 # scrcpy ADB override from an earlier experimental build.
@@ -23,6 +26,8 @@ current_process = None
 screen_process = None
 camera_process = None
 audio_process = None
+audio_boost_process = None
+audio_pipe_handle = None
 current_mode = "STOPPED"
 active_device = None
 checking = False
@@ -591,6 +596,132 @@ def open_phone_data(mode):
 # ============================================================
 
 
+def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
+    """Relay scrcpy's live Opus recording through FFplay with real +12 dB DSP."""
+    global audio_boost_process
+    global audio_pipe_handle
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    CreateNamedPipeW = kernel32.CreateNamedPipeW
+    CreateNamedPipeW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+        wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID
+    ]
+    CreateNamedPipeW.restype = wintypes.HANDLE
+
+    ConnectNamedPipe = kernel32.ConnectNamedPipe
+    ConnectNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID]
+    ConnectNamedPipe.restype = wintypes.BOOL
+
+    ReadFile = kernel32.ReadFile
+    ReadFile.argtypes = [
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
+    ]
+    ReadFile.restype = wintypes.BOOL
+
+    CloseHandle = kernel32.CloseHandle
+    CloseHandle.argtypes = [wintypes.HANDLE]
+    CloseHandle.restype = wintypes.BOOL
+
+    PIPE_ACCESS_INBOUND = 0x00000001
+    PIPE_TYPE_BYTE = 0x00000000
+    PIPE_READMODE_BYTE = 0x00000000
+    PIPE_WAIT = 0x00000000
+    ERROR_PIPE_CONNECTED = 535
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    handle = CreateNamedPipeW(
+        pipe_name,
+        PIPE_ACCESS_INBOUND,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        1,
+        65536,
+        65536,
+        0,
+        None
+    )
+
+    if handle == INVALID_HANDLE_VALUE:
+        ready_event.set()
+        return
+
+    audio_pipe_handle = handle
+    ready_event.set()
+
+    player = None
+
+    try:
+        connected = ConnectNamedPipe(handle, None)
+        if not connected and ctypes.get_last_error() != ERROR_PIPE_CONNECTED:
+            return
+
+        # This is genuine PCM-domain amplification on the PC side:
+        # +12 dB gain followed by a peak limiter to prevent hard clipping.
+        player = subprocess.Popen(
+            [
+                ffplay_path,
+                "-nodisp",
+                "-autoexit",
+                "-loglevel", "error",
+                "-fflags", "nobuffer",
+                "-flags", "low_delay",
+                "-af", "volume=12dB,alimiter=limit=0.95:level=0:attack=5:release=50",
+                "-i", "pipe:0"
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=HIDE,
+            bufsize=0
+        )
+
+        audio_boost_process = player
+
+        buffer = ctypes.create_string_buffer(65536)
+        count = wintypes.DWORD()
+
+        while player.poll() is None:
+            ok = ReadFile(
+                handle,
+                buffer,
+                len(buffer),
+                ctypes.byref(count),
+                None
+            )
+
+            if not ok or count.value == 0:
+                break
+
+            try:
+                player.stdin.write(buffer.raw[:count.value])
+            except (BrokenPipeError, OSError):
+                break
+
+    finally:
+        if player is not None:
+            try:
+                if player.stdin:
+                    player.stdin.close()
+            except:
+                pass
+
+            try:
+                if player.poll() is None:
+                    player.terminate()
+            except:
+                pass
+
+        audio_boost_process = None
+        audio_pipe_handle = None
+
+        try:
+            CloseHandle(handle)
+        except:
+            pass
+
+
 def start_audio():
 
     global audio_process
@@ -617,25 +748,52 @@ def start_audio():
         except:
             pass
 
+    ffplay_path = shutil.which("ffplay")
+
+    if not ffplay_path:
+        messagebox.showerror(
+            "AndroidBridge Audio Boost",
+            "FFplay is required for real +12 dB audio amplification.\n\n"
+            "Install once in PowerShell:\n"
+            "winget install -e --id Gyan.FFmpeg"
+        )
+        return
+
+    pipe_name = r"\\.\pipe\AndroidBridgeAudio-" + str(os.getpid()) + "-" + str(time.time_ns())
+    ready_event = threading.Event()
+
+    relay = threading.Thread(
+        target=_audio_boost_relay,
+        args=(pipe_name, ffplay_path, ready_event),
+        daemon=True
+    )
+    relay.start()
+
+    if not ready_event.wait(timeout=2):
+        messagebox.showerror(
+            "AndroidBridge Audio Boost",
+            "Could not prepare the PC audio boost pipeline."
+        )
+        return
+
     try:
 
+        # scrcpy captures the Samsung microphone but does not play it itself.
+        # Its live Opus stream is written to a Windows named pipe. FFplay reads
+        # that stream, applies +12 dB gain + limiting, then plays it on the PC.
         audio_process = subprocess.Popen(
             [
                 "scrcpy",
                 "-s",
                 device,
                 "--no-video",
-                # AndroidBridge is listening to the phone's surroundings, not
-                # running a two-way voice call. CAMCORDER is the Android mic
-                # source tuned for environmental/video capture. The previous
-                # VOICE_COMMUNICATION source may apply call-oriented echo/noise
-                # processing that can make distant room sound seem very quiet.
+                "--no-audio-playback",
                 "--audio-source=mic-camcorder",
                 "--audio-codec=opus",
                 "--audio-bit-rate=128K",
-                # A little more network cushion for the remote Tailscale path.
-                # Buffering affects stability/latency, not microphone gain.
-                "--audio-buffer=60"
+                "--audio-buffer=60",
+                "--record=" + pipe_name,
+                "--record-format=opus"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -644,40 +802,63 @@ def start_audio():
 
         active_device = device
 
+        try:
+            mode_label.config(text="MODE: AUDIO BOOST +12 dB")
+        except:
+            pass
+
     except Exception as e:
 
         audio_process = None
 
         messagebox.showerror(
             "AndroidBridge Lite",
-            "Audio could not start:\n\n" + str(e)
+            "Audio boost could not start:\n\n" + str(e)
         )
 
 
 def stop_audio():
 
     global audio_process
+    global audio_boost_process
+    global audio_pipe_handle
 
-    if audio_process is None:
-        return
-
-    try:
-
-        if audio_process.poll() is None:
-
-            audio_process.terminate()
-
-            try:
-                audio_process.wait(timeout=2)
-
-            except:
-                audio_process.kill()
-
-    except:
-        pass
+    if audio_process is not None:
+        try:
+            if audio_process.poll() is None:
+                audio_process.terminate()
+                try:
+                    audio_process.wait(timeout=2)
+                except:
+                    audio_process.kill()
+        except:
+            pass
 
     audio_process = None
 
+    if audio_boost_process is not None:
+        try:
+            if audio_boost_process.poll() is None:
+                audio_boost_process.terminate()
+        except:
+            pass
+
+    audio_boost_process = None
+
+    # Closing the server end also releases a relay blocked in ReadFile.
+    if audio_pipe_handle is not None:
+        try:
+            ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(audio_pipe_handle)
+        except:
+            pass
+
+    audio_pipe_handle = None
+
+    try:
+        if current_mode == "STOPPED":
+            mode_label.config(text="MODE: STOPPED")
+    except:
+        pass
 
 def background_check():
 
@@ -1092,7 +1273,7 @@ stop_button.grid(
 
 audio_on_button = tk.Button(
     buttons,
-    text="AUDIO ON",
+    text="AUDIO BOOST +12dB",
     command=start_audio,
     **button_style
 )
