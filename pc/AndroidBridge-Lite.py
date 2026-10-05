@@ -508,7 +508,7 @@ def _watch_nightvision_log(process):
 
             if "AndroidBridge NV diag:" in line:
                 match = re.search(
-                    r"NIGHT_EXTENSION=(true|false), ISO=([^,]+), EXPOSURE_NS=([^,]+), FLASH=(true|false|null)",
+                    r"NIGHT_EXTENSION=(true|false), ISO=(.*?), EXPOSURE_NS=(.*?), FLASH=(true|false|null)",
                     line,
                     re.IGNORECASE
                 )
