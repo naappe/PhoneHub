@@ -402,13 +402,19 @@ def scrcpy_screen_args(device):
     ]
 
 
-def scrcpy_camera_args(device, facing, night=False):
+def scrcpy_camera_args(device, facing, night=False, low_light=False):
 
     # The Samsung reported camera 0 as back and camera 1 as front.
     # Use those exact IDs instead of asking Android to choose a camera.
     camera_id = "0" if facing == "back" else "1"
 
-    if night:
+    if low_light:
+        # Sensor-only low-light test: no torch and no fixed FPS. Leaving the
+        # AE target FPS unset lets Android Camera2 choose its own exposure
+        # behavior instead of AndroidBridge forcing the verified 15/30 FPS.
+        camera_id = "0"
+        title = "AndroidBridge LOW LIGHT TEST"
+    elif night:
         # Stable night mode: use the proven rear camera path plus Samsung's
         # physical LED torch. This does not alter the normal camera profiles.
         camera_id = "0"
@@ -425,12 +431,13 @@ def scrcpy_camera_args(device, facing, night=False):
             f"--camera-id={camera_id}",
             "--max-size=1920",
             "--camera-ar=16:9",
-            "--camera-fps=30",
             "--video-bit-rate=4M",
             "--video-codec=h264",
             "--no-audio",
             f"--window-title={title}"
         ]
+        if not low_light:
+            args.insert(4, "--camera-fps=30")
         if night:
             args.insert(2, "--camera-torch")
         return args
@@ -444,19 +451,20 @@ def scrcpy_camera_args(device, facing, night=False):
         f"--camera-id={camera_id}",
         "--max-size=640",
         "--camera-ar=16:9",
-        "--camera-fps=15",
         "--video-bit-rate=450K",
         "--video-buffer=0",
         "--video-codec=h264",
         "--no-audio",
         f"--window-title={title}"
     ]
+    if not low_light:
+        args.insert(4, "--camera-fps=15")
     if night:
         args.insert(2, "--camera-torch")
     return args
 
 
-def launch(mode, kind, facing=None, night=False):
+def launch(mode, kind, facing=None, night=False, low_light=False):
 
     global current_process
     global screen_process
@@ -515,7 +523,8 @@ def launch(mode, kind, facing=None, night=False):
         args = scrcpy_camera_args(
             device,
             facing,
-            night=night
+            night=night,
+            low_light=low_light
         )
 
     time.sleep(0.3)
@@ -588,14 +597,23 @@ def front_camera():
 
 
 def night_camera():
-    # Rear-camera low-light mode. The Samsung rear LED is the only reliable
-    # illumination source available through stock scrcpy; STOP turns it off
-    # with the camera process.
+    # Torch-assisted rear camera mode retained as a separate optional tool.
     launch(
         "NIGHT CAMERA",
         "camera",
         "back",
         night=True
+    )
+
+
+def low_light_test():
+    # No torch. This measures what the rear camera can obtain from available
+    # visible light using Camera2 automatic exposure behavior.
+    launch(
+        "LOW LIGHT TEST",
+        "camera",
+        "back",
+        low_light=True
     )
 
 
@@ -1344,13 +1362,29 @@ audio_off_button.grid(
 
 night_button = tk.Button(
     buttons,
-    text="NIGHT CAMERA",
+    text="NIGHT + TORCH",
     command=night_camera,
     **button_style
 )
 
 night_button.grid(
     row=3,
+    column=0,
+    columnspan=2,
+    padx=7,
+    pady=7
+)
+
+
+low_light_button = tk.Button(
+    buttons,
+    text="LOW LIGHT TEST",
+    command=low_light_test,
+    **button_style
+)
+
+low_light_button.grid(
+    row=4,
     column=0,
     columnspan=2,
     padx=7,
@@ -1366,7 +1400,7 @@ calls_button = tk.Button(
 )
 
 calls_button.grid(
-    row=4,
+    row=5,
     column=0,
     padx=7,
     pady=7
@@ -1381,7 +1415,7 @@ activity_button = tk.Button(
 )
 
 activity_button.grid(
-    row=4,
+    row=5,
     column=1,
     padx=7,
     pady=7
@@ -1405,7 +1439,7 @@ location_button = tk.Button(
 )
 
 location_button.grid(
-    row=5,
+    row=6,
     column=0,
     columnspan=2,
     padx=7,
