@@ -5,6 +5,7 @@ import re
 import time
 import os
 import threading
+import shutil
 
 HIDE = 0x08000000
 
@@ -28,6 +29,114 @@ media_start_lock = threading.Lock()
 # ============================================================
 # PROCESS HELPERS
 # ============================================================
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ADB_PROXY_SOURCE = os.path.join(
+    SCRIPT_DIR,
+    "AndroidBridge-AdbProxy.cs"
+)
+ADB_PROXY_EXE = os.path.join(
+    SCRIPT_DIR,
+    "AndroidBridge-AdbProxy.exe"
+)
+
+
+def find_real_adb():
+    path = shutil.which("adb")
+
+    if path:
+        return os.path.abspath(path)
+
+    return None
+
+
+def find_csharp_compiler():
+    candidates = [
+        shutil.which("csc"),
+        r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
+        r"C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe",
+    ]
+
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+
+    return None
+
+
+def ensure_adb_proxy():
+    """
+    Build the tiny Windows ADB proxy when required.
+
+    scrcpy officially supports selecting its adb executable through the ADB
+    environment variable. AndroidBridge uses that hook only for remote media
+    sessions so the normal system adb connection remains untouched.
+    """
+    real_adb = find_real_adb()
+
+    if not real_adb:
+        raise RuntimeError("adb.exe could not be found.")
+
+    if not os.path.exists(ADB_PROXY_SOURCE):
+        raise RuntimeError(
+            "AndroidBridge-AdbProxy.cs is missing."
+        )
+
+    needs_build = (
+        not os.path.exists(ADB_PROXY_EXE) or
+        os.path.getmtime(ADB_PROXY_EXE) <
+        os.path.getmtime(ADB_PROXY_SOURCE)
+    )
+
+    if needs_build:
+        compiler = find_csharp_compiler()
+
+        if not compiler:
+            raise RuntimeError(
+                "Windows C# compiler was not found. "
+                "AndroidBridge cannot build its remote ADB transport helper."
+            )
+
+        result = subprocess.run(
+            [
+                compiler,
+                "/nologo",
+                "/target:exe",
+                "/optimize+",
+                "/out:" + ADB_PROXY_EXE,
+                ADB_PROXY_SOURCE,
+            ],
+            capture_output=True,
+            text=True,
+            creationflags=HIDE,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            detail = (
+                result.stdout +
+                "\n" +
+                result.stderr
+            ).strip()
+
+            raise RuntimeError(
+                "ADB proxy build failed.\n\n" + detail
+            )
+
+    return ADB_PROXY_EXE, real_adb
+
+
+def scrcpy_environment(device):
+    env = os.environ.copy()
+
+    if is_tailscale(device):
+        proxy, real_adb = ensure_adb_proxy()
+
+        env["ADB"] = proxy
+        env["ANDROIDBRIDGE_REAL_ADB"] = real_adb
+
+    return env
+
 
 def run_hidden(args, timeout=6):
     try:
@@ -492,14 +601,25 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
                 errors="replace"
             )
 
-            process = subprocess.Popen(
-                cmd,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                creationflags=HIDE
-            )
+            try:
+                env = scrcpy_environment(device)
 
-            return process, log
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    creationflags=HIDE,
+                    env=env
+                )
+
+                return process, log
+
+            except:
+                try:
+                    log.close()
+                except:
+                    pass
+                raise
 
         def read_log(log):
             try:
@@ -562,7 +682,7 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
                     root.after(
                         0,
                         lambda: mode_label.config(
-                            text="MODE: STARTING - SLOW REMOTE LINK"
+                            text="MODE: PREPARING REMOTE MEDIA"
                         )
                     )
                     last_change = time.time()
