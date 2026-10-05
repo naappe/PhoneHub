@@ -496,6 +496,7 @@ def scrcpy_screen_args(device):
         "--video-codec=h264",
         "--no-audio",
         "--no-cleanup",
+        "--force-adb-forward",
         "--window-title=AndroidBridge SCREEN"
     ]
 
@@ -524,7 +525,7 @@ def scrcpy_camera_args(device, facing):
     else:
         title = "AndroidBridge FRONT CAMERA"
 
-    return [
+    args = [
         "--video-source=camera",
         f"--camera-id={camera_id}",
         f"--camera-size={size}",
@@ -536,6 +537,11 @@ def scrcpy_camera_args(device, facing):
         "--no-cleanup",
         f"--window-title={title}"
     ]
+
+    if is_tailscale(device):
+        args.insert(-1, "--force-adb-forward")
+
+    return args
 
 
 def ensure_media_connection(device):
@@ -657,6 +663,19 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
                 if detail != last_detail:
                     last_detail = detail
                     last_change = time.time()
+
+                    lower_detail = detail.lower()
+
+                    if (
+                        "verified scrcpy server already on phone" in lower_detail or
+                        "scrcpy server installed in verified 64 kb chunks" in lower_detail
+                    ):
+                        root.after(
+                            0,
+                            lambda: mode_label.config(
+                                text="MODE: CONNECTING MEDIA TUNNEL"
+                            )
+                        )
 
                 lower = detail.lower()
 
@@ -983,6 +1002,9 @@ def start_audio():
         "--audio-buffer=20",
         "--no-cleanup"
     ]
+
+    if is_tailscale(device):
+        cmd.append("--force-adb-forward")
 
     def started(process):
         global audio_process
