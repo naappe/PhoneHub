@@ -14,19 +14,6 @@ ADB_PORT = "5555"
 
 TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"
 
-# PC-side audio boost (Equalizer APO)
-EAPO_CONFIG_DIR = r"C:\Program Files\EqualizerAPO\config"
-EAPO_MAIN_CONFIG = os.path.join(EAPO_CONFIG_DIR, "config.txt")
-EAPO_BRIDGE_CONFIG = os.path.join(EAPO_CONFIG_DIR, "androidbridge-boost.txt")
-AUDIO_BOOST_LEVELS = {
-    100: 0.00,
-    125: 1.94,
-    150: 3.52,
-    200: 6.02,
-}
-AUDIO_BOOST_PERCENT = 200
-AUTO_AUDIO_BOOST = True
-
 current_process = None
 screen_process = None
 camera_process = None
@@ -578,82 +565,6 @@ def open_phone_data(mode):
         )
 
 # ============================================================
-# PC AUDIO BOOST (Equalizer APO)
-# ============================================================
-
-def pc_boost_ready():
-    return os.path.isfile(EAPO_MAIN_CONFIG) and os.path.isfile(EAPO_BRIDGE_CONFIG)
-
-
-def update_boost_label(percent):
-    try:
-        db = AUDIO_BOOST_LEVELS.get(percent, 0.0)
-        boost_status_label.config(text=f"PC BOOST: {percent}%  ({db:+.2f} dB)")
-    except Exception:
-        pass
-
-
-def set_pc_boost(percent, quiet=False):
-    """Change only PC playback gain. Does not restart ADB, Tailscale, screen or camera."""
-    global AUDIO_BOOST_PERCENT
-
-    if percent not in AUDIO_BOOST_LEVELS:
-        return False
-
-    AUDIO_BOOST_PERCENT = percent
-    db = AUDIO_BOOST_LEVELS[percent]
-
-    if not pc_boost_ready():
-        update_boost_label(percent)
-        if not quiet:
-            messagebox.showwarning(
-                "AndroidBridge PC Audio Boost",
-                "Equalizer APO automatic boost is not configured yet.\n\n"
-                "Run AndroidBridge-AudioBoost-Setup.ps1 once, then restart AndroidBridge."
-            )
-        return False
-
-    try:
-        # Equalizer APO reloads configuration automatically when this file changes.
-        with open(EAPO_BRIDGE_CONFIG, "w", encoding="utf-8") as f:
-            f.write(f"Preamp: {db:+.2f} dB\n")
-
-        update_boost_label(percent)
-        return True
-
-    except PermissionError:
-        if not quiet:
-            messagebox.showerror(
-                "AndroidBridge PC Audio Boost",
-                "Windows blocked access to the boost file.\n\n"
-                "Run AndroidBridge-AudioBoost-Setup.ps1 again as Administrator."
-            )
-    except Exception as e:
-        if not quiet:
-            messagebox.showerror(
-                "AndroidBridge PC Audio Boost",
-                "PC boost could not be changed:\n\n" + str(e)
-            )
-
-    return False
-
-
-def reset_pc_boost():
-    # Return the PC output to its normal level when AndroidBridge audio stops.
-    if pc_boost_ready():
-        try:
-            with open(EAPO_BRIDGE_CONFIG, "w", encoding="utf-8") as f:
-                f.write("Preamp: +0.00 dB\n")
-        except Exception:
-            pass
-
-    try:
-        boost_status_label.config(text="PC BOOST: OFF (100%)")
-    except Exception:
-        pass
-
-
-# ============================================================
 # STATUS CHECK
 # ============================================================
 
@@ -692,7 +603,7 @@ def start_audio():
                 "-s",
                 device,
                 "--no-video",
-                "--audio-source=mic-voice-communication"
+                "--audio-source=mic"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -700,11 +611,6 @@ def start_audio():
         )
 
         active_device = device
-
-        # Apply PC-side boost only after the AndroidBridge audio process starts.
-        # This does not reconnect the phone or touch screen/camera processes.
-        if AUTO_AUDIO_BOOST:
-            set_pc_boost(AUDIO_BOOST_PERCENT, quiet=True)
 
     except Exception as e:
 
@@ -721,7 +627,6 @@ def stop_audio():
     global audio_process
 
     if audio_process is None:
-        reset_pc_boost()
         return
 
     try:
@@ -740,7 +645,6 @@ def stop_audio():
         pass
 
     audio_process = None
-    reset_pc_boost()
 
 
 def background_check():
@@ -884,7 +788,6 @@ def reconnect():
 def close_app():
 
     stop_scrcpy()
-    reset_pc_boost()
 
     root.destroy()
 
@@ -907,7 +810,7 @@ root = tk.Tk()
 
 root.title("AndroidBridge Lite")
 
-root.geometry("560x760")
+root.geometry("560x650")
 
 root.resizable(False, False)
 
@@ -998,6 +901,7 @@ route_label = tk.Label(
     bg=PANEL,
     fg=TEXT
 )
+
 route_label.pack(
     anchor="w",
     padx=20
@@ -1093,256 +997,3 @@ screen_button.grid(
     pady=7
 )
 
-
-back_button = tk.Button(
-    buttons,
-    text="BACK CAMERA",
-    command=back_camera,
-    **button_style
-)
-
-back_button.grid(
-    row=0,
-    column=1,
-    padx=7,
-    pady=7
-)
-
-
-front_button = tk.Button(
-    buttons,
-    text="FRONT CAMERA",
-    command=front_camera,
-    **button_style
-)
-
-front_button.grid(
-    row=1,
-    column=0,
-    padx=7,
-    pady=7
-)
-
-
-stop_button = tk.Button(
-    buttons,
-    text="STOP",
-    command=stop_scrcpy,
-    width=21,
-    height=2,
-    font=("Segoe UI", 10, "bold"),
-    bg=PANEL_2,
-    fg=DANGER,
-    activebackground=DANGER,
-    activeforeground="#FFFFFF",
-    relief="flat",
-    bd=0,
-    cursor="hand2"
-)
-
-stop_button.grid(
-    row=1,
-    column=1,
-    padx=7,
-    pady=7
-)
-
-
-
-# ============================================================
-# AUDIO CONTROLS
-# ============================================================
-
-audio_on_button = tk.Button(
-    buttons,
-    text="AUDIO ON",
-    command=start_audio,
-    **button_style
-)
-
-audio_on_button.grid(
-    row=2,
-    column=0,
-    padx=7,
-    pady=7
-)
-
-audio_off_button = tk.Button(
-    buttons,
-    text="AUDIO OFF",
-    command=stop_audio,
-    width=21,
-    height=2,
-    font=("Segoe UI", 10, "bold"),
-    bg=PANEL_2,
-    fg=DANGER,
-    activebackground=PANEL_2,
-    activeforeground=DANGER,
-    relief="flat",
-    bd=0,
-    cursor="hand2"
-)
-
-audio_off_button.grid(
-    row=2,
-    column=1,
-    padx=7,
-    pady=7
-)
-
-
-# ------------------------------------------------------------
-# PC AUDIO BOOST
-# ------------------------------------------------------------
-
-boost_panel = tk.Frame(
-    root,
-    bg=PANEL,
-    highlightbackground=BORDER,
-    highlightthickness=1
-)
-boost_panel.pack(
-    fill="x",
-    padx=30,
-    pady=(14, 8)
-)
-
-tk.Label(
-    boost_panel,
-    text="PC AUDIO BOOST",
-    font=("Segoe UI", 9, "bold"),
-    bg=PANEL,
-    fg=MUTED
-).pack(anchor="w", padx=16, pady=(12, 4))
-
-boost_status_label = tk.Label(
-    boost_panel,
-    text=f"PC BOOST: {AUDIO_BOOST_PERCENT}%  ({AUDIO_BOOST_LEVELS[AUDIO_BOOST_PERCENT]:+.2f} dB)",
-    font=("Segoe UI", 10, "bold"),
-    bg=PANEL,
-    fg=ACCENT
-)
-boost_status_label.pack(anchor="w", padx=16, pady=(0, 8))
-
-boost_buttons = tk.Frame(boost_panel, bg=PANEL)
-boost_buttons.pack(padx=12, pady=(0, 12))
-
-for col, percent in enumerate((100, 125, 150, 200)):
-    tk.Button(
-        boost_buttons,
-        text=f"{percent}%",
-        command=lambda p=percent: set_pc_boost(p),
-        width=9,
-        height=1,
-        font=("Segoe UI", 9, "bold"),
-        bg=PANEL_2,
-        fg=TEXT,
-        activebackground=ACCENT,
-        activeforeground="#FFFFFF",
-        relief="flat",
-        bd=0,
-        cursor="hand2"
-    ).grid(row=0, column=col, padx=4, pady=2)
-
-
-calls_button = tk.Button(
-    buttons,
-    text="CALLS",
-    command=lambda: open_phone_data("calls"),
-    **button_style
-)
-
-calls_button.grid(
-    row=3,
-    column=0,
-    padx=7,
-    pady=7
-)
-
-
-activity_button = tk.Button(
-    buttons,
-    text="PHONE ACTIVITY",
-    command=lambda: open_phone_data("activity"),
-    **button_style
-)
-
-activity_button.grid(
-    row=3,
-    column=1,
-    padx=7,
-    pady=7
-)
-
-
-location_button = tk.Button(
-    buttons,
-    text="LATEST LOCATION",
-    command=lambda: open_phone_data("location"),
-    width=45,
-    height=2,
-    font=("Segoe UI", 10, "bold"),
-    bg=PANEL_2,
-    fg=TEXT,
-    activebackground=ACCENT,
-    activeforeground="#FFFFFF",
-    relief="flat",
-    bd=0,
-    cursor="hand2"
-)
-
-location_button.grid(
-    row=3,
-    column=0,
-    columnspan=2,
-    padx=7,
-    pady=7
-)
-
-# ------------------------------------------------------------
-# RECONNECT
-# ------------------------------------------------------------
-
-reconnect_button = tk.Button(
-    root,
-    text="RECONNECT PHONE",
-    command=reconnect,
-    width=47,
-    height=2,
-    font=("Segoe UI", 9, "bold"),
-    bg=ACCENT,
-    fg="#FFFFFF",
-    activebackground="#3978E8",
-    activeforeground="#FFFFFF",
-    relief="flat",
-    bd=0,
-    cursor="hand2"
-)
-
-reconnect_button.pack(
-    pady=(15, 8)
-)
-
-
-# ------------------------------------------------------------
-# ROUTING FOOTER
-# ------------------------------------------------------------
-
-tk.Label(
-    root,
-    text="USB  >  LOCAL WI-FI  >  TAILSCALE REMOTE",
-    font=("Segoe UI", 8),
-    bg=BG,
-    fg=MUTED
-).pack(
-    side="bottom",
-    pady=18
-)
-
-
-root.after(
-    300,
-    schedule_check
-)
-
-root.mainloop()
