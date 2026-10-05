@@ -381,6 +381,7 @@ def scrcpy_screen_args(device):
         "--video-bit-rate=2M",
         "--video-codec=h264",
         "--no-audio",
+        "--no-cleanup",
         "--window-title=AndroidBridge SCREEN"
     ]
 
@@ -418,6 +419,7 @@ def scrcpy_camera_args(device, facing):
         "--video-buffer=0",
         "--video-codec=h264",
         "--no-audio",
+        "--no-cleanup",
         f"--window-title={title}"
     ]
 
@@ -511,14 +513,26 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
             except:
                 return ""
 
-        def wait_for_server(process, log, timeout=180):
-            deadline = time.time() + timeout
+        def wait_for_server(process, log):
+            """
+            Wait for scrcpy itself to finish startup.
 
-            while time.time() < deadline:
-                if process.poll() is not None:
-                    return False, read_log(log)
+            Do NOT impose a fixed wall-clock timeout here. On this remote
+            Tailscale/ADB route the scrcpy-server upload has taken more than
+            180 seconds. The previous watchdog killed the scrcpy parent while
+            adb push was still active, which could leave a zero-byte
+            /data/local/tmp/scrcpy-server.jar and create overlapping retries.
+            """
+            last_detail = ""
+            last_change = time.time()
 
+            while True:
                 detail = read_log(log)
+
+                if detail != last_detail:
+                    last_detail = detail
+                    last_change = time.time()
+
                 lower = detail.lower()
 
                 ready = (
@@ -531,9 +545,24 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
                 if ready:
                     return True, detail
 
-                time.sleep(0.5)
+                if process.poll() is not None:
+                    return False, detail
 
-            return False, read_log(log)
+                # Keep waiting while scrcpy/adb is alive. The UI remains
+                # responsive because this runs in the worker thread.
+                # A very long silent period is reported in the UI, but is not
+                # force-killed because killing adb mid-push corrupts the
+                # remote server file.
+                if time.time() - last_change > 30:
+                    root.after(
+                        0,
+                        lambda: mode_label.config(
+                            text="MODE: STARTING - SLOW REMOTE LINK"
+                        )
+                    )
+                    last_change = time.time()
+
+                time.sleep(0.5)
 
         def is_retryable(detail):
             lower = detail.lower()
@@ -572,6 +601,10 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
                 try:
                     if process.poll() is None:
                         process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except:
+                            pass
                 except:
                     pass
 
@@ -848,7 +881,8 @@ def start_audio():
         "--audio-source=mic-voice-recognition",
         "--audio-codec=opus",
         "--audio-bit-rate=96K",
-        "--audio-buffer=20"
+        "--audio-buffer=20",
+        "--no-cleanup"
     ]
 
     def started(process):
