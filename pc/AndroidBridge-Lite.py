@@ -16,6 +16,11 @@ os.environ.pop("ANDROIDBRIDGE_REAL_ADB", None)
 
 HIDE = 0x08000000
 
+# LOCKED WORKING PROFILE
+# Normal screen/camera/audio settings below are the verified baseline.
+# NIGHT CAMERA is additive only and must not modify those profiles.
+STABLE_PROFILE = "2026-10-05-working-v1"
+
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
 ADB_PORT = "5555"
@@ -397,20 +402,25 @@ def scrcpy_screen_args(device):
     ]
 
 
-def scrcpy_camera_args(device, facing):
+def scrcpy_camera_args(device, facing, night=False):
 
     # The Samsung reported camera 0 as back and camera 1 as front.
     # Use those exact IDs instead of asking Android to choose a camera.
     camera_id = "0" if facing == "back" else "1"
 
-    if facing == "back":
+    if night:
+        # Stable night mode: use the proven rear camera path plus Samsung's
+        # physical LED torch. This does not alter the normal camera profiles.
+        camera_id = "0"
+        title = "AndroidBridge NIGHT CAMERA"
+    elif facing == "back":
         title = "AndroidBridge BACK CAMERA"
     else:
         title = "AndroidBridge FRONT CAMERA"
 
     # USB / LOCAL WIFI
     if is_usb(device) or is_local(device):
-        return [
+        args = [
             "--video-source=camera",
             f"--camera-id={camera_id}",
             "--max-size=1920",
@@ -421,12 +431,15 @@ def scrcpy_camera_args(device, facing):
             "--no-audio",
             f"--window-title={title}"
         ]
+        if night:
+            args.insert(2, "--camera-torch")
+        return args
 
     # TAILSCALE REMOTE
     # Do not force 640x360. Samsung may expose a camera but not produce
     # frames for an arbitrary explicit size. Let scrcpy select a declared
     # camera resolution at or below 640 pixels instead.
-    return [
+    args = [
         "--video-source=camera",
         f"--camera-id={camera_id}",
         "--max-size=640",
@@ -438,9 +451,12 @@ def scrcpy_camera_args(device, facing):
         "--no-audio",
         f"--window-title={title}"
     ]
+    if night:
+        args.insert(2, "--camera-torch")
+    return args
 
 
-def launch(mode, kind, facing=None):
+def launch(mode, kind, facing=None, night=False):
 
     global current_process
     global screen_process
@@ -498,7 +514,8 @@ def launch(mode, kind, facing=None):
 
         args = scrcpy_camera_args(
             device,
-            facing
+            facing,
+            night=night
         )
 
     time.sleep(0.3)
@@ -569,6 +586,17 @@ def front_camera():
         "front"
     )
 
+
+def night_camera():
+    # Rear-camera low-light mode. The Samsung rear LED is the only reliable
+    # illumination source available through stock scrcpy; STOP turns it off
+    # with the camera process.
+    launch(
+        "NIGHT CAMERA",
+        "camera",
+        "back",
+        night=True
+    )
 
 
 def open_phone_data(mode):
@@ -1314,6 +1342,22 @@ audio_off_button.grid(
 )
 
 
+night_button = tk.Button(
+    buttons,
+    text="NIGHT CAMERA",
+    command=night_camera,
+    **button_style
+)
+
+night_button.grid(
+    row=3,
+    column=0,
+    columnspan=2,
+    padx=7,
+    pady=7
+)
+
+
 calls_button = tk.Button(
     buttons,
     text="CALLS",
@@ -1322,7 +1366,7 @@ calls_button = tk.Button(
 )
 
 calls_button.grid(
-    row=3,
+    row=4,
     column=0,
     padx=7,
     pady=7
@@ -1337,7 +1381,7 @@ activity_button = tk.Button(
 )
 
 activity_button.grid(
-    row=3,
+    row=4,
     column=1,
     padx=7,
     pady=7
@@ -1361,7 +1405,7 @@ location_button = tk.Button(
 )
 
 location_button.grid(
-    row=4,
+    row=5,
     column=0,
     columnspan=2,
     padx=7,
