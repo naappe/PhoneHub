@@ -378,11 +378,14 @@ def scrcpy_screen_args(device):
         ]
 
     # TAILSCALE REMOTE
-    # Low latency profile.
+    # Two simultaneous remote H.264 streams share the same Tailscale/ADB
+    # path. Keep the screen deliberately light so camera + screen remain
+    # responsive instead of competing for the transport.
     return [
-        "--max-size=1024",
-        "--max-fps=30",
-        "--video-bit-rate=2M",
+        "--max-size=800",
+        "--max-fps=20",
+        "--video-bit-rate=1M",
+        "--video-buffer=0",
         "--video-codec=h264",
         "--no-audio",
         "--window-title=AndroidBridge SCREEN"
@@ -391,27 +394,41 @@ def scrcpy_screen_args(device):
 
 def scrcpy_camera_args(device, facing):
 
-    # USB / LOCAL WIFI
-    if is_usb(device) or is_local(device):
-        size = "1920x1080"
-        fps = "30"
-
-    # TAILSCALE REMOTE
-    else:
-        size = "640x360"
-        fps = "24"
+    # The Samsung reported camera 0 as back and camera 1 as front.
+    # Use those exact IDs instead of asking Android to choose a camera.
+    camera_id = "0" if facing == "back" else "1"
 
     if facing == "back":
         title = "AndroidBridge BACK CAMERA"
     else:
         title = "AndroidBridge FRONT CAMERA"
 
+    # USB / LOCAL WIFI
+    if is_usb(device) or is_local(device):
+        return [
+            "--video-source=camera",
+            f"--camera-id={camera_id}",
+            "--max-size=1920",
+            "--camera-ar=16:9",
+            "--camera-fps=30",
+            "--video-bit-rate=4M",
+            "--video-codec=h264",
+            "--no-audio",
+            f"--window-title={title}"
+        ]
+
+    # TAILSCALE REMOTE
+    # Do not force 640x360. Samsung may expose a camera but not produce
+    # frames for an arbitrary explicit size. Let scrcpy select a declared
+    # camera resolution at or below 640 pixels instead.
     return [
         "--video-source=camera",
-        f"--camera-facing={facing}",
-        f"--camera-size={size}",
-        f"--camera-fps={fps}",
-        "--video-bit-rate=800K",
+        f"--camera-id={camera_id}",
+        "--max-size=640",
+        "--camera-ar=16:9",
+        "--camera-fps=15",
+        "--video-bit-rate=450K",
+        "--video-buffer=0",
         "--video-codec=h264",
         "--no-audio",
         f"--window-title={title}"
@@ -608,7 +625,12 @@ def start_audio():
                 "-s",
                 device,
                 "--no-video",
-                "--audio-source=mic-voice-communication"
+                # VOICE_COMMUNICATION is the scrcpy microphone source that
+                # can use Android echo cancellation / automatic gain control.
+                "--audio-source=mic-voice-communication",
+                "--audio-codec=opus",
+                "--audio-bit-rate=96K",
+                "--audio-buffer=40"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
