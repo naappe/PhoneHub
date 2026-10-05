@@ -625,12 +625,17 @@ def start_audio():
                 "-s",
                 device,
                 "--no-video",
-                # VOICE_COMMUNICATION is the scrcpy microphone source that
-                # can use Android echo cancellation / automatic gain control.
-                "--audio-source=mic-voice-communication",
+                # AndroidBridge is listening to the phone's surroundings, not
+                # running a two-way voice call. CAMCORDER is the Android mic
+                # source tuned for environmental/video capture. The previous
+                # VOICE_COMMUNICATION source may apply call-oriented echo/noise
+                # processing that can make distant room sound seem very quiet.
+                "--audio-source=mic-camcorder",
                 "--audio-codec=opus",
-                "--audio-bit-rate=96K",
-                "--audio-buffer=40"
+                "--audio-bit-rate=128K",
+                # A little more network cushion for the remote Tailscale path.
+                # Buffering affects stability/latency, not microphone gain.
+                "--audio-buffer=60"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
