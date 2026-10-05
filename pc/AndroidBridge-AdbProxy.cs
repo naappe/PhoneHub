@@ -135,6 +135,27 @@ namespace AndroidBridge
             }
         }
 
+        private static int RunPassthrough(
+            string exe,
+            IEnumerable<string> args)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = exe,
+                Arguments = String.Join(" ", args.Select(QuoteArg)),
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using (var process = new Process())
+            {
+                process.StartInfo = psi;
+                process.Start();
+                process.WaitForExit();
+                return process.ExitCode;
+            }
+        }
+
         private static Result RunAdb(
             string realAdb,
             string serial,
@@ -529,18 +550,11 @@ namespace AndroidBridge
                     localFile);
             }
 
-            // All non-push ADB commands pass through unchanged. No artificial
-            // timeout is applied because scrcpy may keep an adb shell process
-            // alive while its server is running.
-            var result = Run(realAdb, args, 0);
-
-            if (!String.IsNullOrEmpty(result.Stdout))
-                Console.Out.Write(result.Stdout);
-
-            if (!String.IsNullOrEmpty(result.Stderr))
-                Console.Error.Write(result.Stderr);
-
-            return result.Code;
+            // All non-push ADB commands pass through unchanged and inherit
+            // this proxy's stdout/stderr handles. This is important because
+            // scrcpy watches live server output while the adb shell process
+            // remains active.
+            return RunPassthrough(realAdb, args);
         }
     }
 }
