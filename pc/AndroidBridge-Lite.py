@@ -797,8 +797,7 @@ def close_app():
 # ============================================================
 
 BG = "#111318"
-PANEL = "#1A1D24"
-PANEL_2 = "#20242C"
+PANEL = "#1A1D24"PANEL_2 = "#20242C"
 TEXT = "#F4F6F8"
 MUTED = "#969DA8"
 ACCENT = "#4F8CFF"
@@ -810,7 +809,15 @@ root = tk.Tk()
 
 root.title("AndroidBridge Lite")
 
-root.geometry("560x650")
+# Open the controller in the center of the current Windows desktop.
+WINDOW_W = 560
+WINDOW_H = 650
+root.update_idletasks()
+screen_w = root.winfo_screenwidth()
+screen_h = root.winfo_screenheight()
+pos_x = max(0, (screen_w - WINDOW_W) // 2)
+pos_y = max(0, (screen_h - WINDOW_H) // 2)
+root.geometry(f"{WINDOW_W}x{WINDOW_H}+{pos_x}+{pos_y}")
 
 root.resizable(False, False)
 
@@ -997,3 +1004,210 @@ screen_button.grid(
     pady=7
 )
 
+
+back_button = tk.Button(
+    buttons,
+    text="BACK CAMERA",
+    command=back_camera,
+    **button_style
+)
+
+back_button.grid(
+    row=0,
+    column=1,
+    padx=7,
+    pady=7
+)
+
+
+front_button = tk.Button(
+    buttons,
+    text="FRONT CAMERA",
+    command=front_camera,
+    **button_style
+)
+
+front_button.grid(
+    row=1,
+    column=0,
+    padx=7,
+    pady=7
+)
+
+
+stop_button = tk.Button(
+    buttons,
+    text="STOP",
+    command=stop_scrcpy,
+    width=21,
+    height=2,
+    font=("Segoe UI", 10, "bold"),
+    bg=PANEL_2,
+    fg=DANGER,
+    activebackground=DANGER,
+    activeforeground="#FFFFFF",
+    relief="flat",
+    bd=0,
+    cursor="hand2"
+)
+
+stop_button.grid(
+    row=1,
+    column=1,
+    padx=7,
+    pady=7
+)
+
+
+
+# ============================================================
+# AUDIO CONTROLS
+# ============================================================
+
+audio_on_button = tk.Button(
+    buttons,
+    text="AUDIO ON",
+    command=start_audio,
+    **button_style
+)
+
+audio_on_button.grid(
+    row=2,
+    column=0,
+    padx=7,
+    pady=7
+)
+
+audio_off_button = tk.Button(
+    buttons,
+    text="AUDIO OFF",
+    command=stop_audio,
+    width=21,
+    height=2,
+    font=("Segoe UI", 10, "bold"),
+    bg=PANEL_2,
+    fg=DANGER,
+    activebackground=PANEL_2,
+    activeforeground=DANGER,
+    relief="flat",
+    bd=0,
+    cursor="hand2"
+)
+
+audio_off_button.grid(
+    row=2,
+    column=1,
+    padx=7,
+    pady=7
+)
+
+
+calls_button = tk.Button(
+    buttons,
+    text="CALLS",
+    command=lambda: open_phone_data("calls"),
+    **button_style
+)
+
+calls_button.grid(
+    row=3,
+    column=0,
+    padx=7,
+    pady=7
+)
+
+
+activity_button = tk.Button(
+    buttons,
+    text="PHONE ACTIVITY",
+    command=lambda: open_phone_data("activity"),
+    **button_style
+)
+
+activity_button.grid(
+    row=3,
+    column=1,
+    padx=7,
+    pady=7
+)
+
+
+location_button = tk.Button(
+    buttons,
+    text="LATEST LOCATION",
+    command=lambda: open_phone_data("location"),
+    width=45,
+    height=2,
+    font=("Segoe UI", 10, "bold"),
+    bg=PANEL_2,
+    fg=TEXT,
+    activebackground=ACCENT,
+    activeforeground="#FFFFFF",
+    relief="flat",
+    bd=0,
+    cursor="hand2"
+)
+
+location_button.grid(
+    row=3,
+    column=0,
+    columnspan=2,
+    padx=7,
+    pady=7
+)
+
+# ------------------------------------------------------------
+# RECONNECT
+# ------------------------------------------------------------
+
+reconnect_button = tk.Button(
+    root,
+    text="RECONNECT PHONE",
+    command=reconnect,
+    width=47,
+    height=2,
+    font=("Segoe UI", 9, "bold"),
+    bg=ACCENT,
+    fg="#FFFFFF",
+    activebackground="#3978E8",
+    activeforeground="#FFFFFF",
+    relief="flat",
+    bd=0,
+    cursor="hand2"
+)
+
+reconnect_button.pack(
+    pady=(15, 8)
+)
+
+
+# ------------------------------------------------------------
+# ROUTING FOOTER
+# ------------------------------------------------------------
+
+tk.Label(
+    root,
+    text="USB  >  LOCAL WI-FI  >  TAILSCALE REMOTE",
+    font=("Segoe UI", 8),
+    bg=BG,
+    fg=MUTED
+).pack(
+    side="bottom",
+    pady=18
+)
+
+
+# Force the controller to the foreground on startup so it cannot open
+# behind a scrcpy camera/screen window or the browser.
+root.deiconify()
+root.lift()
+root.attributes("-topmost", True)
+root.focus_force()
+root.after(1200, lambda: root.attributes("-topmost", False))
+
+root.after(
+    300,
+    schedule_check
+)
+
+root.mainloop()
