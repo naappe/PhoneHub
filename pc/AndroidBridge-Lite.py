@@ -393,8 +393,8 @@ def scrcpy_camera_args(device, facing):
 
     # TAILSCALE REMOTE
     else:
-        size = "640x360"
-        fps = "24"
+        size = "1280x720"
+        fps = "12"
 
     if facing == "back":
         title = "AndroidBridge BACK CAMERA"
@@ -406,7 +406,8 @@ def scrcpy_camera_args(device, facing):
         f"--camera-facing={facing}",
         f"--camera-size={size}",
         f"--camera-fps={fps}",
-        "--video-bit-rate=800K",
+        "--video-bit-rate=700K",
+        "--video-buffer=0",
         "--video-codec=h264",
         "--no-audio",
         f"--window-title={title}"
@@ -603,7 +604,10 @@ def start_audio():
                 "-s",
                 device,
                 "--no-video",
-                "--audio-source=mic-voice-communication"
+                "--audio-source=mic-voice-recognition",
+                "--audio-codec=opus",
+                "--audio-bit-rate=96K",
+                "--audio-buffer=20"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
