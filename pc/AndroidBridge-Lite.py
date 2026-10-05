@@ -464,6 +464,38 @@ def scrcpy_camera_args(device, facing, night=False, low_light=False):
     return args
 
 
+def _set_nightvision_window_title(status):
+    """Put the hardware test result on the scrcpy window itself."""
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        FindWindowW = user32.FindWindowW
+        FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+        FindWindowW.restype = wintypes.HWND
+        SetWindowTextW = user32.SetWindowTextW
+        SetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
+        SetWindowTextW.restype = wintypes.BOOL
+
+        # The title may already contain a previous state, so find by enumerating
+        # top-level windows whose title starts with the AndroidBridge prefix.
+        matches = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def enum_proc(hwnd, lparam):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                if buf.value.startswith("AndroidBridge NIGHT VISION BOOST"):
+                    matches.append(hwnd)
+            return True
+
+        user32.EnumWindows(enum_proc, 0)
+        for hwnd in matches:
+            SetWindowTextW(hwnd, "AndroidBridge NIGHT VISION BOOST - " + status)
+    except:
+        pass
+
+
 def _watch_nightvision_log(process):
     """Show whether Android's hardware Low Light Boost is actually active."""
     try:
@@ -493,6 +525,7 @@ def _watch_nightvision_log(process):
                     )
 
             if "AndroidBridge LLB support: true" in line:
+                _set_nightvision_window_title("SUPPORTED - WAITING FOR ACTIVE")
                 root.after(
                     0,
                     lambda: mode_label.config(
@@ -501,6 +534,7 @@ def _watch_nightvision_log(process):
                 )
 
             elif "AndroidBridge LLB state: ACTIVE" in line:
+                _set_nightvision_window_title("LLB ACTIVE")
                 root.after(
                     0,
                     lambda: mode_label.config(
@@ -509,6 +543,7 @@ def _watch_nightvision_log(process):
                 )
 
             elif "AndroidBridge LLB is not exposed" in line or "AndroidBridge LLB support: false" in line:
+                _set_nightvision_window_title("LLB NOT SUPPORTED")
                 root.after(
                     0,
                     lambda: mode_label.config(
@@ -517,6 +552,7 @@ def _watch_nightvision_log(process):
                 )
 
         if not saw_capability:
+            _set_nightvision_window_title("CAPABILITY UNKNOWN")
             root.after(
                 0,
                 lambda: mode_label.config(
