@@ -784,7 +784,8 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
         # 3) mild noise gate before gain so wind is not amplified in pauses,
         # 4) emphasize speech presence around 2.5-4 kHz,
         # 5) cap dynamic distant-speech gain at 10x instead of amplifying wind 20x,
-        # 6) peak-limit the result to prevent clipping.
+        # 6) add +6 dB after denoise/gating so speech is louder without restoring raw wind,
+        # 7) peak-limit the result to prevent clipping.
         player = subprocess.Popen(
             [
                 ffplay_path,
@@ -793,7 +794,7 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
                 "-loglevel", "error",
                 "-fflags", "nobuffer",
                 "-flags", "low_delay",
-                "-af", "highpass=f=240:p=2,lowpass=f=6800:p=2,afftdn=nr=30:nf=-38:tn=1:gs=16,agate=threshold=0.012:ratio=2.5:attack=12:release=220,equalizer=f=2500:t=q:w=1:g=5,equalizer=f=4000:t=q:w=1:g=2,dynaudnorm=f=160:g=7:p=0.90:m=10:r=0.08:t=0.002,alimiter=limit=0.93:level=0:attack=5:release=100",
+                "-af", "highpass=f=240:p=2,lowpass=f=6800:p=2,afftdn=nr=30:nf=-38:tn=1:gs=16,agate=threshold=0.012:ratio=2.5:attack=12:release=220,equalizer=f=2500:t=q:w=1:g=5,equalizer=f=4000:t=q:w=1:g=2,dynaudnorm=f=160:g=7:p=0.90:m=10:r=0.08:t=0.002,volume=6dB,alimiter=limit=0.93:level=0:attack=5:release=100",
                 "-i", "pipe:0"
             ],
             stdin=subprocess.PIPE,
@@ -933,7 +934,7 @@ def start_audio():
         active_device = device
 
         try:
-            mode_label.config(text="MODE: DISTANT SPEECH MAX - WIND FILTER MAX")
+            mode_label.config(text="MODE: DISTANT SPEECH MAX - WIND FILTER MAX +6dB")
         except:
             pass
 
