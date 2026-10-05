@@ -797,7 +797,8 @@ def close_app():
 # ============================================================
 
 BG = "#111318"
-PANEL = "#1A1D24"PANEL_2 = "#20242C"
+PANEL = "#1A1D24"
+PANEL_2 = "#20242C"
 TEXT = "#F4F6F8"
 MUTED = "#969DA8"
 ACCENT = "#4F8CFF"
@@ -809,7 +810,7 @@ root = tk.Tk()
 
 root.title("AndroidBridge Lite")
 
-# Open the controller in the center of the current Windows desktop.
+# Open the controller centered on the current Windows desktop.
 WINDOW_W = 560
 WINDOW_H = 650
 root.update_idletasks()
@@ -1004,7 +1005,6 @@ screen_button.grid(
     pady=7
 )
 
-
 back_button = tk.Button(
     buttons,
     text="BACK CAMERA",
@@ -1197,8 +1197,7 @@ tk.Label(
 )
 
 
-# Force the controller to the foreground on startup so it cannot open
-# behind a scrcpy camera/screen window or the browser.
+# Bring AndroidBridge to the foreground once at startup.
 root.deiconify()
 root.lift()
 root.attributes("-topmost", True)
