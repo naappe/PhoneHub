@@ -550,11 +550,37 @@ namespace AndroidBridge
                     localFile);
             }
 
-            // All non-push ADB commands pass through unchanged and inherit
-            // this proxy's stdout/stderr handles. This is important because
-            // scrcpy watches live server output while the adb shell process
-            // remains active.
-            return RunPassthrough(realAdb, args);
+            // scrcpy captures stdout from short ADB commands such as
+            // "devices -l" and "getprop". Capture those here and explicitly
+            // replay their output through the proxy so scrcpy receives the
+            // exact ADB response it expects.
+            //
+            // The app_process command is different: it remains alive for the
+            // lifetime of the scrcpy server, so it must stream directly.
+            bool longRunningServer =
+                args.Any(a => String.Equals(
+                    a,
+                    "app_process",
+                    StringComparison.Ordinal));
+
+            if (longRunningServer)
+                return RunPassthrough(realAdb, args);
+
+            var result = Run(realAdb, args, 30000);
+
+            if (!String.IsNullOrEmpty(result.Stdout))
+            {
+                Console.Out.Write(result.Stdout);
+                Console.Out.Flush();
+            }
+
+            if (!String.IsNullOrEmpty(result.Stderr))
+            {
+                Console.Error.Write(result.Stderr);
+                Console.Error.Flush();
+            }
+
+            return result.Code;
         }
     }
 }
