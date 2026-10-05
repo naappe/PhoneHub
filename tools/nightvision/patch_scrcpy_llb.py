@@ -6,7 +6,7 @@ text = path.read_text(encoding="utf-8")
 replacements = [
     (
         "import android.hardware.camera2.CameraManager;\nimport android.hardware.camera2.CaptureFailure;\nimport android.hardware.camera2.CaptureRequest;",
-        "import android.hardware.camera2.CameraManager;\nimport android.hardware.camera2.CameraMetadata;\nimport android.hardware.camera2.CaptureFailure;\nimport android.hardware.camera2.CaptureRequest;\nimport android.hardware.camera2.CaptureResult;\nimport android.hardware.camera2.TotalCaptureResult;"
+        "import android.hardware.camera2.CameraExtensionCharacteristics;\nimport android.hardware.camera2.CameraManager;\nimport android.hardware.camera2.CameraMetadata;\nimport android.hardware.camera2.CaptureFailure;\nimport android.hardware.camera2.CaptureRequest;\nimport android.hardware.camera2.CaptureResult;\nimport android.hardware.camera2.TotalCaptureResult;"
     ),
     (
         "import android.media.MediaCodec;\nimport android.os.Handler;",
@@ -48,8 +48,30 @@ replacements = [
 
                         Range<Float> luminanceRange =
                                 characteristics.get(CameraCharacteristics.CONTROL_LOW_LIGHT_BOOST_INFO_LUMINANCE_RANGE);
+                        Range<Integer> sensitivityRange =
+                                characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+                        Range<Long> exposureRange =
+                                characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+                        Boolean flashAvailable =
+                                characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
+
+                        boolean nightExtensionSupported = false;
+                        try {
+                            CameraExtensionCharacteristics extensionCharacteristics =
+                                    cameraManager.getCameraExtensionCharacteristics(cameraId);
+                            nightExtensionSupported = extensionCharacteristics.getSupportedExtensions().contains(
+                                    CameraExtensionCharacteristics.EXTENSION_NIGHT);
+                        } catch (Exception extensionError) {
+                            Ln.w("AndroidBridge NIGHT extension query failed: " + extensionError.getMessage());
+                        }
+
                         Ln.i("AndroidBridge LLB support: " + lowLightBoostSupported
                                 + ", luminance range: " + luminanceRange);
+                        Ln.i("AndroidBridge NV diag: camera=" + cameraId
+                                + ", NIGHT_EXTENSION=" + nightExtensionSupported
+                                + ", ISO=" + sensitivityRange
+                                + ", EXPOSURE_NS=" + exposureRange
+                                + ", FLASH=" + flashAvailable);
                     }
                 } catch (CameraAccessException e) {
                     Ln.w("Could not get camera characteristics");
