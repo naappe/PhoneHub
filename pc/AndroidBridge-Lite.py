@@ -413,7 +413,7 @@ def scrcpy_camera_args(device, facing, night=False, low_light=False):
         # AE target FPS unset lets Android Camera2 choose its own exposure
         # behavior instead of AndroidBridge forcing the verified 15/30 FPS.
         camera_id = "0"
-        title = "AndroidBridge NIGHT VISION TEST"
+        title = "AndroidBridge NIGHT VISION BOOST"
     elif night:
         # Stable night mode: use the proven rear camera path plus Samsung's
         # physical LED torch. This does not alter the normal camera profiles.
@@ -462,6 +462,39 @@ def scrcpy_camera_args(device, facing, night=False, low_light=False):
     if night:
         args.insert(2, "--camera-torch")
     return args
+
+
+def _watch_nightvision_log(process):
+    """Show whether Android's hardware Low Light Boost is actually active."""
+    try:
+        for raw_line in process.stderr:
+            line = raw_line.strip()
+
+            if "AndroidBridge LLB support: true" in line:
+                root.after(
+                    0,
+                    lambda: mode_label.config(
+                        text="MODE: NIGHT VISION BOOST - SUPPORTED"
+                    )
+                )
+
+            elif "AndroidBridge LLB state: ACTIVE" in line:
+                root.after(
+                    0,
+                    lambda: mode_label.config(
+                        text="MODE: NIGHT VISION BOOST - ACTIVE"
+                    )
+                )
+
+            elif "AndroidBridge LLB is not exposed" in line or "AndroidBridge LLB support: false" in line:
+                root.after(
+                    0,
+                    lambda: mode_label.config(
+                        text="MODE: NIGHT VISION BOOST - NOT SUPPORTED"
+                    )
+                )
+    except:
+        pass
 
 
 def launch(mode, kind, facing=None, night=False, low_light=False):
@@ -531,6 +564,30 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
 
     try:
 
+        scrcpy_env = os.environ.copy()
+        scrcpy_env.pop("SCRCPY_SERVER_PATH", None)
+
+        stderr_target = subprocess.DEVNULL
+
+        if low_light:
+            # Only NIGHT VISION BOOST uses the custom scrcpy v4.1 server.
+            # Normal SCREEN/BACK/FRONT profiles remain on the stock server.
+            custom_server = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "scrcpy-server-v4.1-llb"
+            )
+
+            if not os.path.isfile(custom_server):
+                messagebox.showerror(
+                    "AndroidBridge Night Vision",
+                    "Low Light Boost engine is missing.\n\n"
+                    "Run git pull, then restart AndroidBridge."
+                )
+                return
+
+            scrcpy_env["SCRCPY_SERVER_PATH"] = custom_server
+            stderr_target = subprocess.PIPE
+
         process = subprocess.Popen(
             [
                 "scrcpy",
@@ -538,9 +595,19 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
                 device
             ] + args,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=HIDE
+            stderr=stderr_target,
+            text=bool(low_light),
+            errors="replace" if low_light else None,
+            creationflags=HIDE,
+            env=scrcpy_env
         )
+
+        if low_light and process.stderr is not None:
+            threading.Thread(
+                target=_watch_nightvision_log,
+                args=(process,),
+                daemon=True
+            ).start()
 
         if kind == "screen":
             screen_process = process
@@ -600,7 +667,7 @@ def low_light_test():
     # No torch. This measures what the rear camera can obtain from available
     # visible light using Camera2 automatic exposure behavior.
     launch(
-        "NIGHT VISION TEST",
+        "NIGHT VISION BOOST",
         "camera",
         "back",
         low_light=True
@@ -1352,7 +1419,7 @@ audio_off_button.grid(
 
 low_light_button = tk.Button(
     buttons,
-    text="NIGHT VISION TEST",
+    text="NIGHT VISION BOOST",
     command=low_light_test,
     **button_style
 )
