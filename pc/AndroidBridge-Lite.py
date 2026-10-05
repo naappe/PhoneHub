@@ -21,6 +21,8 @@ audio_process = None
 current_mode = "STOPPED"
 active_device = None
 checking = False
+media_starting = False
+media_start_lock = threading.Lock()
 
 
 # ============================================================
@@ -326,10 +328,11 @@ def stop_scrcpy():
     global current_process
     global screen_process
     global camera_process
-    global audio_process
     global current_mode
 
-    for process in (screen_process, camera_process, audio_process):
+    # STOP controls video only. AUDIO OFF controls the independent
+    # microphone session so stopping screen/camera does not cut audio.
+    for process in (screen_process, camera_process):
 
         if process is None:
             continue
@@ -348,7 +351,6 @@ def stop_scrcpy():
 
     screen_process = None
     camera_process = None
-    audio_process = None
     current_process = None
     current_mode = "STOPPED"
 
@@ -358,7 +360,6 @@ def stop_scrcpy():
         )
     except:
         pass
-
 
 def scrcpy_screen_args(device):
 
@@ -446,12 +447,30 @@ def ensure_media_connection(device):
 
 def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
     """
-    Start scrcpy without blocking the UI.
-    If remote ADB closes during scrcpy startup, reconnect this device once
-    and automatically retry the exact same command.
+    Serialize scrcpy startup over remote ADB.
+
+    The remote link can take tens of seconds to push scrcpy-server.jar.
+    While that happens, AndroidBridge pauses its periodic ADB status checks
+    so they do not compete with the transfer. A session is marked started
+    only after the scrcpy server actually reports that the phone is ready.
     """
 
+    global media_starting
+
+    if media_starting:
+        try:
+            mode_label.config(
+                text="MODE: WAIT - MEDIA STARTING"
+            )
+        except:
+            pass
+        return
+
+    media_starting = True
+
     def worker():
+        global media_starting
+
         device = cmd[2]
         log_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
@@ -475,37 +494,11 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
 
             return process, log
 
-        try:
-            if not ensure_media_connection(device):
-                root.after(
-                    0,
-                    lambda: on_failed(
-                        "Phone ADB connection is not ready."
-                    )
-                )
-                return
-
-            process, log = spawn()
-
-            # Most transport failures happen immediately during adb push.
-            # A healthy remote startup may take much longer, so only retry
-            # when the process has actually exited.
-            time.sleep(4)
-
-            if process.poll() is None:
-                root.after(
-                    0,
-                    lambda p=process: on_started(p)
-                )
-                return
-
+        def read_log(log):
             try:
                 log.flush()
-                log.close()
             except:
                 pass
-
-            detail = ""
 
             try:
                 with open(
@@ -514,23 +507,62 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
                     encoding="utf-8",
                     errors="replace"
                 ) as f:
-                    detail = f.read()
+                    return f.read()
             except:
-                pass
+                return ""
 
-            retryable = (
-                "connect failed: closed" in detail.lower() or
-                '"adb push" returned with value 1' in detail.lower() or
-                "server connection failed" in detail.lower() or
-                "device offline" in detail.lower()
+        def wait_for_server(process, log, timeout=180):
+            deadline = time.time() + timeout
+
+            while time.time() < deadline:
+                if process.poll() is not None:
+                    return False, read_log(log)
+
+                detail = read_log(log)
+                lower = detail.lower()
+
+                ready = (
+                    "[server] info: device:" in lower or
+                    "[server] info: using camera" in lower or
+                    "info: renderer:" in lower or
+                    "audio playback started" in lower
+                )
+
+                if ready:
+                    return True, detail
+
+                time.sleep(0.5)
+
+            return False, read_log(log)
+
+        def is_retryable(detail):
+            lower = detail.lower()
+
+            return (
+                "connect failed: closed" in lower or
+                '"adb push" returned with value 1' in lower or
+                "server connection failed" in lower or
+                "device offline" in lower or
+                "transport error" in lower
             )
 
-            if retryable and ensure_media_connection(device):
+        with media_start_lock:
+            try:
+                if not ensure_media_connection(device):
+                    media_starting = False
+                    root.after(
+                        0,
+                        lambda: on_failed(
+                            "Phone ADB connection is not ready."
+                        )
+                    )
+                    return
+
                 process, log = spawn()
+                ready, detail = wait_for_server(process, log)
 
-                time.sleep(4)
-
-                if process.poll() is None:
+                if ready:
+                    media_starting = False
                     root.after(
                         0,
                         lambda p=process: on_started(p)
@@ -538,32 +570,68 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
                     return
 
                 try:
-                    log.flush()
+                    if process.poll() is None:
+                        process.terminate()
+                except:
+                    pass
+
+                try:
                     log.close()
                 except:
                     pass
 
-            last = detail[-1800:] if detail else (
-                "scrcpy stopped during startup. "
-                "See " + log_path
-            )
+                # One safe reconnect/retry for the exact device only.
+                if is_retryable(detail) and ensure_media_connection(device):
+                    time.sleep(0.5)
 
-            root.after(
-                0,
-                lambda d=last: on_failed(d)
-            )
+                    process, log = spawn()
+                    ready, retry_detail = wait_for_server(process, log)
 
-        except Exception as e:
-            root.after(
-                0,
-                lambda msg=str(e): on_failed(msg)
-            )
+                    if ready:
+                        media_starting = False
+                        root.after(
+                            0,
+                            lambda p=process: on_started(p)
+                        )
+                        return
+
+                    if retry_detail:
+                        detail = retry_detail
+
+                    try:
+                        if process.poll() is None:
+                            process.terminate()
+                    except:
+                        pass
+
+                    try:
+                        log.close()
+                    except:
+                        pass
+
+                media_starting = False
+
+                last = detail[-2200:] if detail else (
+                    "scrcpy did not report a ready server. "
+                    "See " + log_path
+                )
+
+                root.after(
+                    0,
+                    lambda d=last: on_failed(d)
+                )
+
+            except Exception as e:
+                media_starting = False
+                root.after(
+                    0,
+                    lambda msg=str(e): on_failed(msg)
+                )
 
     threading.Thread(
         target=worker,
         daemon=True
     ).start()
-
 
 def launch(mode, kind, facing=None):
 
@@ -706,11 +774,22 @@ def front_camera():
 def open_phone_data(mode):
 
     try:
+        helper = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "AndroidBridge-PhoneData.py"
+        )
+
+        if not os.path.exists(helper):
+            messagebox.showerror(
+                "AndroidBridge Lite",
+                "Phone data helper is missing:\n\n" + helper
+            )
+            return
 
         subprocess.Popen(
             [
                 "python",
-                r"C:\AndroidBridge-Lite\AndroidBridge-PhoneData.py",
+                helper,
                 mode
             ],
             creationflags=HIDE
@@ -843,13 +922,18 @@ def background_check():
     checking = True
 
     try:
-        # Do NOT reconnect Tailscale every 5 seconds.
-        # First inspect existing connections only.
-        device = get_device(False)
+        # A scrcpy server upload over remote ADB can take a long time.
+        # Do not issue competing adb devices/connect checks during startup.
+        if media_starting:
+            device = active_device
+        else:
+            # Do NOT reconnect Tailscale every 5 seconds.
+            # First inspect existing connections only.
+            device = get_device(False)
 
-        # If nothing exists, try remote once.
-        if not device:
-            device = get_device(True)
+            # If nothing exists, try remote once.
+            if not device:
+                device = get_device(True)
 
         root.after(
             0,
