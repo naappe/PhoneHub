@@ -1192,7 +1192,10 @@ def reconnect():
 
 def close_app():
 
+    # Closing AndroidBridge closes every media session. The normal STOP
+    # button still leaves audio independent.
     stop_scrcpy()
+    stop_audio()
 
     root.destroy()
 
@@ -1546,7 +1549,7 @@ location_button = tk.Button(
 )
 
 location_button.grid(
-    row=3,
+    row=4,
     column=0,
     columnspan=2,
     padx=7,
