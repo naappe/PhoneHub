@@ -331,10 +331,11 @@ def stop_scrcpy():
     global current_process
     global screen_process
     global camera_process
-    global audio_process
     global current_mode
 
-    for process in (screen_process, camera_process, audio_process):
+    # VIDEO STOP is deliberately separate from AUDIO OFF.
+    # Camera/screen processes never own microphone audio.
+    for process in (screen_process, camera_process):
 
         if process is None:
             continue
@@ -353,7 +354,6 @@ def stop_scrcpy():
 
     screen_process = None
     camera_process = None
-    audio_process = None
     current_process = None
     current_mode = "STOPPED"
 
@@ -792,7 +792,9 @@ def reconnect():
 
 def close_app():
 
+    # Closing the whole app shuts down both independent channels.
     stop_scrcpy()
+    stop_audio()
 
     root.destroy()
 
