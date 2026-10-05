@@ -414,6 +414,150 @@ def scrcpy_camera_args(device, facing):
     ]
 
 
+def ensure_media_connection(device):
+    """Verify the existing ADB transport and repair only this device if needed."""
+    if adb_quick_state(device):
+        return True
+
+    if is_tailscale(device):
+        try:
+            subprocess.run(
+                ["adb", "connect", device],
+                capture_output=True,
+                text=True,
+                timeout=6,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+        except Exception:
+            return False
+
+        time.sleep(0.4)
+        return adb_quick_state(device)
+
+    return adb_quick_state(device)
+
+
+def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
+    """
+    Start scrcpy without blocking the UI.
+    If remote ADB closes during scrcpy startup, reconnect this device once
+    and automatically retry the exact same command.
+    """
+
+    def worker():
+        device = cmd[2]
+        log_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            log_name
+        )
+
+        def spawn():
+            log = open(
+                log_path,
+                "w",
+                encoding="utf-8",
+                errors="replace"
+            )
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                creationflags=HIDE
+            )
+
+            return process, log
+
+        try:
+            if not ensure_media_connection(device):
+                root.after(
+                    0,
+                    lambda: on_failed(
+                        "Phone ADB connection is not ready."
+                    )
+                )
+                return
+
+            process, log = spawn()
+
+            # Most transport failures happen immediately during adb push.
+            # A healthy remote startup may take much longer, so only retry
+            # when the process has actually exited.
+            time.sleep(4)
+
+            if process.poll() is None:
+                root.after(
+                    0,
+                    lambda p=process: on_started(p)
+                )
+                return
+
+            try:
+                log.flush()
+                log.close()
+            except:
+                pass
+
+            detail = ""
+
+            try:
+                with open(
+                    log_path,
+                    "r",
+                    encoding="utf-8",
+                    errors="replace"
+                ) as f:
+                    detail = f.read()
+            except:
+                pass
+
+            retryable = (
+                "connect failed: closed" in detail.lower() or
+                '"adb push" returned with value 1' in detail.lower() or
+                "server connection failed" in detail.lower() or
+                "device offline" in detail.lower()
+            )
+
+            if retryable and ensure_media_connection(device):
+                process, log = spawn()
+
+                time.sleep(4)
+
+                if process.poll() is None:
+                    root.after(
+                        0,
+                        lambda p=process: on_started(p)
+                    )
+                    return
+
+                try:
+                    log.flush()
+                    log.close()
+                except:
+                    pass
+
+            last = detail[-1800:] if detail else (
+                "scrcpy stopped during startup. "
+                "See " + log_path
+            )
+
+            root.after(
+                0,
+                lambda d=last: on_failed(d)
+            )
+
+        except Exception as e:
+            root.after(
+                0,
+                lambda msg=str(e): on_failed(msg)
+            )
+
+    threading.Thread(
+        target=worker,
+        daemon=True
+    ).start()
+
+
 def launch(mode, kind, facing=None):
 
     global current_process
@@ -425,17 +569,14 @@ def launch(mode, kind, facing=None):
     device = get_device(True)
 
     if not device:
-
         messagebox.showerror(
             "AndroidBridge Lite",
             "Phone cannot be reached.\n\n"
             "Check USB, Wi-Fi or Tailscale."
         )
-
         return
 
     if kind == "screen":
-
         old_process = screen_process
 
         if old_process is not None:
@@ -450,11 +591,10 @@ def launch(mode, kind, facing=None):
                 pass
 
         screen_process = None
-
         args = scrcpy_screen_args(device)
+        log_name = "scrcpy-screen.log"
 
     else:
-
         old_process = camera_process
 
         if old_process is not None:
@@ -469,26 +609,35 @@ def launch(mode, kind, facing=None):
                 pass
 
         camera_process = None
-
         args = scrcpy_camera_args(
             device,
             facing
         )
+        log_name = "scrcpy-camera.log"
 
-    time.sleep(0.3)
+    current_mode = "STARTING " + mode
+    mode_label.config(
+        text="MODE: STARTING " + mode
+    )
+    route_label.config(
+        text=connection_type(device)
+    )
+    device_label.config(
+        text=device
+    )
 
-    try:
+    cmd = [
+        "scrcpy",
+        "-s",
+        device
+    ] + args
 
-        process = subprocess.Popen(
-            [
-                "scrcpy",
-                "-s",
-                device
-            ] + args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=HIDE
-        )
+    def started(process):
+        global current_process
+        global screen_process
+        global camera_process
+        global current_mode
+        global active_device
 
         if kind == "screen":
             screen_process = process
@@ -503,23 +652,25 @@ def launch(mode, kind, facing=None):
             text="MODE: " + mode
         )
 
-        route_label.config(
-            text=connection_type(device)
-        )
-
-        device_label.config(
-            text=device
-        )
-
-    except Exception as e:
+    def failed(detail):
+        global current_mode
 
         current_mode = "ERROR"
+        mode_label.config(
+            text="MODE: ERROR"
+        )
 
         messagebox.showerror(
             "AndroidBridge Lite",
-            str(e)
+            "scrcpy could not start.\n\n" + detail
         )
 
+    start_scrcpy_resilient(
+        cmd,
+        log_name,
+        started,
+        failed
+    )
 
 def screen():
     launch(
@@ -574,57 +725,81 @@ def start_audio():
 
     global audio_process
     global active_device
+    global current_mode
 
     device = get_device(True)
 
     if not device:
-
         messagebox.showerror(
             "AndroidBridge Lite",
             "Phone cannot be reached.\n\n"
             "Check USB, Wi-Fi or Tailscale."
         )
-
         return
 
     # Do not start a second microphone process.
     if audio_process is not None:
-
         try:
             if audio_process.poll() is None:
+                current_mode = "AUDIO ON"
+                mode_label.config(
+                    text="MODE: AUDIO ON"
+                )
                 return
         except:
             pass
 
-    try:
+    current_mode = "STARTING AUDIO"
+    mode_label.config(
+        text="MODE: STARTING AUDIO"
+    )
 
-        audio_process = subprocess.Popen(
-            [
-                "scrcpy",
-                "-s",
-                device,
-                "--no-video",
-                "--audio-source=mic-voice-recognition",
-                "--audio-codec=opus",
-                "--audio-bit-rate=96K",
-                "--audio-buffer=20"
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=HIDE
+    cmd = [
+        "scrcpy",
+        "-s",
+        device,
+        "--no-video",
+        "--audio-source=mic-voice-recognition",
+        "--audio-codec=opus",
+        "--audio-bit-rate=96K",
+        "--audio-buffer=20"
+    ]
+
+    def started(process):
+        global audio_process
+        global active_device
+        global current_mode
+
+        audio_process = process
+        active_device = device
+        current_mode = "AUDIO ON"
+
+        mode_label.config(
+            text="MODE: AUDIO ON"
         )
 
-        active_device = device
-
-    except Exception as e:
+    def failed(detail):
+        global audio_process
+        global current_mode
 
         audio_process = None
+        current_mode = "ERROR"
+
+        mode_label.config(
+            text="MODE: ERROR"
+        )
 
         messagebox.showerror(
             "AndroidBridge Lite",
-            "Audio could not start:\n\n" + str(e)
+            "Audio could not start.\n\n" + detail
         )
 
+    start_scrcpy_resilient(
+        cmd,
+        "scrcpy-audio.log",
+        started,
+        failed
+    )
 
 def stop_audio():
 
