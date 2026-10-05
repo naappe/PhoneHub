@@ -467,8 +467,12 @@ def scrcpy_camera_args(device, facing, night=False, low_light=False):
 def _watch_nightvision_log(process):
     """Show whether Android's hardware Low Light Boost is actually active."""
     try:
-        for raw_line in process.stderr:
+        saw_capability = False
+        for raw_line in process.stdout:
             line = raw_line.strip()
+
+            if "AndroidBridge LLB" in line:
+                saw_capability = True
 
             if "AndroidBridge LLB support: true" in line:
                 root.after(
@@ -493,8 +497,21 @@ def _watch_nightvision_log(process):
                         text="MODE: NIGHT VISION BOOST - NOT SUPPORTED"
                     )
                 )
+
+        if not saw_capability:
+            root.after(
+                0,
+                lambda: mode_label.config(
+                    text="MODE: NIGHT VISION BOOST - CAPABILITY UNKNOWN"
+                )
+            )
     except:
-        pass
+        root.after(
+            0,
+            lambda: mode_label.config(
+                text="MODE: NIGHT VISION BOOST - STATUS ERROR"
+            )
+        )
 
 
 def launch(mode, kind, facing=None, night=False, low_light=False):
@@ -594,15 +611,15 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
                 "-s",
                 device
             ] + args,
-            stdout=subprocess.DEVNULL,
-            stderr=stderr_target,
+            stdout=subprocess.PIPE if low_light else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if low_light else subprocess.DEVNULL,
             text=bool(low_light),
             errors="replace" if low_light else None,
             creationflags=HIDE,
             env=scrcpy_env
         )
 
-        if low_light and process.stderr is not None:
+        if low_light and process.stdout is not None:
             threading.Thread(
                 target=_watch_nightvision_log,
                 args=(process,),
