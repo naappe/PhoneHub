@@ -24,13 +24,14 @@ jobs:
           distribution: zulu
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Ensure Android 36 SDK
         shell: bash
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          yes | sdkmanager "platforms;android-36" "build-tools;36.0.0" >/dev/null || true
+          SDKMANAGER="/usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Clone official scrcpy v4.1
         shell: bash
@@ -44,6 +45,8 @@ jobs:
       - name: Build server only
         working-directory: scrcpy
         shell: bash
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
           chmod +x gradlew
           ./gradlew :server:assembleRelease --no-daemon
