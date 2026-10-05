@@ -603,7 +603,7 @@ def start_audio():
                 "-s",
                 device,
                 "--no-video",
-                "--audio-source=mic"
+                "--audio-source=mic-voice-communication"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -810,15 +810,7 @@ root = tk.Tk()
 
 root.title("AndroidBridge Lite")
 
-# Open the controller centered on the current Windows desktop.
-WINDOW_W = 560
-WINDOW_H = 650
-root.update_idletasks()
-screen_w = root.winfo_screenwidth()
-screen_h = root.winfo_screenheight()
-pos_x = max(0, (screen_w - WINDOW_W) // 2)
-pos_y = max(0, (screen_h - WINDOW_H) // 2)
-root.geometry(f"{WINDOW_W}x{WINDOW_H}+{pos_x}+{pos_y}")
+root.geometry("560x650")
 
 root.resizable(False, False)
 
@@ -1196,13 +1188,6 @@ tk.Label(
     pady=18
 )
 
-
-# Bring AndroidBridge to the foreground once at startup.
-root.deiconify()
-root.lift()
-root.attributes("-topmost", True)
-root.focus_force()
-root.after(1200, lambda: root.attributes("-topmost", False))
 
 root.after(
     300,
