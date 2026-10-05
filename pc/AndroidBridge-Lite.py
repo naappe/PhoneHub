@@ -413,7 +413,7 @@ def scrcpy_camera_args(device, facing, night=False, low_light=False):
         # AE target FPS unset lets Android Camera2 choose its own exposure
         # behavior instead of AndroidBridge forcing the verified 15/30 FPS.
         camera_id = "0"
-        title = "AndroidBridge LOW LIGHT TEST"
+        title = "AndroidBridge NIGHT VISION TEST"
     elif night:
         # Stable night mode: use the proven rear camera path plus Samsung's
         # physical LED torch. This does not alter the normal camera profiles.
@@ -596,21 +596,11 @@ def front_camera():
     )
 
 
-def night_camera():
-    # Torch-assisted rear camera mode retained as a separate optional tool.
-    launch(
-        "NIGHT CAMERA",
-        "camera",
-        "back",
-        night=True
-    )
-
-
 def low_light_test():
     # No torch. This measures what the rear camera can obtain from available
     # visible light using Camera2 automatic exposure behavior.
     launch(
-        "LOW LIGHT TEST",
+        "NIGHT VISION TEST",
         "camera",
         "back",
         low_light=True
@@ -1360,31 +1350,15 @@ audio_off_button.grid(
 )
 
 
-night_button = tk.Button(
-    buttons,
-    text="NIGHT + TORCH",
-    command=night_camera,
-    **button_style
-)
-
-night_button.grid(
-    row=3,
-    column=0,
-    columnspan=2,
-    padx=7,
-    pady=7
-)
-
-
 low_light_button = tk.Button(
     buttons,
-    text="LOW LIGHT TEST",
+    text="NIGHT VISION TEST",
     command=low_light_test,
     **button_style
 )
 
 low_light_button.grid(
-    row=4,
+    row=3,
     column=0,
     columnspan=2,
     padx=7,
@@ -1400,7 +1374,7 @@ calls_button = tk.Button(
 )
 
 calls_button.grid(
-    row=5,
+    row=4,
     column=0,
     padx=7,
     pady=7
@@ -1415,7 +1389,7 @@ activity_button = tk.Button(
 )
 
 activity_button.grid(
-    row=5,
+    row=4,
     column=1,
     padx=7,
     pady=7
@@ -1439,7 +1413,7 @@ location_button = tk.Button(
 )
 
 location_button.grid(
-    row=6,
+    row=5,
     column=0,
     columnspan=2,
     padx=7,
