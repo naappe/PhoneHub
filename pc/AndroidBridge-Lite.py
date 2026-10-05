@@ -235,6 +235,11 @@ def get_device(allow_remote=True):
 
     global active_device
 
+    # Reuse the known working transport first. This avoids an unnecessary
+    # "adb devices" transaction immediately before every media startup.
+    if active_device and adb_quick_state(active_device):
+        return active_device
+
     # First use an existing fast connection.
     device = choose_existing_device()
 
@@ -613,35 +618,9 @@ def start_scrcpy_resilient(cmd, log_name, on_started, on_failed):
                 except:
                     pass
 
-                # One safe reconnect/retry for the exact device only.
-                if is_retryable(detail) and ensure_media_connection(device):
-                    time.sleep(0.5)
-
-                    process, log = spawn()
-                    ready, retry_detail = wait_for_server(process, log)
-
-                    if ready:
-                        media_starting = False
-                        root.after(
-                            0,
-                            lambda p=process: on_started(p)
-                        )
-                        return
-
-                    if retry_detail:
-                        detail = retry_detail
-
-                    try:
-                        if process.poll() is None:
-                            process.terminate()
-                    except:
-                        pass
-
-                    try:
-                        log.close()
-                    except:
-                        pass
-
+                # Do not immediately launch a second large scrcpy upload after
+                # a transport failure. Preserve one-button/one-session
+                # semantics and report the real failure instead.
                 media_starting = False
 
                 last = detail[-2200:] if detail else (
@@ -960,12 +939,14 @@ def background_check():
         # Do not issue competing adb devices/connect checks during startup.
         if media_starting:
             device = active_device
+        elif active_device:
+            # Keep the UI aligned with the selected route without injecting
+            # periodic ADB traffic into a working remote transport.
+            device = active_device
         else:
-            # Do NOT reconnect Tailscale every 5 seconds.
-            # First inspect existing connections only.
+            # Discover/connect only when there is no selected route.
             device = get_device(False)
 
-            # If nothing exists, try remote once.
             if not device:
                 device = get_device(True)
 
