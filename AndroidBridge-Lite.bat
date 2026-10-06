@@ -12,7 +12,7 @@ if errorlevel 1 (
 
 rem Self-heal the tracked runtime set. "git pull" alone does not remove
 rem local working-tree edits, which can leave files from different builds mixed.
-git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" "pc\AndroidBridge-PhoneData.py" "pc\scrcpy-server-v4.1-llb" "pc\scrcpy-server-v4.1-llb.sha256" >nul 2>&1
+git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" "pc\AndroidBridge-PhoneData.py" "pc\AndroidBridge-AdbProxyV2.cs" "pc\scrcpy-server-v4.1-llb" "pc\scrcpy-server-v4.1-llb.sha256" >nul 2>&1
 
 rem Old builds wrote scrcpy logs that no longer describe the active runtime.
 rem Remove them so stale proxy/chunk errors cannot be mistaken for current errors.
@@ -22,8 +22,23 @@ rem Never let an inherited scrcpy ADB override select the retired proxy.
 set "ADB="
 set "ANDROIDBRIDGE_REAL_ADB="
 
-rem Remove the old generated proxy executable if it still exists locally.
+rem Remove the retired chunking proxy if it still exists locally.
 if exist "%~dp0pc\AndroidBridge-AdbProxy.exe" del /q "%~dp0pc\AndroidBridge-AdbProxy.exe" >nul 2>&1
+
+rem Build the small V2 ADB passthrough helper once. It only suppresses scrcpy's
+rem redundant server push after AndroidBridge has already staged and SHA-256
+rem verified that exact server on the phone. Windows PowerShell 5.1 can emit
+rem the console executable directly.
+if not exist "%~dp0pc\AndroidBridge-AdbProxyV2.exe" (
+    echo [AndroidBridge] Preparing remote video helper...
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -Path '%~dp0pc\AndroidBridge-AdbProxyV2.cs' -OutputAssembly '%~dp0pc\AndroidBridge-AdbProxyV2.exe' -OutputType ConsoleApplication" >nul 2>&1
+)
+
+if not exist "%~dp0pc\AndroidBridge-AdbProxyV2.exe" (
+    echo [AndroidBridge] Remote video helper could not be built.
+    pause
+    exit /b 1
+)
 
 where python >nul 2>&1
 if errorlevel 1 (
