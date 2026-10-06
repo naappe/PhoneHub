@@ -1316,13 +1316,83 @@ def reconnect():
     schedule_check()
 
 
+def _shutdown_processes_no_ui():
+    """Best-effort process cleanup after the Tk window has been dismissed."""
+    processes = []
+    seen = set()
+
+    for process in (
+        screen_process,
+        camera_process,
+        audio_process,
+        audio_boost_process
+    ):
+        if process is None or id(process) in seen:
+            continue
+        seen.add(id(process))
+        processes.append(process)
+
+    # Signal every local helper first. Do not wait on one remote stream before
+    # telling the others to exit.
+    for process in processes:
+        try:
+            if process.poll() is None:
+                process.terminate()
+        except Exception:
+            pass
+
+    # Release a relay blocked on the named audio pipe.
+    if audio_pipe_handle is not None:
+        try:
+            ctypes.WinDLL(
+                "kernel32",
+                use_last_error=True
+            ).CloseHandle(audio_pipe_handle)
+        except Exception:
+            pass
+
+    # Give local helpers a short grace period, then force only the local
+    # processes that did not exit. This never disconnects or resets ADB.
+    deadline = time.monotonic() + 1.5
+
+    for process in processes:
+        try:
+            if process.poll() is not None:
+                continue
+
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                process.wait(timeout=remaining)
+
+            if process.poll() is None:
+                process.kill()
+        except Exception:
+            try:
+                if process.poll() is None:
+                    process.kill()
+            except Exception:
+                pass
+
+
 def close_app():
+    # Never make the Tk event loop wait for scrcpy/audio cleanup. Hide the
+    # window immediately, clean local child processes in a non-daemon worker,
+    # then destroy Tk. The Python process stays alive only long enough for that
+    # short cleanup worker to finish.
+    try:
+        root.withdraw()
+    except Exception:
+        pass
 
-    # Closing the whole app shuts down both independent channels.
-    stop_scrcpy()
-    stop_audio()
+    threading.Thread(
+        target=_shutdown_processes_no_ui,
+        daemon=False
+    ).start()
 
-    root.destroy()
+    try:
+        root.destroy()
+    except Exception:
+        pass
 
 
 # ============================================================
