@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-audio-no-adb-preflight-v1"
+STABLE_PROFILE = "2026-10-06-audio-button-direct-route-v2"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -680,22 +680,11 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
     global active_device
 
     # MEDIA ROUTE:
-    # Do not gate scrcpy behind a second Python ADB/Tailscale preflight.
-    # The exact command below has already been verified manually against this
-    # Samsung endpoint. scrcpy itself is the authority on whether the media
-    # session can start.
-    # IMPORTANT: do not run "adb devices", get-state, connect or any other
-    # preflight here. When Screen/Camera is already streaming over remote ADB,
-    # a second status/preflight command can stall behind that transport. The
-    # media route is already proven, so reuse it directly just like launch().
+    # Use the already established route when available. Otherwise launch
+    # directly against the configured Samsung endpoint. scrcpy is authoritative
+    # for media startup; do not disconnect/reset ADB here.
     device = active_device or f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
     active_device = device
-
-    _queue_ui(
-        lambda: mode_label.config(
-            text=f"MODE: AUDIO STARTING | {device}"
-        )
-    )
 
     if kind == "screen":
 
@@ -1033,11 +1022,18 @@ def start_audio():
     global audio_process
     global active_device
 
-    device = choose_existing_device()
-    if not device:
-        device = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
-
+    # AUDIO ROUTE:
+    # Never run adb devices/get-state/connect here. Those checks can block while
+    # another remote scrcpy stream owns the slow Tailscale transport. Reuse the
+    # route already shown by AndroidBridge, or the configured Samsung endpoint.
+    device = active_device or f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
     active_device = device
+
+    _queue_ui(
+        lambda: mode_label.config(
+            text=f"MODE: AUDIO STARTING | +{int(audio_gain_db)} dB"
+        )
+    )
 
     if audio_process is not None:
         try:
@@ -1111,7 +1107,7 @@ def start_audio():
             # second stream over Tailscale. Do not call it "ON" until BOTH the
             # scrcpy microphone process and FFplay relay are alive. Also never
             # leave the UI in an endless STARTING state.
-            deadline = time.monotonic() + 25.0
+            deadline = time.monotonic() + 8.0
 
             while time.monotonic() < deadline:
                 try:
@@ -1789,7 +1785,10 @@ stop_button.grid(
 audio_on_button = tk.Button(
     buttons,
     text="WIND CUT + VOICE",
-    command=lambda: _run_locked_async(audio_action_lock, start_audio),
+    command=lambda: (
+        mode_label.config(text="MODE: AUDIO STARTING..."),
+        _run_locked_async(audio_action_lock, start_audio)
+    ),
     **button_style
 )
 
