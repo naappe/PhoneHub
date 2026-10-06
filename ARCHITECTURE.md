@@ -62,3 +62,20 @@ Those commands may destroy the unattended remote path.
 - PREPARE-OFFLINE-GPS.ps1
 
 Old ADB proxy/chunker architectures are retired and must not be reintroduced unless new evidence requires them.
+
+
+## Compact normal-media engine
+
+Normal Screen/Camera/Audio use an additional unmodified official scrcpy v3.3.4 runtime installed locally by tools/ensure-fast-scrcpy.ps1.
+
+Reason: AndroidBridge's remote route is upload-bound at startup. v3.3.4's official server is 90,980 bytes; v4.1's server is roughly 733.7 KB. Both versions perform the same stock client -> adb push -> app_process -> scrcpy socket architecture, but the compact server substantially reduces the bytes that must cross remote ADB for each new media client.
+
+The compact client is forced to use the same adb.exe already in PATH through scrcpy's documented ADB environment variable. It does not run its bundled ADB server, does not proxy ADB, and does not alter the remote connection.
+
+The installed v4.1 client remains:
+- automatic Screen/Camera compatibility fallback;
+- direct Audio fallback;
+- NIGHT CAMERA engine;
+- custom Low Light Boost client partner.
+
+Downloaded binaries live under tools/runtime/ and are intentionally excluded from Git. The repository stores only the installer, checksum, orchestration code and architecture documentation.
