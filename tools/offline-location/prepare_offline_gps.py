@@ -468,14 +468,17 @@ def add_permission(root, name):
     idx = list(root).index(app) if app is not None else len(list(root))
     root.insert(idx, node)
 
-def add_component(app, tag, name, attrs=None, actions=None):
+def add_component(app, tag, name, attrs=None, actions=None, exported="false"):
     target = "." + name
     for node in app.findall(tag):
         if node.get(A + "name") in (target, PACKAGE + "." + name):
+            node.set(A + "exported", exported)
+            for k, v in (attrs or {}).items():
+                node.set(A + k, v)
             return node
     node = ET.SubElement(app, tag)
     node.set(A + "name", target)
-    node.set(A + "exported", "false")
+    node.set(A + "exported", exported)
     for k, v in (attrs or {}).items():
         node.set(A + k, v)
     if actions:
@@ -520,7 +523,14 @@ def main():
         "OfflineLocationService",
         attrs={"foregroundServiceType": "location"}
     )
-    add_component(app, "activity", "OfflineLocationSetupActivity")
+    # Export only the setup Activity so ADB can open it once on the user's
+    # already-authorized remote phone. The service and boot receiver stay private.
+    add_component(
+        app,
+        "activity",
+        "OfflineLocationSetupActivity",
+        exported="true"
+    )
     add_component(
         app,
         "receiver",
@@ -559,8 +569,8 @@ def main():
     print("READY APK:")
     print(apks[0])
     print("")
-    print("Phone is currently offline, so do NOT uninstall or disturb the existing app.")
-    print("When the phone becomes reachable, install this APK with adb install -r.")
+    print("Do NOT uninstall the existing Companion.")
+    print("Install this APK in-place with adb install -r so existing app data is preserved.")
     print("Then open OfflineLocationSetupActivity once to grant/confirm location access.")
 
 if __name__ == "__main__":
