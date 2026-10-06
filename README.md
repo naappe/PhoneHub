@@ -22,7 +22,25 @@ pc/
   scrcpy-server-v4.1-llb.sha256
 ```
 
-Normal Screen, Back Camera, Front Camera and audio use stock `scrcpy` + stock `adb` directly. The custom scrcpy server is reserved for Night Vision Boost.
+Screen, Back Camera and Front Camera use stock `scrcpy` + stock `adb` directly.
+
+Audio is deliberately a separate clarity pipeline and must not be merged with the video session:
+
+```text
+Samsung microphone
+  -> scrcpy audio-only capture (mic-voice-recognition)
+  -> Windows named pipe (Opus)
+  -> FFplay speech DSP
+  -> high-pass / low-pass
+  -> adaptive denoise
+  -> noise gate
+  -> speech-presence EQ
+  -> dynamic distant-speech gain
+  -> limiter
+  -> PC speaker/headphones
+```
+
+The custom scrcpy server is reserved for Night Vision Boost.
 
 ## Preserved support tools
 
@@ -33,5 +51,6 @@ Normal Screen, Back Camera, Front Camera and audio use stock `scrcpy` + stock `a
 
 - Do not add alternate AndroidBridge launchers or numbered copies.
 - Do not add ADB proxy/chunk-transfer helpers to the normal media path.
+- Keep audio as its own audio-only capture + PC DSP pipeline; do not merge it into Screen/Camera playback.
 - Do not run `adb disconnect` or `adb kill-server` from AndroidBridge.
 - Keep generated logs, caches and local location-history files out of Git.
