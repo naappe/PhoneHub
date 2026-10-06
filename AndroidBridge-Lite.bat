@@ -50,5 +50,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo [AndroidBridge] Verifying Python source...
+python -m py_compile "%~dp0pc\AndroidBridge-Lite.py" "%~dp0pc\AndroidBridge-PhoneData.py"
+if errorlevel 1 (
+    echo [AndroidBridge] Source verification FAILED.
+    pause
+    exit /b 1
+)
+
+for /f %%i in ('git rev-parse --short HEAD 2^>nul') do echo [AndroidBridge] GitHub version: %%i
+echo [AndroidBridge] Starting verified runtime...
+
 python "%~dp0pc\AndroidBridge-Lite.py"
 exit /b %errorlevel%
