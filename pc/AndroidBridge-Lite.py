@@ -89,6 +89,13 @@ current_mode = "STOPPED"
 active_device = None
 checking = False
 
+# Laptop sleep/resume recovery. A suspended Windows session can leave the
+# local scrcpy/FFplay processes alive even though their TCP/Tailscale sockets
+# are no longer usable. Track GUI heartbeat gaps so AndroidBridge can retire
+# only those stale local media processes and re-open ADB to the same phone.
+resume_heartbeat_at = time.time()
+resume_recovery_lock = threading.Lock()
+
 # Tkinter must stay free to process paint/input events. Remote ADB, scrcpy
 # startup/shutdown and Tailscale checks can take seconds, so button handlers
 # dispatch those operations to workers instead of blocking the Tk event loop.
@@ -403,8 +410,12 @@ def choose_existing_device():
 
 def connect_tailscale():
     """
-    Connect to the known phone through Tailscale.
-    Avoid unnecessary adb connect calls when already connected.
+    Open/re-open the known phone route through Tailscale without resetting ADB.
+
+    "adb connect" is safe to repeat for the same TCP endpoint: when the route
+    is already healthy it returns "already connected"; after laptop sleep it
+    gives ADB a chance to create a fresh TCP transport. Never disconnect or
+    kill the ADB server here.
     """
 
     target_ip = tailscale_ip()
@@ -414,9 +425,8 @@ def connect_tailscale():
 
     target = f"{target_ip}:{ADB_PORT}"
 
-    # Already connected - return immediately. Remote ADB can be slow without
-    # being offline, so use the remote-safe timeout.
-    if adb_quick_state(target, 15):
+    # Fast healthy-path check first.
+    if adb_quick_state(target, 5):
         return target
 
     try:
@@ -424,14 +434,14 @@ def connect_tailscale():
             ["adb", "connect", target],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=20,
             creationflags=subprocess.CREATE_NO_WINDOW
         )
     except Exception:
         return None
 
-    # Verify without tearing down the session.
-    if adb_quick_state(target, 15):
+    # Verify the new/reused transport without tearing anything down.
+    if adb_quick_state(target, 10):
         return target
 
     return None
@@ -441,12 +451,16 @@ def get_device(allow_remote=True):
 
     global active_device
 
-    # First use an existing ADB route.
+    # First use an existing ADB route. USB/LAN can be trusted from the ADB
+    # device table. A Tailscale TCP serial must answer get-state before it is
+    # trusted, because Windows sleep can leave a stale "device" row behind.
     device = choose_existing_device()
 
     if device:
-        active_device = device
-        return device
+        if not is_tailscale(device) or adb_quick_state(device, 5):
+            active_device = device
+            return device
+        device = None
 
     if allow_remote:
         # The Samsung's established remote ADB endpoint is authoritative for
@@ -1838,18 +1852,183 @@ def display_status(device, ts_state=None):
         text="MODE: " + current_mode
     )
 
-    root.after(
-        5000,
-        schedule_check
-    )
-
-
 def schedule_check():
+    # Schedule the NEXT check independently of display_status(). Older builds
+    # scheduled from display_status only, so one early return while media was
+    # active permanently stopped connection monitoring.
+    try:
+        root.after(5000, schedule_check)
+    except Exception:
+        return
 
     threading.Thread(
         target=background_check,
         daemon=True
     ).start()
+
+
+def _resume_recovery_worker():
+    """Recover the PC side after lid-close/sleep without resetting phone ADB."""
+    global current_process
+    global screen_process
+    global camera_process
+    global audio_process
+    global audio_boost_process
+    global audio_pipe_handle
+    global current_mode
+    global active_device
+
+    if not resume_recovery_lock.acquire(blocking=False):
+        return
+
+    try:
+        _queue_ui(
+            lambda: (
+                status.config(text="PC RESUMED - RESTORING PHONE..."),
+                route_label.config(text="TAILSCALE - RECONNECTING"),
+                mode_label.config(text="MODE: RECOVERING")
+            )
+        )
+
+        # Media sockets do not survive a laptop suspend reliably. Retire only
+        # AndroidBridge's local children; never disconnect/kill the ADB server.
+        processes = []
+        seen = set()
+        for process in (
+            screen_process,
+            camera_process,
+            audio_process,
+            audio_boost_process
+        ):
+            if process is None or id(process) in seen:
+                continue
+            seen.add(id(process))
+            processes.append(process)
+
+        for process in processes:
+            try:
+                if process.poll() is None:
+                    try:
+                        _terminate_scrcpy_push_children(process.pid)
+                    except Exception:
+                        pass
+                    process.terminate()
+            except Exception:
+                pass
+
+        if audio_pipe_handle is not None:
+            try:
+                ctypes.WinDLL(
+                    "kernel32",
+                    use_last_error=True
+                ).CloseHandle(audio_pipe_handle)
+            except Exception:
+                pass
+
+        deadline = time.monotonic() + 2.0
+        for process in processes:
+            try:
+                if process.poll() is not None:
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    process.wait(timeout=remaining)
+                if process.poll() is None:
+                    process.kill()
+            except Exception:
+                try:
+                    if process.poll() is None:
+                        process.kill()
+                except Exception:
+                    pass
+
+        screen_process = None
+        camera_process = None
+        audio_process = None
+        audio_boost_process = None
+        audio_pipe_handle = None
+        current_process = None
+        current_mode = "STOPPED"
+        active_device = None
+
+        try:
+            _clear_stale_scrcpy_startups_for_phone()
+        except Exception:
+            pass
+
+        # Windows/Tailscale may need a few seconds after resume. Retry the
+        # SAME endpoint only. adb connect does not tear down the server.
+        target = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
+        restored = None
+
+        for attempt in range(12):
+            if adb_quick_state(target, 5):
+                restored = target
+                break
+
+            try:
+                subprocess.run(
+                    ["adb", "connect", target],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+            except Exception:
+                pass
+
+            if adb_quick_state(target, 8):
+                restored = target
+                break
+
+            time.sleep(5)
+
+        if restored:
+            active_device = restored
+            _queue_ui(
+                lambda d=restored: (
+                    status.config(text="PHONE CONNECTED"),
+                    route_label.config(text=connection_type(d)),
+                    device_label.config(text=d),
+                    mode_label.config(text="MODE: STOPPED")
+                )
+            )
+        else:
+            _queue_ui(
+                lambda: (
+                    status.config(text="REMOTE PHONE CONFIGURED"),
+                    route_label.config(text="TAILSCALE - WAITING FOR PHONE"),
+                    device_label.config(
+                        text=f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
+                    ),
+                    mode_label.config(text="MODE: STOPPED")
+                )
+            )
+
+    finally:
+        resume_recovery_lock.release()
+
+
+def _resume_watchdog():
+    """Detect a Windows sleep/lid-close gap from the Tk heartbeat."""
+    global resume_heartbeat_at
+
+    now = time.time()
+    gap = now - resume_heartbeat_at
+    resume_heartbeat_at = now
+
+    # Normal heartbeat is 2 seconds. A >12 second gap is a strong suspend /
+    # resume signal while avoiding recovery during ordinary short UI stalls.
+    if gap > 12:
+        threading.Thread(
+            target=_resume_recovery_worker,
+            daemon=True
+        ).start()
+
+    try:
+        root.after(2000, _resume_watchdog)
+    except Exception:
+        pass
 
 
 def reconnect():
@@ -2564,6 +2743,11 @@ root.after(50, _drain_ui_queue)
 root.after(
     300,
     schedule_check
+)
+
+root.after(
+    2000,
+    _resume_watchdog
 )
 
 threading.Thread(target=location_sync_server, daemon=True).start()
