@@ -39,6 +39,8 @@ Samsung voice-recognition microphone
 
 Do not add `afftdn` or `dynaudnorm` to the normal audio path; those older processing stages increased latency.
 
+The UI includes a `SOUND VOLUME` control from 0 to +20 dB (default +14 dB). The selected boost is applied when the audio stream starts; it does not alter or stop Screen/Camera.
+
 The custom scrcpy server is reserved for Night Vision Boost.
 
 ## Preserved support tools
