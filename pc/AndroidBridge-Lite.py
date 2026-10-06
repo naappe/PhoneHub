@@ -191,17 +191,23 @@ def run_hidden(args, timeout=6):
         return None
 
 
-def adb_quick_state(device):
-    """Fast ADB connection check without triggering a reconnect."""
+def adb_quick_state(device, timeout=None):
+    """Check an existing ADB route without disconnecting or resetting it."""
     if not device:
         return False
+
+    # Remote ADB over Tailscale can legitimately take several seconds even
+    # while scrcpy works. A 2-second cutoff caused false PHONE NOT CONNECTED
+    # states on the same route that the verified manual scrcpy command used.
+    if timeout is None:
+        timeout = 15 if is_tailscale(device) else 3
 
     try:
         result = subprocess.run(
             ["adb", "-s", device, "get-state"],
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=timeout,
             creationflags=subprocess.CREATE_NO_WINDOW
         )
 
@@ -211,7 +217,7 @@ def adb_quick_state(device):
         return False
 
 def adb_list():
-    result = run_hidden(["adb", "devices"], 4)
+    result = run_hidden(["adb", "devices"], 8)
 
     found = []
 
@@ -358,8 +364,9 @@ def connect_tailscale():
 
     target = f"{target_ip}:{ADB_PORT}"
 
-    # Already connected - return immediately.
-    if adb_quick_state(target):
+    # Already connected - return immediately. Remote ADB can be slow without
+    # being offline, so use the remote-safe timeout.
+    if adb_quick_state(target, 15):
         return target
 
     try:
@@ -367,14 +374,14 @@ def connect_tailscale():
             ["adb", "connect", target],
             capture_output=True,
             text=True,
-            timeout=4,
+            timeout=15,
             creationflags=subprocess.CREATE_NO_WINDOW
         )
     except Exception:
         return None
 
-    # Quick verification.
-    if adb_quick_state(target):
+    # Verify without tearing down the session.
+    if adb_quick_state(target, 15):
         return target
 
     return None
@@ -384,22 +391,30 @@ def get_device(allow_remote=True):
 
     global active_device
 
-    # First use an existing fast connection.
+    # First use an existing ADB route.
     device = choose_existing_device()
 
     if device:
-
         active_device = device
         return device
 
-    # Nothing available locally.
-    # Try secure Tailscale remote connection.
     if allow_remote:
+        # The Samsung's established remote ADB endpoint is authoritative for
+        # AndroidBridge. Probe it directly before trusting a Tailscale status
+        # label. This is the exact serial used by the verified manual scrcpy
+        # command.
+        known_target = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
 
+        if adb_quick_state(known_target, 15):
+            active_device = known_target
+            return known_target
+
+        # If the cached ADB route is absent, ask ADB to reconnect over the
+        # existing Tailscale network. Never disconnect, kill-server, or reset
+        # the phone.
         device = connect_tailscale()
 
         if device:
-
             active_device = device
             return device
 
