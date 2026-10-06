@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-visible-audio-monitor-v1"
+STABLE_PROFILE = "2026-10-06-serialized-scrcpy-audio-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -888,6 +888,57 @@ def open_phone_data(mode):
             str(e)
         )
 
+def _scrcpy_server_push_count():
+    """Count active scrcpy-server adb pushes without issuing any adb command."""
+    ps = (
+        "$p = Get-CimInstance Win32_Process -Filter \"Name='adb.exe'\" "
+        "| Where-Object { $_.CommandLine -match ' push ' "
+        "-and $_.CommandLine -match 'scrcpy-server' }; "
+        "@($p).Count"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            creationflags=HIDE
+        )
+        if result.returncode == 0:
+            return int((result.stdout or "0").strip().splitlines()[-1])
+    except Exception:
+        pass
+    return 0
+
+
+def _wait_for_scrcpy_uploads_to_finish(max_wait=120):
+    """Serialize remote scrcpy starts so two 734 KB server pushes never compete."""
+    deadline = time.monotonic() + max_wait
+    last_count = None
+
+    while time.monotonic() < deadline:
+        count = _scrcpy_server_push_count()
+        if count <= 0:
+            return True
+
+        if count != last_count:
+            last_count = count
+            _queue_ui(
+                lambda n=count: _set_audio_monitor_status(
+                    f"WAITING FOR {n} SCRCPY SERVER UPLOAD(S)...", ACCENT
+                )
+            )
+            _queue_ui(
+                lambda n=count: mode_label.config(
+                    text=f"MODE: AUDIO WAITING FOR {n} SERVER UPLOAD(S)"
+                )
+            )
+
+        time.sleep(0.5)
+
+    return False
+
+
 # ============================================================
 # SEPARATE CLEAR + LOUD LOW-LATENCY AUDIO
 # Samsung voice-recognition mic -> Opus -> pipe -> lightweight FFplay DSP.
@@ -1045,6 +1096,20 @@ def start_audio():
         except Exception:
             pass
 
+    # scrcpy v4.1 pushes its ~734 KB server on every client start.
+    # Over remote ADB, starting audio while Screen/Camera is still pushing the
+    # same file creates competing uploads. Wait for that upload to finish first.
+    if not _wait_for_scrcpy_uploads_to_finish(120):
+        _queue_ui(
+            lambda: _set_audio_monitor_status(
+                "AUDIO WAITING TIMED OUT - TRY AGAIN", DANGER
+            )
+        )
+        _queue_ui(
+            lambda: mode_label.config(text="MODE: AUDIO WAITING TIMED OUT")
+        )
+        return
+
     ffplay_path = shutil.which("ffplay")
     if not ffplay_path:
         _queue_ui(
@@ -1110,9 +1175,15 @@ def start_audio():
             # second stream over Tailscale. Do not call it "ON" until BOTH the
             # scrcpy microphone process and FFplay relay are alive. Also never
             # leave the UI in an endless STARTING state.
-            deadline = time.monotonic() + 8.0
+            # The proven manual remote push took ~13 seconds, so the old
+            # 8-second watchdog killed scrcpy before its server upload could
+            # complete. Give the upload its own phase, then allow 20 seconds
+            # for the microphone/FFplay pipe to become live.
+            overall_deadline = time.monotonic() + 120.0
+            post_upload_deadline = None
+            saw_upload = False
 
-            while time.monotonic() < deadline:
+            while time.monotonic() < overall_deadline:
                 try:
                     if proc.poll() is not None:
                         break
@@ -1130,10 +1201,34 @@ def start_audio():
                             )
                         )
                         return
+
+                    pushes = _scrcpy_server_push_count()
+                    if pushes > 0:
+                        saw_upload = True
+                        post_upload_deadline = None
+                        _queue_ui(
+                            lambda n=pushes: _set_audio_monitor_status(
+                                f"STARTING MICROPHONE • SERVER UPLOAD {n}", ACCENT
+                            )
+                        )
+                    elif saw_upload:
+                        if post_upload_deadline is None:
+                            post_upload_deadline = time.monotonic() + 20.0
+                            _queue_ui(
+                                lambda: _set_audio_monitor_status(
+                                    "SERVER READY • OPENING MICROPHONE...", ACCENT
+                                )
+                            )
+                        elif time.monotonic() >= post_upload_deadline:
+                            break
+                    elif post_upload_deadline is None:
+                        # If the push was too fast to observe, still allow a
+                        # normal remote startup window before declaring failure.
+                        post_upload_deadline = time.monotonic() + 30.0
                 except Exception:
                     break
 
-                time.sleep(0.25)
+                time.sleep(0.35)
 
             # Enhanced path did not complete. Stop only this local attempt,
             # then automatically fall back to scrcpy's direct microphone
@@ -1151,6 +1246,20 @@ def start_audio():
                     ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(handle)
                 except Exception:
                     pass
+
+            # Do not repeat the fault we just diagnosed: a killed scrcpy
+            # may leave its adb push finishing in the background. Wait until it
+            # is gone before the direct fallback starts.
+            if not _wait_for_scrcpy_uploads_to_finish(60):
+                _queue_ui(
+                    lambda: _set_audio_monitor_status(
+                        "AUDIO START FAILED • SERVER UPLOAD BUSY", DANGER
+                    )
+                )
+                _queue_ui(
+                    lambda: mode_label.config(text="MODE: AUDIO START FAILED")
+                )
+                return
 
             try:
                 fallback_env = os.environ.copy()
