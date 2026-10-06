@@ -144,3 +144,10 @@ Reliability policy:
 - no adb disconnect or adb kill-server is introduced.
 
 This fast-start path is committed but must be measured on the PC after the next launcher pull.
+
+
+## 2026-10-06 clear/loud speech profile
+
+Audio monitoring now defaults to +18 dB (previously +14 dB) and the UI range extends to +24 dB. The low-latency FFplay chain was retuned for speech intelligibility: 120 Hz high-pass, 7.6 kHz low-pass, low-mid mud reduction, presence/consonant EQ, gentle RMS compression/voice leveling, user gain, then a peak limiter. This keeps the existing mic-voice-recognition capture and named-pipe architecture unchanged.
+
+Recovery checkpoint before this DSP change: `checkpoint/audio-before-clear-loud-2026-10-06`.
