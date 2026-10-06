@@ -8,6 +8,9 @@ import time
 import os
 import threading
 import queue
+import shutil
+import ctypes
+from ctypes import wintypes
 
 # AndroidBridge uses the normal adb.exe from PATH. Never inherit an old
 # scrcpy ADB override from an earlier experimental build.
@@ -19,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-direct-scrcpy-clear-audio-v1"
+STABLE_PROFILE = "2026-10-06-clear-loud-low-latency-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -31,6 +34,8 @@ current_process = None
 screen_process = None
 camera_process = None
 audio_process = None
+audio_boost_process = None
+audio_pipe_handle = None
 current_mode = "STOPPED"
 active_device = None
 checking = False
@@ -884,9 +889,133 @@ def open_phone_data(mode):
         )
 
 # ============================================================
-# SEPARATE LOW-LATENCY AUDIO
-# Known-good profile: direct scrcpy playback, independent of video.
+# SEPARATE CLEAR + LOUD LOW-LATENCY AUDIO
+# Samsung voice-recognition mic -> Opus -> pipe -> lightweight FFplay DSP.
+# No FFT denoise or dynamic-normalizer lookahead: those caused audible lag.
 # ============================================================
+
+
+def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
+    """Low-latency speech relay: clarity EQ + fixed gain + peak protection."""
+    global audio_boost_process
+    global audio_pipe_handle
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    CreateNamedPipeW = kernel32.CreateNamedPipeW
+    CreateNamedPipeW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+        wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID
+    ]
+    CreateNamedPipeW.restype = wintypes.HANDLE
+
+    ConnectNamedPipe = kernel32.ConnectNamedPipe
+    ConnectNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID]
+    ConnectNamedPipe.restype = wintypes.BOOL
+
+    ReadFile = kernel32.ReadFile
+    ReadFile.argtypes = [
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
+    ]
+    ReadFile.restype = wintypes.BOOL
+
+    CloseHandle = kernel32.CloseHandle
+    CloseHandle.argtypes = [wintypes.HANDLE]
+    CloseHandle.restype = wintypes.BOOL
+
+    PIPE_ACCESS_INBOUND = 0x00000001
+    PIPE_TYPE_BYTE = 0x00000000
+    PIPE_READMODE_BYTE = 0x00000000
+    PIPE_WAIT = 0x00000000
+    ERROR_PIPE_CONNECTED = 535
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    handle = CreateNamedPipeW(
+        pipe_name,
+        PIPE_ACCESS_INBOUND,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        1,
+        16384,
+        16384,
+        0,
+        None
+    )
+
+    if handle == INVALID_HANDLE_VALUE:
+        ready_event.set()
+        return
+
+    audio_pipe_handle = handle
+    ready_event.set()
+    player = None
+
+    try:
+        connected = ConnectNamedPipe(handle, None)
+        if not connected and ctypes.get_last_error() != ERROR_PIPE_CONNECTED:
+            return
+
+        # Keep only low-delay filters. The older afftdn+dynaudnorm chain was
+        # powerful but accumulated latency. This retains the useful speech
+        # band, presence lift and real +12 dB gain with peak protection.
+        player = subprocess.Popen(
+            [
+                ffplay_path,
+                "-nodisp",
+                "-autoexit",
+                "-loglevel", "error",
+                "-fflags", "nobuffer",
+                "-flags", "low_delay",
+                "-probesize", "32",
+                "-analyzeduration", "0",
+                "-af",
+                "highpass=f=120:p=2,"
+                "lowpass=f=7500:p=2,"
+                "equalizer=f=2500:t=q:w=1:g=4,"
+                "equalizer=f=4000:t=q:w=1:g=2,"
+                "volume=12dB,"
+                "alimiter=limit=0.95:level=0:attack=5:release=50",
+                "-i", "pipe:0"
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=HIDE,
+            bufsize=0
+        )
+
+        audio_boost_process = player
+        buffer = ctypes.create_string_buffer(16384)
+        count = wintypes.DWORD()
+
+        while player.poll() is None:
+            ok = ReadFile(handle, buffer, len(buffer), ctypes.byref(count), None)
+            if not ok or count.value == 0:
+                break
+            try:
+                player.stdin.write(buffer.raw[:count.value])
+            except (BrokenPipeError, OSError):
+                break
+
+    finally:
+        if player is not None:
+            try:
+                if player.stdin:
+                    player.stdin.close()
+            except Exception:
+                pass
+            try:
+                if player.poll() is None:
+                    player.terminate()
+            except Exception:
+                pass
+
+        audio_boost_process = None
+        audio_pipe_handle = None
+        try:
+            CloseHandle(handle)
+        except Exception:
+            pass
 
 
 def start_audio():
@@ -894,10 +1023,6 @@ def start_audio():
     global audio_process
     global active_device
 
-    # Keep microphone audio completely separate from Screen/Camera.
-    # This restores the previously verified clear, low-latency profile:
-    # Samsung voice-recognition mic -> Opus 96K -> 20 ms scrcpy buffer
-    # -> direct PC playback. No named pipe, FFplay, DSP or extra buffering.
     device = choose_existing_device()
     if not device:
         device = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
@@ -911,6 +1036,35 @@ def start_audio():
         except Exception:
             pass
 
+    ffplay_path = shutil.which("ffplay")
+    if not ffplay_path:
+        _queue_ui(
+            lambda: messagebox.showerror(
+                "AndroidBridge Audio",
+                "FFplay is required for the clear/loud audio profile.\n\n"
+                "Install once: winget install -e --id Gyan.FFmpeg"
+            )
+        )
+        return
+
+    pipe_name = r"\\.\pipe\AndroidBridgeAudio-" + str(os.getpid()) + "-" + str(time.time_ns())
+    ready_event = threading.Event()
+
+    threading.Thread(
+        target=_audio_boost_relay,
+        args=(pipe_name, ffplay_path, ready_event),
+        daemon=True
+    ).start()
+
+    if not ready_event.wait(timeout=2):
+        _queue_ui(
+            lambda: messagebox.showerror(
+                "AndroidBridge Audio",
+                "Could not prepare the low-latency audio path."
+            )
+        )
+        return
+
     try:
         audio_env = os.environ.copy()
         audio_env.pop("SCRCPY_SERVER_PATH", None)
@@ -918,13 +1072,15 @@ def start_audio():
         audio_process = subprocess.Popen(
             [
                 "scrcpy",
-                "-s",
-                device,
+                "-s", device,
                 "--no-video",
+                "--no-audio-playback",
                 "--audio-source=mic-voice-recognition",
                 "--audio-codec=opus",
-                "--audio-bit-rate=96K",
-                "--audio-buffer=20"
+                "--audio-bit-rate=128K",
+                "--audio-buffer=20",
+                "--record=" + pipe_name,
+                "--record-format=opus"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -932,11 +1088,9 @@ def start_audio():
             env=audio_env
         )
 
-        active_device = device
-
         _queue_ui(
             lambda: mode_label.config(
-                text="MODE: CLEAR AUDIO - LOW LATENCY"
+                text="MODE: CLEAR + LOUD AUDIO - LOW LATENCY"
             )
         )
 
@@ -945,8 +1099,7 @@ def start_audio():
         error_text = "Audio could not start:\n\n" + str(e)
         _queue_ui(
             lambda msg=error_text: messagebox.showerror(
-                "AndroidBridge Lite",
-                msg
+                "AndroidBridge Lite", msg
             )
         )
 
@@ -954,6 +1107,8 @@ def start_audio():
 def stop_audio():
 
     global audio_process
+    global audio_boost_process
+    global audio_pipe_handle
 
     if audio_process is not None:
         try:
@@ -965,13 +1120,25 @@ def stop_audio():
                     audio_process.kill()
         except Exception:
             pass
-
     audio_process = None
 
+    if audio_boost_process is not None:
+        try:
+            if audio_boost_process.poll() is None:
+                audio_boost_process.terminate()
+        except Exception:
+            pass
+    audio_boost_process = None
+
+    if audio_pipe_handle is not None:
+        try:
+            ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(audio_pipe_handle)
+        except Exception:
+            pass
+    audio_pipe_handle = None
+
     if current_mode == "STOPPED":
-        _queue_ui(
-            lambda: mode_label.config(text="MODE: STOPPED")
-        )
+        _queue_ui(lambda: mode_label.config(text="MODE: STOPPED"))
 
 
 def background_check():
@@ -1155,7 +1322,8 @@ def _shutdown_processes_no_ui():
     for process in (
         screen_process,
         camera_process,
-        audio_process
+        audio_process,
+        audio_boost_process
     ):
         if process is None or id(process) in seen:
             continue
@@ -1168,6 +1336,13 @@ def _shutdown_processes_no_ui():
         try:
             if process.poll() is None:
                 process.terminate()
+        except Exception:
+            pass
+
+    # Release a relay blocked on the named audio pipe.
+    if audio_pipe_handle is not None:
+        try:
+            ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(audio_pipe_handle)
         except Exception:
             pass
 
@@ -1498,7 +1673,7 @@ stop_button.grid(
 
 audio_on_button = tk.Button(
     buttons,
-    text="CLEAR AUDIO",
+    text="CLEAR + LOUD AUDIO",
     command=lambda: _run_locked_async(audio_action_lock, start_audio),
     **button_style
 )
