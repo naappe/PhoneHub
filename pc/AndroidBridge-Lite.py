@@ -1217,6 +1217,20 @@ def background_check():
     if checking:
         return
 
+    # Do not send status ADB commands while scrcpy is starting or streaming.
+    # The verified manual camera path has no competing ADB polling. Keeping the
+    # GUI status checker quiet here makes AndroidBridge use the same transport
+    # conditions as that known-working command.
+    for media_process in (screen_process, camera_process, audio_process):
+        try:
+            if media_process is not None and media_process.poll() is None:
+                return
+        except Exception:
+            pass
+
+    if video_action_lock.locked() or audio_action_lock.locked():
+        return
+
     checking = True
 
     try:
