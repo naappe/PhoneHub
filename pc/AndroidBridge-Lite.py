@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-audio-open-stable-v1"
+STABLE_PROFILE = "2026-10-06-audio-watchdog-voice-communication-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -1080,10 +1080,10 @@ def start_audio():
                 "-s", device,
                 "--no-video",
                 "--no-audio-playback",
-                "--audio-source=mic-voice-recognition",
+                "--audio-source=mic-voice-communication",
                 "--audio-codec=opus",
                 "--audio-bit-rate=128K",
-                "--audio-buffer=40",
+                "--audio-buffer=20",
                 "--record=" + pipe_name,
                 "--record-format=opus"
             ],
@@ -1100,26 +1100,55 @@ def start_audio():
         )
 
         def confirm_audio_started(proc, gain):
-            time.sleep(2.0)
+            # A remote scrcpy launch may spend several seconds establishing the
+            # second stream over Tailscale. Do not call it "ON" until BOTH the
+            # scrcpy microphone process and FFplay relay are alive. Also never
+            # leave the UI in an endless STARTING state.
+            deadline = time.monotonic() + 25.0
+
+            while time.monotonic() < deadline:
+                try:
+                    if proc.poll() is not None:
+                        break
+
+                    player = audio_boost_process
+                    if player is not None and player.poll() is None:
+                        _queue_ui(
+                            lambda: mode_label.config(
+                                text=f"MODE: AUDIO ON | VOICE COMM + WIND CUT | +{gain} dB"
+                            )
+                        )
+                        return
+                except Exception:
+                    break
+
+                time.sleep(0.25)
+
+            # Startup did not complete. Stop only this local audio attempt.
+            # Never disconnect/reset ADB and never disturb Screen/Camera.
             try:
                 if proc.poll() is None:
-                    _queue_ui(
-                        lambda: mode_label.config(
-                            text=f"MODE: AUDIO ON | WIND CUT + VOICE | +{gain} dB"
-                        )
-                    )
-                else:
-                    _queue_ui(
-                        lambda: messagebox.showerror(
-                            "AndroidBridge Audio",
-                            "The microphone stream stopped during startup."
-                        )
-                    )
-                    _queue_ui(
-                        lambda: mode_label.config(text="MODE: AUDIO START FAILED")
-                    )
+                    proc.terminate()
             except Exception:
                 pass
+
+            handle = audio_pipe_handle
+            if handle is not None:
+                try:
+                    ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(handle)
+                except Exception:
+                    pass
+
+            _queue_ui(
+                lambda: mode_label.config(text="MODE: AUDIO START FAILED - TRY AGAIN")
+            )
+            _queue_ui(
+                lambda: messagebox.showerror(
+                    "AndroidBridge Audio",
+                    "Audio did not finish opening within 25 seconds.\n\n"
+                    "Screen/Camera and the ADB connection were left untouched."
+                )
+            )
 
         threading.Thread(
             target=confirm_audio_started,
