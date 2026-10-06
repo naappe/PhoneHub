@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-serialized-scrcpy-audio-v1"
+STABLE_PROFILE = "2026-10-06-audio-upload-observer-v2"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -892,8 +892,8 @@ def _scrcpy_server_push_count():
     """Count active scrcpy-server adb pushes without issuing any adb command."""
     ps = (
         "$p = Get-CimInstance Win32_Process -Filter \"Name='adb.exe'\" "
-        "| Where-Object { $_.CommandLine -match ' push ' "
-        "-and $_.CommandLine -match 'scrcpy-server' }; "
+        "| Where-Object { $_.CommandLine -match '(?i)scrcpy-server' "
+        "-and $_.CommandLine -match '(?i)(^|[ \"''])push([ \"'']|$)' }; "
         "@($p).Count"
     )
     try:
@@ -911,26 +911,28 @@ def _scrcpy_server_push_count():
     return 0
 
 
-def _wait_for_scrcpy_uploads_to_finish(max_wait=120):
-    """Serialize remote scrcpy starts so two 734 KB server pushes never compete."""
-    deadline = time.monotonic() + max_wait
-    last_count = None
+def _wait_for_scrcpy_uploads_to_finish(max_wait=600):
+    """Serialize remote scrcpy starts so two server pushes never compete."""
+    started = time.monotonic()
+    deadline = started + max_wait
+    last_text_second = -1
 
     while time.monotonic() < deadline:
         count = _scrcpy_server_push_count()
         if count <= 0:
             return True
 
-        if count != last_count:
-            last_count = count
+        elapsed = int(time.monotonic() - started)
+        if elapsed != last_text_second:
+            last_text_second = elapsed
             _queue_ui(
-                lambda n=count: _set_audio_monitor_status(
-                    f"WAITING FOR {n} SCRCPY SERVER UPLOAD(S)...", ACCENT
+                lambda n=count, s=elapsed: _set_audio_monitor_status(
+                    f"SERVER UPLOAD IN PROGRESS • {s}s • {n} ACTIVE", ACCENT
                 )
             )
             _queue_ui(
-                lambda n=count: mode_label.config(
-                    text=f"MODE: AUDIO WAITING FOR {n} SERVER UPLOAD(S)"
+                lambda n=count, s=elapsed: mode_label.config(
+                    text=f"MODE: AUDIO SERVER UPLOAD | {s}s | {n} ACTIVE"
                 )
             )
 
@@ -1099,7 +1101,7 @@ def start_audio():
     # scrcpy v4.1 pushes its ~734 KB server on every client start.
     # Over remote ADB, starting audio while Screen/Camera is still pushing the
     # same file creates competing uploads. Wait for that upload to finish first.
-    if not _wait_for_scrcpy_uploads_to_finish(120):
+    if not _wait_for_scrcpy_uploads_to_finish(600):
         _queue_ui(
             lambda: _set_audio_monitor_status(
                 "AUDIO WAITING TIMED OUT - TRY AGAIN", DANGER
@@ -1179,9 +1181,11 @@ def start_audio():
             # 8-second watchdog killed scrcpy before its server upload could
             # complete. Give the upload its own phase, then allow 20 seconds
             # for the microphone/FFplay pipe to become live.
-            overall_deadline = time.monotonic() + 120.0
+            overall_deadline = time.monotonic() + 600.0
             post_upload_deadline = None
             saw_upload = False
+            upload_started = None
+            last_upload_second = -1
 
             while time.monotonic() < overall_deadline:
                 try:
@@ -1206,11 +1210,21 @@ def start_audio():
                     if pushes > 0:
                         saw_upload = True
                         post_upload_deadline = None
-                        _queue_ui(
-                            lambda n=pushes: _set_audio_monitor_status(
-                                f"STARTING MICROPHONE • SERVER UPLOAD {n}", ACCENT
+                        if upload_started is None:
+                            upload_started = time.monotonic()
+                        upload_second = int(time.monotonic() - upload_started)
+                        if upload_second != last_upload_second:
+                            last_upload_second = upload_second
+                            _queue_ui(
+                                lambda n=pushes, s=upload_second: _set_audio_monitor_status(
+                                    f"MIC SERVER UPLOAD • {s}s • {n} ACTIVE", ACCENT
+                                )
                             )
-                        )
+                            _queue_ui(
+                                lambda n=pushes, s=upload_second: mode_label.config(
+                                    text=f"MODE: AUDIO SERVER UPLOAD | {s}s | {n} ACTIVE"
+                                )
+                            )
                     elif saw_upload:
                         if post_upload_deadline is None:
                             post_upload_deadline = time.monotonic() + 20.0
@@ -1250,7 +1264,7 @@ def start_audio():
             # Do not repeat the fault we just diagnosed: a killed scrcpy
             # may leave its adb push finishing in the background. Wait until it
             # is gone before the direct fallback starts.
-            if not _wait_for_scrcpy_uploads_to_finish(60):
+            if not _wait_for_scrcpy_uploads_to_finish(180):
                 _queue_ui(
                     lambda: _set_audio_monitor_status(
                         "AUDIO START FAILED • SERVER UPLOAD BUSY", DANGER
