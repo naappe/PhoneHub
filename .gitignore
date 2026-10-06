@@ -10,3 +10,8 @@ build/
 *.spec
 .DS_Store
 Thumbs.db
+*.log
+location.json
+location_history.jsonl
+pc/New Text Document.txt
+pc/AndroidBridge-AdbProxy*.exe
