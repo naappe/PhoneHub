@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-audio-upload-observer-v2"
+STABLE_PROFILE = "2026-10-06-stale-scrcpy-push-cleanup-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -696,6 +696,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         if old_process is not None:
             try:
                 if old_process.poll() is None:
+                    _terminate_scrcpy_push_children(old_process.pid)
                     old_process.terminate()
                     try:
                         old_process.wait(timeout=2)
@@ -715,6 +716,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         if old_process is not None:
             try:
                 if old_process.poll() is None:
+                    _terminate_scrcpy_push_children(old_process.pid)
                     old_process.terminate()
                     try:
                         old_process.wait(timeout=2)
@@ -911,6 +913,76 @@ def _scrcpy_server_push_count():
     return 0
 
 
+def _terminate_scrcpy_push_children(parent_pid):
+    """Stop only adb push children of one scrcpy client; never the ADB server."""
+    try:
+        pid = int(parent_pid)
+    except Exception:
+        return 0
+
+    ps = (
+        "$p = Get-CimInstance Win32_Process -Filter \"Name='adb.exe'\" "
+        f"| Where-Object {{ $_.ParentProcessId -eq {pid} "
+        "-and $_.CommandLine -match '(?i)scrcpy-server' "
+        "-and $_.CommandLine -match '(?i)(^|[ \"''])push([ \"'']|$)' }}; "
+        "$n=@($p).Count; "
+        "$p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; "
+        "$n"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=HIDE
+        )
+        if result.returncode == 0:
+            return int((result.stdout or "0").strip().splitlines()[-1])
+    except Exception:
+        pass
+    return 0
+
+
+def _clear_stale_scrcpy_startups_for_phone():
+    """Clear abandoned scrcpy startup clients for this phone only.
+
+    This never stops adb.exe server (the '-L tcp:5037 fork-server' process),
+    never runs adb disconnect/kill-server, and never touches a live scrcpy
+    stream that has already finished its server push.
+    """
+    serial = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
+    safe_serial = serial.replace("'", "''")
+    ps = (
+        "$all = @(Get-CimInstance Win32_Process); "
+        "$push = @($all | Where-Object { $_.Name -eq 'adb.exe' "
+        f"-and $_.CommandLine -match '{safe_serial}' "
+        "-and $_.CommandLine -match '(?i)scrcpy-server' "
+        "-and $_.CommandLine -match '(?i)(^|[ \"''])push([ \"'']|$)' }); "
+        "$parents = @($push | Select-Object -ExpandProperty ParentProcessId -Unique); "
+        "$n = $push.Count; "
+        "$push | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; "
+        "foreach ($ppid in $parents) { "
+        "  $sp = $all | Where-Object { $_.ProcessId -eq $ppid -and $_.Name -eq 'scrcpy.exe' }; "
+        "  if ($sp) { Stop-Process -Id $ppid -Force -ErrorAction SilentlyContinue } "
+        "}; "
+        "$n"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True,
+            text=True,
+            timeout=6,
+            creationflags=HIDE
+        )
+        if result.returncode == 0:
+            return int((result.stdout or "0").strip().splitlines()[-1])
+    except Exception:
+        pass
+    return 0
+
+
 def _wait_for_scrcpy_uploads_to_finish(max_wait=600):
     """Serialize remote scrcpy starts so two server pushes never compete."""
     started = time.monotonic()
@@ -1098,9 +1170,31 @@ def start_audio():
         except Exception:
             pass
 
-    # scrcpy v4.1 pushes its ~734 KB server on every client start.
-    # Over remote ADB, starting audio while Screen/Camera is still pushing the
-    # same file creates competing uploads. Wait for that upload to finish first.
+    # If this app owns no live Screen/Camera process, any scrcpy-server
+    # pushes already targeting this phone are leftovers from an older launch.
+    # Remove only those startup clients before creating the new audio session.
+    owned_video_alive = False
+    for p in (screen_process, camera_process):
+        try:
+            if p is not None and p.poll() is None:
+                owned_video_alive = True
+                break
+        except Exception:
+            pass
+
+    existing_pushes = _scrcpy_server_push_count()
+    if existing_pushes > 0 and not owned_video_alive:
+        _queue_ui(
+            lambda n=existing_pushes: _set_audio_monitor_status(
+                f"CLEARING {n} STALE SERVER UPLOAD(S)...", ACCENT
+            )
+        )
+        cleared = _clear_stale_scrcpy_startups_for_phone()
+        if cleared:
+            time.sleep(0.8)
+
+    # If Screen/Camera is genuinely starting in this same app, do not kill it;
+    # serialize audio behind its one legitimate server upload.
     if not _wait_for_scrcpy_uploads_to_finish(600):
         _queue_ui(
             lambda: _set_audio_monitor_status(
@@ -1355,6 +1449,7 @@ def stop_audio():
     if audio_process is not None:
         try:
             if audio_process.poll() is None:
+                _terminate_scrcpy_push_children(audio_process.pid)
                 audio_process.terminate()
                 try:
                     audio_process.wait(timeout=2)
@@ -1581,6 +1676,10 @@ def _shutdown_processes_no_ui():
     for process in processes:
         try:
             if process.poll() is None:
+                try:
+                    _terminate_scrcpy_push_children(process.pid)
+                except Exception:
+                    pass
                 process.terminate()
         except Exception:
             pass
