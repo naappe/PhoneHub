@@ -24,17 +24,20 @@ pc/
 
 Screen, Back Camera and Front Camera use stock `scrcpy` + stock `adb` directly.
 
-Audio is deliberately separate from video and uses the restored known-good low-latency profile:
+Audio is deliberately separate from video. The current locked profile restores loud speech while removing the old lag-heavy FFT/dynamic-normalizer stages:
 
 ```text
-Samsung microphone
-  -> scrcpy audio-only (mic-voice-recognition)
-  -> Opus 96K
-  -> 20 ms audio buffer
-  -> direct PC playback
+Samsung voice-recognition microphone
+  -> scrcpy audio-only / Opus 128K / 20 ms buffer
+  -> Windows named pipe
+  -> lightweight FFplay DSP
+  -> speech-band filter + presence EQ
+  -> fixed +12 dB gain
+  -> peak limiter
+  -> PC speaker/headphones
 ```
 
-There is no FFplay relay, named pipe or additional DSP in the normal audio path. Those extra stages were removed because they added buffering/latency.
+Do not add `afftdn` or `dynaudnorm` to the normal audio path; those older processing stages increased latency.
 
 The custom scrcpy server is reserved for Night Vision Boost.
 
@@ -47,6 +50,6 @@ The custom scrcpy server is reserved for Night Vision Boost.
 
 - Do not add alternate AndroidBridge launchers or numbered copies.
 - Do not add ADB proxy/chunk-transfer helpers to the normal media path.
-- Keep audio as its own direct audio-only scrcpy process; do not merge it into Screen/Camera playback or add relay/DSP buffering.
+- Keep audio separate from Screen/Camera. Preserve the 20 ms capture buffer and lightweight fixed-gain DSP; do not restore the lag-heavy FFT/dynamic-normalizer chain.
 - Do not run `adb disconnect` or `adb kill-server` from AndroidBridge.
 - Keep generated logs, caches and local location-history files out of Git.
