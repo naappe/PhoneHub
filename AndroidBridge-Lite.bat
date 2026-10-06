@@ -10,9 +10,13 @@ if errorlevel 1 (
     echo [AndroidBridge] Up to date.
 )
 
-rem Self-heal the tracked application file. "git pull" alone does not remove
-rem local working-tree edits, which can leave an older experimental build active.
-git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" >nul 2>&1
+rem Self-heal the tracked runtime set. "git pull" alone does not remove
+rem local working-tree edits, which can leave files from different builds mixed.
+git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" "pc\AndroidBridge-PhoneData.py" "pc\scrcpy-server-v4.1-llb" "pc\scrcpy-server-v4.1-llb.sha256" >nul 2>&1
+
+rem Old builds wrote scrcpy logs that no longer describe the active runtime.
+rem Remove them so stale proxy/chunk errors cannot be mistaken for current errors.
+del /q "pc\scrcpy-audio.log" "pc\scrcpy-camera.log" "pc\scrcpy-screen.log" >nul 2>&1
 
 rem Never let an inherited scrcpy ADB override select the retired proxy.
 set "ADB="
