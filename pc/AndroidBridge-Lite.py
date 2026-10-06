@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-stale-scrcpy-push-cleanup-v1"
+STABLE_PROFILE = "2026-10-06-unified-media-startup-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -49,6 +49,7 @@ checking = False
 # dispatch those operations to workers instead of blocking the Tk event loop.
 video_action_lock = threading.Lock()
 audio_action_lock = threading.Lock()
+scrcpy_start_lock = threading.Lock()
 ui_queue = queue.Queue()
 
 def _queue_ui(callback):
@@ -467,6 +468,10 @@ def stop_scrcpy():
 
         try:
             if process.poll() is None:
+                try:
+                    _terminate_scrcpy_push_children(process.pid)
+                except Exception:
+                    pass
                 process.terminate()
 
                 try:
@@ -682,51 +687,28 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
     global current_mode
     global active_device
 
-    # MEDIA ROUTE:
-    # Use the already established route when available. Otherwise launch
-    # directly against the configured Samsung endpoint. scrcpy is authoritative
-    # for media startup; do not disconnect/reset ADB here.
     device = active_device or f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
     active_device = device
 
+    old_process = screen_process if kind == "screen" else camera_process
+
+    if old_process is not None:
+        try:
+            if old_process.poll() is None:
+                _terminate_scrcpy_push_children(old_process.pid)
+                old_process.terminate()
+                try:
+                    old_process.wait(timeout=2)
+                except Exception:
+                    old_process.kill()
+        except Exception:
+            pass
+
     if kind == "screen":
-
-        old_process = screen_process
-
-        if old_process is not None:
-            try:
-                if old_process.poll() is None:
-                    _terminate_scrcpy_push_children(old_process.pid)
-                    old_process.terminate()
-                    try:
-                        old_process.wait(timeout=2)
-                    except:
-                        old_process.kill()
-            except:
-                pass
-
         screen_process = None
-
         args = scrcpy_screen_args(device)
-
     else:
-
-        old_process = camera_process
-
-        if old_process is not None:
-            try:
-                if old_process.poll() is None:
-                    _terminate_scrcpy_push_children(old_process.pid)
-                    old_process.terminate()
-                    try:
-                        old_process.wait(timeout=2)
-                    except:
-                        old_process.kill()
-            except:
-                pass
-
         camera_process = None
-
         args = scrcpy_camera_args(
             device,
             facing,
@@ -734,96 +716,114 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
             low_light=low_light
         )
 
-    time.sleep(0.3)
+    _queue_ui(
+        lambda m=mode: mode_label.config(text=f"MODE: {m} STARTING...")
+    )
 
-    try:
-
-        scrcpy_env = os.environ.copy()
-        scrcpy_env.pop("SCRCPY_SERVER_PATH", None)
-
-        stderr_target = subprocess.DEVNULL
-
-        if low_light:
+    # scrcpy supports several simultaneous clients via separate SCIDs, but all
+    # clients first push the same scrcpy-server.jar. Serialize only that upload
+    # phase so Screen, Camera and Audio cannot overwrite it concurrently.
+    with scrcpy_start_lock:
+        if not _wait_for_scrcpy_uploads_to_finish(600):
             _queue_ui(
-                lambda: nv_diag_label.config(
-                    text="NV SENSOR: reading Samsung camera capabilities..."
+                lambda m=mode: mode_label.config(
+                    text=f"MODE: {m} START FAILED - SERVER BUSY"
                 )
             )
+            return
 
-            # Only NIGHT VISION BOOST uses the custom scrcpy v4.1 server.
-            # Normal SCREEN/BACK/FRONT profiles remain on the stock server.
-            custom_server = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "scrcpy-server-v4.1-llb"
+        try:
+            scrcpy_env = os.environ.copy()
+            scrcpy_env.pop("SCRCPY_SERVER_PATH", None)
+
+            if low_light:
+                _queue_ui(
+                    lambda: nv_diag_label.config(
+                        text="NV SENSOR: reading Samsung camera capabilities..."
+                    )
+                )
+
+                custom_server = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "scrcpy-server-v4.1-llb"
+                )
+
+                if not os.path.isfile(custom_server):
+                    _queue_ui(
+                        lambda: messagebox.showerror(
+                            "AndroidBridge Night Vision",
+                            "Low Light Boost engine is missing.\n\n"
+                            "Run git pull, then restart AndroidBridge."
+                        )
+                    )
+                    return
+
+                scrcpy_env["SCRCPY_SERVER_PATH"] = custom_server
+
+            process = subprocess.Popen(
+                ["scrcpy", "-s", device] + args,
+                stdout=subprocess.PIPE if low_light else subprocess.DEVNULL,
+                stderr=subprocess.STDOUT if low_light else subprocess.DEVNULL,
+                text=bool(low_light),
+                errors="replace" if low_light else None,
+                creationflags=HIDE,
+                env=scrcpy_env
             )
 
-            if not os.path.isfile(custom_server):
+            if kind == "screen":
+                screen_process = process
+            else:
+                camera_process = process
+
+            current_process = process
+            current_mode = mode
+            active_device = device
+
+            if low_light and process.stdout is not None:
+                threading.Thread(
+                    target=_watch_nightvision_log,
+                    args=(process,),
+                    daemon=True
+                ).start()
+
+            if not _wait_for_this_scrcpy_start(process, mode, 600):
+                try:
+                    if process.poll() is None:
+                        _terminate_scrcpy_push_children(process.pid)
+                        process.terminate()
+                except Exception:
+                    pass
+
+                if kind == "screen":
+                    screen_process = None
+                else:
+                    camera_process = None
+
                 _queue_ui(
-                    lambda: messagebox.showerror(
-                        "AndroidBridge Night Vision",
-                        "Low Light Boost engine is missing.\n\n"
-                        "Run git pull, then restart AndroidBridge."
+                    lambda m=mode: mode_label.config(
+                        text=f"MODE: {m} START FAILED"
                     )
                 )
                 return
 
-            scrcpy_env["SCRCPY_SERVER_PATH"] = custom_server
-            stderr_target = subprocess.PIPE
-
-        # Use stock scrcpy directly. This is intentionally the same path as
-        # the verified manual PowerShell command. No ADB proxy, no chunker,
-        # no persistent-server interception.
-        process = subprocess.Popen(
-            [
-                "scrcpy",
-                "-s",
-                device
-            ] + args,
-            stdout=subprocess.PIPE if low_light else subprocess.DEVNULL,
-            stderr=subprocess.STDOUT if low_light else subprocess.DEVNULL,
-            text=bool(low_light),
-            errors="replace" if low_light else None,
-            creationflags=HIDE,
-            env=scrcpy_env
-        )
-
-        if low_light and process.stdout is not None:
-            threading.Thread(
-                target=_watch_nightvision_log,
-                args=(process,),
-                daemon=True
-            ).start()
-
-        if kind == "screen":
-            screen_process = process
-        else:
-            camera_process = process
-
-        current_process = process
-        current_mode = mode
-        active_device = device
-
-        route_text = connection_type(device)
-        _queue_ui(
-            lambda m=mode, r=route_text, d=device: (
-                mode_label.config(text="MODE: " + m),
-                route_label.config(text=r),
-                device_label.config(text=d)
+            route_text = connection_type(device)
+            _queue_ui(
+                lambda m=mode, r=route_text, d=device: (
+                    mode_label.config(text="MODE: " + m),
+                    route_label.config(text=r),
+                    device_label.config(text=d)
+                )
             )
-        )
 
-    except Exception as e:
-
-        current_mode = "ERROR"
-
-        error_text = str(e)
-        _queue_ui(
-            lambda msg=error_text: messagebox.showerror(
-                "AndroidBridge Lite",
-                msg
+        except Exception as e:
+            current_mode = "ERROR"
+            error_text = str(e)
+            _queue_ui(
+                lambda msg=error_text: messagebox.showerror(
+                    "AndroidBridge Lite",
+                    msg
+                )
             )
-        )
-
 
 def screen():
     _run_locked_async(
@@ -911,6 +911,79 @@ def _scrcpy_server_push_count():
     except Exception:
         pass
     return 0
+
+
+def _scrcpy_push_count_for_parent(parent_pid):
+    """Count only scrcpy-server pushes owned by one scrcpy.exe process."""
+    try:
+        pid = int(parent_pid)
+    except Exception:
+        return 0
+
+    ps = (
+        "$p = Get-CimInstance Win32_Process -Filter \"Name='adb.exe'\" "
+        f"| Where-Object {{ $_.ParentProcessId -eq {pid} "
+        "-and $_.CommandLine -match '(?i)scrcpy-server' "
+        "-and $_.CommandLine -match '(?i)(^|[ \"''])push([ \"'']|$)' }}; "
+        "@($p).Count"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            creationflags=HIDE
+        )
+        if result.returncode == 0:
+            return int((result.stdout or "0").strip().splitlines()[-1])
+    except Exception:
+        pass
+    return 0
+
+
+def _wait_for_this_scrcpy_start(process, label, max_wait=600):
+    """Wait until this client's server upload is finished."""
+    started = time.monotonic()
+    deadline = started + max_wait
+    saw_push = False
+    quiet_since = None
+    last_second = -1
+
+    while time.monotonic() < deadline:
+        try:
+            if process.poll() is not None:
+                return False
+        except Exception:
+            return False
+
+        pushes = _scrcpy_push_count_for_parent(process.pid)
+        now = time.monotonic()
+
+        if pushes > 0:
+            saw_push = True
+            quiet_since = None
+            sec = int(now - started)
+            if sec != last_second:
+                last_second = sec
+                _queue_ui(
+                    lambda m=label, s=sec: mode_label.config(
+                        text=f"MODE: {m} STARTING | SERVER UPLOAD {s}s"
+                    )
+                )
+        else:
+            if saw_push:
+                return True
+
+            if quiet_since is None:
+                quiet_since = now
+            elif now - quiet_since >= 3.0:
+                # Fast/local pushes may finish between polls.
+                return True
+
+        time.sleep(0.25)
+
+    return False
 
 
 def _terminate_scrcpy_push_children(parent_pid):
