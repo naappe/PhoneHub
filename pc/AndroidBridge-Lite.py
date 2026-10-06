@@ -39,6 +39,23 @@ current_mode = "STOPPED"
 active_device = None
 checking = False
 
+# Tkinter must stay free to process paint/input events. Remote ADB, scrcpy
+# startup/shutdown and Tailscale checks can take seconds, so button handlers
+# dispatch those operations to workers instead of blocking the Tk event loop.
+video_action_lock = threading.Lock()
+audio_action_lock = threading.Lock()
+
+def _run_locked_async(lock, target, *args, **kwargs):
+    def worker():
+        if not lock.acquire(blocking=False):
+            return
+        try:
+            target(*args, **kwargs)
+        finally:
+            lock.release()
+
+    threading.Thread(target=worker, daemon=True).start()
+
 
 # Offline GPS sync: the Companion stores fixes locally with no Internet.
 # When Tailscale/network returns it sends queued JSON records to this port.
@@ -809,14 +826,18 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
 
 
 def screen():
-    launch(
+    _run_locked_async(
+        video_action_lock,
+        launch,
         "SCREEN",
         "screen"
     )
 
 
 def back_camera():
-    launch(
+    _run_locked_async(
+        video_action_lock,
+        launch,
         "BACK CAMERA",
         "camera",
         "back"
@@ -824,7 +845,9 @@ def back_camera():
 
 
 def front_camera():
-    launch(
+    _run_locked_async(
+        video_action_lock,
+        launch,
         "FRONT CAMERA",
         "camera",
         "front"
@@ -834,7 +857,9 @@ def front_camera():
 def low_light_test():
     # No torch. This measures what the rear camera can obtain from available
     # visible light using Camera2 automatic exposure behavior.
-    launch(
+    _run_locked_async(
+        video_action_lock,
+        launch,
         "NIGHT VISION BOOST",
         "camera",
         "back",
@@ -849,7 +874,10 @@ def open_phone_data(mode):
         subprocess.Popen(
             [
                 "python",
-                r"C:\AndroidBridge-Lite\AndroidBridge-PhoneData.py",
+                os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "AndroidBridge-PhoneData.py"
+                ),
                 mode
             ],
             creationflags=HIDE
@@ -1161,16 +1189,22 @@ def background_check():
         if not device:
             device = get_device(True)
 
+        # Tailscale status may itself take several seconds. Resolve it here
+        # in the worker, never inside display_status() on the Tk thread.
+        ts_state = None
+        if not device:
+            ts_state = tailscale_phone_state()
+
         root.after(
             0,
-            lambda d=device: display_status(d)
+            lambda d=device, ts=ts_state: display_status(d, ts)
         )
 
     finally:
         checking = False
 
 
-def display_status(device):
+def display_status(device, ts_state=None):
 
     if device:
 
@@ -1188,7 +1222,8 @@ def display_status(device):
 
     else:
 
-        ts_state = tailscale_phone_state()
+        if ts_state is None:
+            ts_state = "TAILSCALE STATUS UNKNOWN"
 
         if ts_state == "TAILSCALE OFFLINE":
 
@@ -1545,7 +1580,7 @@ front_button.grid(
 stop_button = tk.Button(
     buttons,
     text="STOP",
-    command=stop_scrcpy,
+    command=lambda: _run_locked_async(video_action_lock, stop_scrcpy),
     width=21,
     height=2,
     font=("Segoe UI", 10, "bold"),
@@ -1574,7 +1609,7 @@ stop_button.grid(
 audio_on_button = tk.Button(
     buttons,
     text="DISTANT SPEECH MAX",
-    command=start_audio,
+    command=lambda: _run_locked_async(audio_action_lock, start_audio),
     **button_style
 )
 
@@ -1588,7 +1623,7 @@ audio_on_button.grid(
 audio_off_button = tk.Button(
     buttons,
     text="AUDIO OFF",
-    command=stop_audio,
+    command=lambda: _run_locked_async(audio_action_lock, stop_audio),
     width=21,
     height=2,
     font=("Segoe UI", 10, "bold"),
