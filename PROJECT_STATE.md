@@ -119,3 +119,10 @@ PC launcher successfully pulled and verified GitHub revision 89f5a71. The user t
 Observed startup latency: approximately 60 seconds before the scrcpy screen window becomes usable. Functionality is restored, but startup latency remains an optimization target. Do not trade the now-working remote media path for an unverified fast-start mechanism.
 
 Next verification sequence: STOP -> BACK CAMERA -> STOP -> FRONT CAMERA -> STOP -> Audio.
+
+
+## Verification update: Back Camera
+
+The user tested BACK CAMERA after the unified media repair. Back Camera opens and shows live video successfully.
+
+Observed startup latency is approximately 60 seconds, matching the current remote Screen startup behavior. This confirms functionality but not acceptable startup performance. Preserve the working remote ADB/Tailscale path; optimize startup only after Front Camera and Audio are re-verified.
