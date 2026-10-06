@@ -22,9 +22,12 @@ rem Never let an inherited scrcpy ADB override select the retired proxy.
 set "ADB="
 set "ANDROIDBRIDGE_REAL_ADB="
 
-rem Remove all retired AndroidBridge ADB helper executables. Media now uses the
-rem same stock scrcpy + stock adb path as the verified manual command.
-del /q "%~dp0pc\AndroidBridge-AdbProxy.exe" "%~dp0pc\AndroidBridge-AdbProxyV2.exe" >nul 2>&1
+rem Remove known obsolete/generated files. Never remove user data/history.
+del /q "%~dp0pc\AndroidBridge-AdbProxy.exe" "%~dp0pc\AndroidBridge-AdbProxyV2.exe" "%~dp0pc\pc\AndroidBridge-AdbProxyV2.cs" >nul 2>&1
+del /q "%~dp0pc\New Text Document.txt" >nul 2>&1
+del /q "%~dp0AndroidBridge-Lite.py" "%~dp0AndroidBridge-PhoneData.py" >nul 2>&1
+if exist "%~dp0__pycache__" rmdir /s /q "%~dp0__pycache__"
+if exist "%~dp0pc\__pycache__" rmdir /s /q "%~dp0pc\__pycache__"
 
 where python >nul 2>&1
 if errorlevel 1 (
