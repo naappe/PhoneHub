@@ -126,3 +126,21 @@ Next verification sequence: STOP -> BACK CAMERA -> STOP -> FRONT CAMERA -> STOP 
 The user tested BACK CAMERA after the unified media repair. Back Camera opens and shows live video successfully.
 
 Observed startup latency is approximately 60 seconds, matching the current remote Screen startup behavior. This confirms functionality but not acceptable startup performance. Preserve the working remote ADB/Tailscale path; optimize startup only after Front Camera and Audio are re-verified.
+
+
+## 2026-10-06 compact media engine
+
+Screen and Back Camera were both verified working after the unified startup repair, but each required about 60 seconds to open. Diagnostics and upstream scrcpy source show that stock scrcpy uploads its device-side server on every client start.
+
+AndroidBridge now uses the official stock scrcpy v3.3.4 Windows client for normal Screen, Back Camera, Front Camera and enhanced Audio. This is not an ADB proxy and does not intercept or modify ADB commands. The reason is transfer size: the official v3.3.4 device server is 90,980 bytes, while v4.1 is about 733.7 KB. v3.3.4 also contains Android 16 fixes.
+
+The launcher downloads the official v3.3.4 Windows release once, verifies SHA-256 d8a155b7c180b7ca4cdadd40712b8750b63f3aab48cb5b8a2a39ac2d0d4c5d38, and stores it under tools/runtime/ (gitignored). Python sets scrcpy's documented ADB environment variable to the existing adb.exe from PATH so the compact client reuses the established ADB server.
+
+Reliability policy:
+- normal media prefers compact stock v3.3.4;
+- if the compact Screen/Camera client exits during startup, AndroidBridge retries with the installed standard scrcpy client;
+- direct Audio fallback stays on the standard client;
+- NIGHT CAMERA and Low Light Boost remain on v4.1 because torch/low-light work depends on v4.x/custom v4.1 behavior;
+- no adb disconnect or adb kill-server is introduced.
+
+This fast-start path is committed but must be measured on the PC after the next launcher pull.
