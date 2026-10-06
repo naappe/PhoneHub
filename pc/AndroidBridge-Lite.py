@@ -36,6 +36,7 @@ camera_process = None
 audio_process = None
 audio_boost_process = None
 audio_pipe_handle = None
+audio_gain_db = 14
 current_mode = "STOPPED"
 active_device = None
 checking = False
@@ -895,8 +896,8 @@ def open_phone_data(mode):
 # ============================================================
 
 
-def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
-    """Low-latency speech relay: clarity EQ + fixed gain + peak protection."""
+def _audio_boost_relay(pipe_name, ffplay_path, ready_event, gain_db):
+    """Low-latency speech relay: wind cut + voice EQ + adjustable gain."""
     global audio_boost_process
     global audio_pipe_handle
 
@@ -958,6 +959,16 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
         # Keep only low-delay filters. The older afftdn+dynaudnorm chain was
         # powerful but accumulated latency. This retains the useful speech
         # band, presence lift and real +12 dB gain with peak protection.
+        filter_chain = (
+            "highpass=f=180:p=2,"
+            "lowpass=f=6800:p=2,"
+            "equalizer=f=700:t=q:w=1:g=2,"
+            "equalizer=f=2500:t=q:w=1:g=5,"
+            "equalizer=f=4000:t=q:w=1:g=3,"
+            f"volume={int(gain_db)}dB,"
+            "alimiter=limit=0.95:level=0:attack=5:release=50"
+        )
+
         player = subprocess.Popen(
             [
                 ffplay_path,
@@ -968,18 +979,7 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
                 "-flags", "low_delay",
                 "-probesize", "32",
                 "-analyzeduration", "0",
-                "-af",
-                # Wind energy was reaching the limiter first and pushing speech
-                # down. Remove rumble before gain, then restore speech presence.
-                # These are all low-delay IIR/fixed-gain stages: no FFT denoise,
-                # gate or dynamic normalizer to add lag or swallow quiet speech.
-                "highpass=f=180:p=2,"
-                "lowpass=f=6800:p=2,"
-                "equalizer=f=700:t=q:w=1:g=2,"
-                "equalizer=f=2500:t=q:w=1:g=5,"
-                "equalizer=f=4000:t=q:w=1:g=3,"
-                "volume=14dB,"
-                "alimiter=limit=0.95:level=0:attack=5:release=50",
+                "-af", filter_chain,
                 "-i", "pipe:0"
             ],
             stdin=subprocess.PIPE,
@@ -1055,9 +1055,11 @@ def start_audio():
     pipe_name = r"\\.\pipe\AndroidBridgeAudio-" + str(os.getpid()) + "-" + str(time.time_ns())
     ready_event = threading.Event()
 
+    gain_db = int(audio_gain_db)
+
     threading.Thread(
         target=_audio_boost_relay,
-        args=(pipe_name, ffplay_path, ready_event),
+        args=(pipe_name, ffplay_path, ready_event, gain_db),
         daemon=True
     ).start()
 
@@ -1095,7 +1097,7 @@ def start_audio():
 
         _queue_ui(
             lambda: mode_label.config(
-                text="MODE: WIND CUT + VOICE BOOST - LOW LATENCY"
+                text=f"MODE: WIND CUT + VOICE | BOOST +{gain_db} dB"
             )
         )
 
@@ -1395,6 +1397,16 @@ def close_app():
         pass
 
 
+def set_audio_gain(value):
+    """Set voice boost for the next audio start without touching video."""
+    global audio_gain_db
+    try:
+        audio_gain_db = max(0, min(20, int(float(value))))
+        audio_volume_value.config(text=f"+{audio_gain_db} dB")
+    except Exception:
+        pass
+
+
 # ============================================================
 # GUI - V1.4 POLISH
 # ============================================================
@@ -1413,7 +1425,7 @@ root = tk.Tk()
 
 root.title("AndroidBridge Lite")
 
-root.geometry("560x675")
+root.geometry("560x745")
 
 root.resizable(False, False)
 
@@ -1714,6 +1726,62 @@ audio_off_button.grid(
 )
 
 
+# Voice boost control. This changes only the audio gain profile; Screen,
+# Camera, Night Vision, Calls, Activity and Location controls are untouched.
+volume_frame = tk.Frame(
+    buttons,
+    bg=BG
+)
+
+volume_frame.grid(
+    row=3,
+    column=0,
+    columnspan=2,
+    sticky="ew",
+    padx=7,
+    pady=(2, 7)
+)
+
+tk.Label(
+    volume_frame,
+    text="SOUND VOLUME",
+    font=("Segoe UI", 9, "bold"),
+    bg=BG,
+    fg=MUTED
+).pack(side="left", padx=(0, 8))
+
+audio_volume_value = tk.Label(
+    volume_frame,
+    text=f"+{audio_gain_db} dB",
+    width=6,
+    font=("Segoe UI", 9, "bold"),
+    bg=BG,
+    fg=ACCENT
+)
+
+audio_volume_value.pack(side="right", padx=(8, 0))
+
+audio_volume_slider = tk.Scale(
+    volume_frame,
+    from_=0,
+    to=20,
+    orient="horizontal",
+    showvalue=False,
+    resolution=1,
+    length=270,
+    bg=BG,
+    fg=TEXT,
+    troughcolor=PANEL_2,
+    activebackground=ACCENT,
+    highlightthickness=0,
+    bd=0,
+    command=set_audio_gain
+)
+
+audio_volume_slider.set(audio_gain_db)
+audio_volume_slider.pack(side="left", fill="x", expand=True)
+
+
 low_light_button = tk.Button(
     buttons,
     text="NIGHT VISION BOOST",
@@ -1722,7 +1790,7 @@ low_light_button = tk.Button(
 )
 
 low_light_button.grid(
-    row=3,
+    row=4,
     column=0,
     columnspan=2,
     padx=7,
@@ -1738,7 +1806,7 @@ calls_button = tk.Button(
 )
 
 calls_button.grid(
-    row=4,
+    row=5,
     column=0,
     padx=7,
     pady=7
@@ -1753,7 +1821,7 @@ activity_button = tk.Button(
 )
 
 activity_button.grid(
-    row=4,
+    row=5,
     column=1,
     padx=7,
     pady=7
@@ -1777,7 +1845,7 @@ location_button = tk.Button(
 )
 
 location_button.grid(
-    row=5,
+    row=6,
     column=0,
     columnspan=2,
     padx=7,
