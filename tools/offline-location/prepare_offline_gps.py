@@ -344,6 +344,13 @@ public class OfflineLocationSetupActivity extends Activity {
 
         setContentView(layout);
         refreshStatus();
+
+        // One-time remote setup path. ADB may launch this exported Activity, but
+        // OfflineLocationService remains private. The Activity starts the private
+        // foreground service from inside the Companion process.
+        if (getIntent().getBooleanExtra("enable_offline_gps", false)) {
+            ensurePermissionAndStart();
+        }
     }
 
     private void refreshStatus() {
