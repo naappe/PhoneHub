@@ -1,21 +1,37 @@
-# PhoneHub 5
+# AndroidBridge Lite
 
-Clean Windows control center for the owner's Android phone.
+Canonical Windows controller for the owner's Samsung phone.
 
-## Finished MVP
-- Tailscale + ADB device connection
-- explicit connection state
-- model / Android / battery status
-- one exclusive scrcpy media-session owner
-- screen control
-- front/back camera
-- screenshots to Pictures/PhoneHub
-- read-only diagnostics
-- screen quality/FPS settings
-- clean shutdown and unit tests
+## Run
 
-Run `RUN_PHONEHUB.bat`.
+```powershell
+cd C:\AndroidBridge-Lite
+.\AndroidBridge-Lite.bat
+```
 
-Requirements: Python 3.12+, PySide6, adb and scrcpy available in Windows PATH.
+The launcher updates the repository, restores the canonical runtime files, removes known obsolete generated helpers/caches, verifies Python/ADB/scrcpy, and starts the app.
 
-The pre-rebuild project is preserved on branch `legacy-before-fresh-rebuild-2026-09-19`.
+## Active runtime
+
+```text
+AndroidBridge-Lite.bat
+pc/
+  AndroidBridge-Lite.py
+  AndroidBridge-PhoneData.py
+  scrcpy-server-v4.1-llb
+  scrcpy-server-v4.1-llb.sha256
+```
+
+Normal Screen, Back Camera, Front Camera and audio use stock `scrcpy` + stock `adb` directly. The custom scrcpy server is reserved for Night Vision Boost.
+
+## Preserved support tools
+
+- `PREPARE-OFFLINE-GPS.ps1` and `tools/offline-location/` — Companion offline GPS/history preparation.
+- `tools/nightvision/` and `.github/workflows/build-nightvision-server.yml` — Night Vision Boost server source/build.
+
+## Rules
+
+- Do not add alternate AndroidBridge launchers or numbered copies.
+- Do not add ADB proxy/chunk-transfer helpers to the normal media path.
+- Do not run `adb disconnect` or `adb kill-server` from AndroidBridge.
+- Keep generated logs, caches and local location-history files out of Git.
