@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-audio-watchdog-voice-communication-v1"
+STABLE_PROFILE = "2026-10-06-audio-no-adb-preflight-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -684,11 +684,18 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
     # The exact command below has already been verified manually against this
     # Samsung endpoint. scrcpy itself is the authority on whether the media
     # session can start.
-    device = choose_existing_device()
-    if not device:
-        device = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
-
+    # IMPORTANT: do not run "adb devices", get-state, connect or any other
+    # preflight here. When Screen/Camera is already streaming over remote ADB,
+    # a second status/preflight command can stall behind that transport. The
+    # media route is already proven, so reuse it directly just like launch().
+    device = active_device or f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
     active_device = device
+
+    _queue_ui(
+        lambda: mode_label.config(
+            text=f"MODE: AUDIO STARTING | {device}"
+        )
+    )
 
     if kind == "screen":
 
@@ -1080,7 +1087,7 @@ def start_audio():
                 "-s", device,
                 "--no-video",
                 "--no-audio-playback",
-                "--audio-source=mic-voice-communication",
+                "--audio-source=mic-voice-recognition",
                 "--audio-codec=opus",
                 "--audio-bit-rate=128K",
                 "--audio-buffer=20",
@@ -1124,8 +1131,10 @@ def start_audio():
 
                 time.sleep(0.25)
 
-            # Startup did not complete. Stop only this local audio attempt.
-            # Never disconnect/reset ADB and never disturb Screen/Camera.
+            # Enhanced path did not complete. Stop only this local attempt,
+            # then automatically fall back to scrcpy's direct microphone
+            # playback. This guarantees the AUDIO button still produces sound
+            # even if the Windows DSP pipe cannot initialize.
             try:
                 if proc.poll() is None:
                     proc.terminate()
@@ -1139,14 +1148,48 @@ def start_audio():
                 except Exception:
                     pass
 
+            try:
+                fallback_env = os.environ.copy()
+                fallback_env.pop("SCRCPY_SERVER_PATH", None)
+
+                fallback = subprocess.Popen(
+                    [
+                        "scrcpy",
+                        "-s", device,
+                        "--no-video",
+                        "--no-control",
+                        "--audio-source=mic-voice-recognition",
+                        "--audio-codec=opus",
+                        "--audio-bit-rate=128K",
+                        "--audio-buffer=40"
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=HIDE,
+                    env=fallback_env
+                )
+
+                globals()["audio_process"] = fallback
+                time.sleep(2.0)
+
+                if fallback.poll() is None:
+                    _queue_ui(
+                        lambda: mode_label.config(
+                            text="MODE: AUDIO ON - DIRECT FALLBACK"
+                        )
+                    )
+                    return
+            except Exception:
+                pass
+
             _queue_ui(
-                lambda: mode_label.config(text="MODE: AUDIO START FAILED - TRY AGAIN")
+                lambda: mode_label.config(text="MODE: AUDIO START FAILED")
             )
             _queue_ui(
                 lambda: messagebox.showerror(
                     "AndroidBridge Audio",
-                    "Audio did not finish opening within 25 seconds.\n\n"
-                    "Screen/Camera and the ADB connection were left untouched."
+                    "Enhanced and direct microphone audio both failed to start.\n\n"
+                    "Screen/Camera and ADB were left untouched."
                 )
             )
 
