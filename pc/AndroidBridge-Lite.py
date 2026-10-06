@@ -8,9 +8,6 @@ import time
 import os
 import threading
 import queue
-import shutil
-import ctypes
-from ctypes import wintypes
 
 # AndroidBridge uses the normal adb.exe from PATH. Never inherit an old
 # scrcpy ADB override from an earlier experimental build.
@@ -22,7 +19,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-direct-scrcpy-v1"
+STABLE_PROFILE = "2026-10-06-direct-scrcpy-clear-audio-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -34,8 +31,6 @@ current_process = None
 screen_process = None
 camera_process = None
 audio_process = None
-audio_boost_process = None
-audio_pipe_handle = None
 current_mode = "STOPPED"
 active_device = None
 checking = False
@@ -889,144 +884,9 @@ def open_phone_data(mode):
         )
 
 # ============================================================
-# SEPARATE AUDIO CLARITY PIPELINE
-# scrcpy audio-only -> named pipe -> FFplay speech DSP
-# Kept independent from Screen/Camera by design.
+# SEPARATE LOW-LATENCY AUDIO
+# Known-good profile: direct scrcpy playback, independent of video.
 # ============================================================
-
-
-def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
-    """Relay scrcpy audio through a speech-focused distant-listening DSP chain."""
-    global audio_boost_process
-    global audio_pipe_handle
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-    CreateNamedPipeW = kernel32.CreateNamedPipeW
-    CreateNamedPipeW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
-        wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID
-    ]
-    CreateNamedPipeW.restype = wintypes.HANDLE
-
-    ConnectNamedPipe = kernel32.ConnectNamedPipe
-    ConnectNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID]
-    ConnectNamedPipe.restype = wintypes.BOOL
-
-    ReadFile = kernel32.ReadFile
-    ReadFile.argtypes = [
-        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
-    ]
-    ReadFile.restype = wintypes.BOOL
-
-    CloseHandle = kernel32.CloseHandle
-    CloseHandle.argtypes = [wintypes.HANDLE]
-    CloseHandle.restype = wintypes.BOOL
-
-    PIPE_ACCESS_INBOUND = 0x00000001
-    PIPE_TYPE_BYTE = 0x00000000
-    PIPE_READMODE_BYTE = 0x00000000
-    PIPE_WAIT = 0x00000000
-    ERROR_PIPE_CONNECTED = 535
-    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
-
-    handle = CreateNamedPipeW(
-        pipe_name,
-        PIPE_ACCESS_INBOUND,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        1,
-        65536,
-        65536,
-        0,
-        None
-    )
-
-    if handle == INVALID_HANDLE_VALUE:
-        ready_event.set()
-        return
-
-    audio_pipe_handle = handle
-    ready_event.set()
-
-    player = None
-
-    try:
-        connected = ConnectNamedPipe(handle, None)
-        if not connected and ctypes.get_last_error() != ERROR_PIPE_CONNECTED:
-            return
-
-        # Distant-speech DSP:
-        # WIND FILTER MAX:
-        # 1) cut more sub-speech wind/rumble below 240 Hz,
-        # 2) stronger adaptive FFT denoise,
-        # 3) mild noise gate before gain so wind is not amplified in pauses,
-        # 4) emphasize speech presence around 2.5-4 kHz,
-        # 5) dynamically raise cleaned distant speech up to 16x (after wind suppression),
-        # 6) peak-limit the result to prevent clipping.
-        # Do not append a separate volume filter here: the previous +6 dB stage
-        # could make FFplay reject the filter graph and produce no playback.
-        player = subprocess.Popen(
-            [
-                ffplay_path,
-                "-nodisp",
-                "-autoexit",
-                "-loglevel", "error",
-                "-fflags", "nobuffer",
-                "-flags", "low_delay",
-                "-af", "highpass=f=240:p=2,lowpass=f=6800:p=2,afftdn=nr=30:nf=-38:tn=1:gs=16,agate=threshold=0.012:ratio=2.5:attack=12:release=220,equalizer=f=2500:t=q:w=1:g=5,equalizer=f=4000:t=q:w=1:g=2,dynaudnorm=f=160:g=7:p=0.90:m=16:r=0.08:t=0.002,alimiter=limit=0.93:level=0:attack=5:release=100",
-                "-i", "pipe:0"
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=HIDE,
-            bufsize=0
-        )
-
-        audio_boost_process = player
-
-        buffer = ctypes.create_string_buffer(65536)
-        count = wintypes.DWORD()
-
-        while player.poll() is None:
-            ok = ReadFile(
-                handle,
-                buffer,
-                len(buffer),
-                ctypes.byref(count),
-                None
-            )
-
-            if not ok or count.value == 0:
-                break
-
-            try:
-                player.stdin.write(buffer.raw[:count.value])
-            except (BrokenPipeError, OSError):
-                break
-
-    finally:
-        if player is not None:
-            try:
-                if player.stdin:
-                    player.stdin.close()
-            except:
-                pass
-
-            try:
-                if player.poll() is None:
-                    player.terminate()
-            except:
-                pass
-
-        audio_boost_process = None
-        audio_pipe_handle = None
-
-        try:
-            CloseHandle(handle)
-        except:
-            pass
 
 
 def start_audio():
@@ -1034,80 +894,37 @@ def start_audio():
     global audio_process
     global active_device
 
-    # Use the same proven media route as screen/camera. Let scrcpy report a
-    # genuine transport failure instead of blocking on a separate preflight.
+    # Keep microphone audio completely separate from Screen/Camera.
+    # This restores the previously verified clear, low-latency profile:
+    # Samsung voice-recognition mic -> Opus 96K -> 20 ms scrcpy buffer
+    # -> direct PC playback. No named pipe, FFplay, DSP or extra buffering.
     device = choose_existing_device()
     if not device:
         device = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
 
     active_device = device
 
-    # Do not start a second microphone process.
     if audio_process is not None:
-
         try:
             if audio_process.poll() is None:
                 return
-        except:
+        except Exception:
             pass
 
-    ffplay_path = shutil.which("ffplay")
-
-    if not ffplay_path:
-        _queue_ui(
-            lambda: messagebox.showerror(
-                "AndroidBridge Audio Boost",
-                "FFplay is required for distant-speech amplification and noise reduction.\n\n"
-                "Install once in PowerShell:\n"
-                "winget install -e --id Gyan.FFmpeg"
-            )
-        )
-        return
-
-    pipe_name = r"\\.\pipe\AndroidBridgeAudio-" + str(os.getpid()) + "-" + str(time.time_ns())
-    ready_event = threading.Event()
-
-    relay = threading.Thread(
-        target=_audio_boost_relay,
-        args=(pipe_name, ffplay_path, ready_event),
-        daemon=True
-    )
-    relay.start()
-
-    if not ready_event.wait(timeout=2):
-        _queue_ui(
-            lambda: messagebox.showerror(
-                "AndroidBridge Audio Boost",
-                "Could not prepare the PC audio boost pipeline."
-            )
-        )
-        return
-
     try:
-
         audio_env = os.environ.copy()
         audio_env.pop("SCRCPY_SERVER_PATH", None)
 
-        # Use Samsung's voice-recognition capture path rather than camcorder audio:
-        # camcorder preserves ambience (including wind); voice-recognition is a
-        # better source for intelligible speech before our PC-side wind filter.
-        # scrcpy captures the Samsung microphone but does not play it itself.
-        # Its live Opus stream is written to a Windows named pipe. FFplay reads
-        # it and applies speech-band filtering, adaptive FFT denoise,
-        # presence EQ, dynamic quiet-speech gain and peak limiting.
         audio_process = subprocess.Popen(
             [
                 "scrcpy",
                 "-s",
                 device,
                 "--no-video",
-                "--no-audio-playback",
                 "--audio-source=mic-voice-recognition",
                 "--audio-codec=opus",
-                "--audio-bit-rate=128K",
-                "--audio-buffer=60",
-                "--record=" + pipe_name,
-                "--record-format=opus"
+                "--audio-bit-rate=96K",
+                "--audio-buffer=20"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1119,15 +936,13 @@ def start_audio():
 
         _queue_ui(
             lambda: mode_label.config(
-                text="MODE: DISTANT SPEECH MAX - WIND FILTER MAX"
+                text="MODE: CLEAR AUDIO - LOW LATENCY"
             )
         )
 
     except Exception as e:
-
         audio_process = None
-
-        error_text = "Audio boost could not start:\n\n" + str(e)
+        error_text = "Audio could not start:\n\n" + str(e)
         _queue_ui(
             lambda msg=error_text: messagebox.showerror(
                 "AndroidBridge Lite",
@@ -1139,8 +954,6 @@ def start_audio():
 def stop_audio():
 
     global audio_process
-    global audio_boost_process
-    global audio_pipe_handle
 
     if audio_process is not None:
         try:
@@ -1148,35 +961,18 @@ def stop_audio():
                 audio_process.terminate()
                 try:
                     audio_process.wait(timeout=2)
-                except:
+                except Exception:
                     audio_process.kill()
-        except:
+        except Exception:
             pass
 
     audio_process = None
-
-    if audio_boost_process is not None:
-        try:
-            if audio_boost_process.poll() is None:
-                audio_boost_process.terminate()
-        except:
-            pass
-
-    audio_boost_process = None
-
-    # Closing the server end also releases a relay blocked in ReadFile.
-    if audio_pipe_handle is not None:
-        try:
-            ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(audio_pipe_handle)
-        except:
-            pass
-
-    audio_pipe_handle = None
 
     if current_mode == "STOPPED":
         _queue_ui(
             lambda: mode_label.config(text="MODE: STOPPED")
         )
+
 
 def background_check():
 
@@ -1359,8 +1155,7 @@ def _shutdown_processes_no_ui():
     for process in (
         screen_process,
         camera_process,
-        audio_process,
-        audio_boost_process
+        audio_process
     ):
         if process is None or id(process) in seen:
             continue
@@ -1373,16 +1168,6 @@ def _shutdown_processes_no_ui():
         try:
             if process.poll() is None:
                 process.terminate()
-        except Exception:
-            pass
-
-    # Release a relay blocked on the named audio pipe.
-    if audio_pipe_handle is not None:
-        try:
-            ctypes.WinDLL(
-                "kernel32",
-                use_last_error=True
-            ).CloseHandle(audio_pipe_handle)
         except Exception:
             pass
 
@@ -1713,7 +1498,7 @@ stop_button.grid(
 
 audio_on_button = tk.Button(
     buttons,
-    text="DISTANT SPEECH MAX",
+    text="CLEAR AUDIO",
     command=lambda: _run_locked_async(audio_action_lock, start_audio),
     **button_style
 )
