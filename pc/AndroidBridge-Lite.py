@@ -889,7 +889,9 @@ def open_phone_data(mode):
         )
 
 # ============================================================
-# STATUS CHECK
+# SEPARATE AUDIO CLARITY PIPELINE
+# scrcpy audio-only -> named pipe -> FFplay speech DSP
+# Kept independent from Screen/Camera by design.
 # ============================================================
 
 
