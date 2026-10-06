@@ -2045,7 +2045,12 @@ def reconnect():
         text="CHECKING USB / WI-FI / TAILSCALE"
     )
 
-    schedule_check()
+    # Run one immediate check; the independent 5-second scheduler is already
+    # active, so do not create another repeating timer from this button.
+    threading.Thread(
+        target=background_check,
+        daemon=True
+    ).start()
 
 
 def _shutdown_processes_no_ui():
