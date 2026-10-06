@@ -7,6 +7,7 @@ import re
 import time
 import os
 import threading
+import queue
 import shutil
 import ctypes
 from ctypes import wintypes
@@ -44,6 +45,32 @@ checking = False
 # dispatch those operations to workers instead of blocking the Tk event loop.
 video_action_lock = threading.Lock()
 audio_action_lock = threading.Lock()
+ui_queue = queue.Queue()
+
+def _queue_ui(callback):
+    """Workers enqueue GUI work; only the Tk main thread executes it."""
+    try:
+        ui_queue.put_nowait(callback)
+    except Exception:
+        pass
+
+
+def _drain_ui_queue():
+    try:
+        while True:
+            callback = ui_queue.get_nowait()
+            try:
+                callback()
+            except Exception:
+                pass
+    except queue.Empty:
+        pass
+
+    try:
+        root.after(50, _drain_ui_queue)
+    except Exception:
+        pass
+
 
 def _run_locked_async(lock, target, *args, **kwargs):
     def worker():
@@ -476,12 +503,9 @@ def stop_scrcpy():
     current_process = None
     current_mode = "STOPPED"
 
-    try:
-        mode_label.config(
-            text="MODE: STOPPED"
-        )
-    except:
-        pass
+    _queue_ui(
+        lambda: mode_label.config(text="MODE: STOPPED")
+    )
 
 
 def scrcpy_screen_args(device):
@@ -628,15 +652,13 @@ def _watch_nightvision_log(process):
                         + " | ISO " + iso_range
                         + " | Exposure " + exposure_range + " ns"
                     )
-                    root.after(
-                        0,
+                    _queue_ui(
                         lambda value=detail: nv_diag_label.config(text=value)
                     )
 
             if "AndroidBridge LLB support: true" in line:
                 _set_nightvision_window_title("SUPPORTED - WAITING FOR ACTIVE")
-                root.after(
-                    0,
+                _queue_ui(
                     lambda: mode_label.config(
                         text="MODE: NIGHT VISION BOOST - SUPPORTED"
                     )
@@ -644,8 +666,7 @@ def _watch_nightvision_log(process):
 
             elif "AndroidBridge LLB state: ACTIVE" in line:
                 _set_nightvision_window_title("LLB ACTIVE")
-                root.after(
-                    0,
+                _queue_ui(
                     lambda: mode_label.config(
                         text="MODE: NIGHT VISION BOOST - ACTIVE"
                     )
@@ -653,8 +674,7 @@ def _watch_nightvision_log(process):
 
             elif "AndroidBridge LLB is not exposed" in line or "AndroidBridge LLB support: false" in line:
                 _set_nightvision_window_title("LLB NOT SUPPORTED")
-                root.after(
-                    0,
+                _queue_ui(
                     lambda: mode_label.config(
                         text="MODE: NIGHT VISION BOOST - NOT SUPPORTED"
                     )
@@ -662,15 +682,13 @@ def _watch_nightvision_log(process):
 
         if not saw_capability:
             _set_nightvision_window_title("CAPABILITY UNKNOWN")
-            root.after(
-                0,
+            _queue_ui(
                 lambda: mode_label.config(
                     text="MODE: NIGHT VISION BOOST - CAPABILITY UNKNOWN"
                 )
             )
     except:
-        root.after(
-            0,
+        _queue_ui(
             lambda: mode_label.config(
                 text="MODE: NIGHT VISION BOOST - STATUS ERROR"
             )
@@ -689,10 +707,12 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
 
     if not device:
 
-        messagebox.showerror(
-            "AndroidBridge Lite",
-            "Phone cannot be reached.\n\n"
-            "Check USB, Wi-Fi or Tailscale."
+        _queue_ui(
+            lambda: messagebox.showerror(
+                "AndroidBridge Lite",
+                "Phone cannot be reached.\n\n"
+                "Check USB, Wi-Fi or Tailscale."
+            )
         )
 
         return
@@ -750,10 +770,11 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         stderr_target = subprocess.DEVNULL
 
         if low_light:
-            try:
-                nv_diag_label.config(text="NV SENSOR: reading Samsung camera capabilities...")
-            except:
-                pass
+            _queue_ui(
+                lambda: nv_diag_label.config(
+                    text="NV SENSOR: reading Samsung camera capabilities..."
+                )
+            )
 
             # Only NIGHT VISION BOOST uses the custom scrcpy v4.1 server.
             # Normal SCREEN/BACK/FRONT profiles remain on the stock server.
@@ -763,10 +784,12 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
             )
 
             if not os.path.isfile(custom_server):
-                messagebox.showerror(
-                    "AndroidBridge Night Vision",
-                    "Low Light Boost engine is missing.\n\n"
-                    "Run git pull, then restart AndroidBridge."
+                _queue_ui(
+                    lambda: messagebox.showerror(
+                        "AndroidBridge Night Vision",
+                        "Low Light Boost engine is missing.\n\n"
+                        "Run git pull, then restart AndroidBridge."
+                    )
                 )
                 return
 
@@ -803,25 +826,25 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         current_mode = mode
         active_device = device
 
-        mode_label.config(
-            text="MODE: " + mode
-        )
-
-        route_label.config(
-            text=connection_type(device)
-        )
-
-        device_label.config(
-            text=device
+        route_text = connection_type(device)
+        _queue_ui(
+            lambda m=mode, r=route_text, d=device: (
+                mode_label.config(text="MODE: " + m),
+                route_label.config(text=r),
+                device_label.config(text=d)
+            )
         )
 
     except Exception as e:
 
         current_mode = "ERROR"
 
-        messagebox.showerror(
-            "AndroidBridge Lite",
-            str(e)
+        error_text = str(e)
+        _queue_ui(
+            lambda msg=error_text: messagebox.showerror(
+                "AndroidBridge Lite",
+                msg
+            )
         )
 
 
@@ -1038,10 +1061,12 @@ def start_audio():
 
     if not device:
 
-        messagebox.showerror(
-            "AndroidBridge Lite",
-            "Phone cannot be reached.\n\n"
-            "Check USB, Wi-Fi or Tailscale."
+        _queue_ui(
+            lambda: messagebox.showerror(
+                "AndroidBridge Lite",
+                "Phone cannot be reached.\n\n"
+                "Check USB, Wi-Fi or Tailscale."
+            )
         )
 
         return
@@ -1058,11 +1083,13 @@ def start_audio():
     ffplay_path = shutil.which("ffplay")
 
     if not ffplay_path:
-        messagebox.showerror(
-            "AndroidBridge Audio Boost",
-            "FFplay is required for distant-speech amplification and noise reduction.\n\n"
-            "Install once in PowerShell:\n"
-            "winget install -e --id Gyan.FFmpeg"
+        _queue_ui(
+            lambda: messagebox.showerror(
+                "AndroidBridge Audio Boost",
+                "FFplay is required for distant-speech amplification and noise reduction.\n\n"
+                "Install once in PowerShell:\n"
+                "winget install -e --id Gyan.FFmpeg"
+            )
         )
         return
 
@@ -1077,9 +1104,11 @@ def start_audio():
     relay.start()
 
     if not ready_event.wait(timeout=2):
-        messagebox.showerror(
-            "AndroidBridge Audio Boost",
-            "Could not prepare the PC audio boost pipeline."
+        _queue_ui(
+            lambda: messagebox.showerror(
+                "AndroidBridge Audio Boost",
+                "Could not prepare the PC audio boost pipeline."
+            )
         )
         return
 
@@ -1113,18 +1142,22 @@ def start_audio():
 
         active_device = device
 
-        try:
-            mode_label.config(text="MODE: DISTANT SPEECH MAX - WIND FILTER MAX")
-        except:
-            pass
+        _queue_ui(
+            lambda: mode_label.config(
+                text="MODE: DISTANT SPEECH MAX - WIND FILTER MAX"
+            )
+        )
 
     except Exception as e:
 
         audio_process = None
 
-        messagebox.showerror(
-            "AndroidBridge Lite",
-            "Audio boost could not start:\n\n" + str(e)
+        error_text = "Audio boost could not start:\n\n" + str(e)
+        _queue_ui(
+            lambda msg=error_text: messagebox.showerror(
+                "AndroidBridge Lite",
+                msg
+            )
         )
 
 
@@ -1165,11 +1198,10 @@ def stop_audio():
 
     audio_pipe_handle = None
 
-    try:
-        if current_mode == "STOPPED":
-            mode_label.config(text="MODE: STOPPED")
-    except:
-        pass
+    if current_mode == "STOPPED":
+        _queue_ui(
+            lambda: mode_label.config(text="MODE: STOPPED")
+        )
 
 def background_check():
 
@@ -1195,8 +1227,7 @@ def background_check():
         if not device:
             ts_state = tailscale_phone_state()
 
-        root.after(
-            0,
+        _queue_ui(
             lambda d=device, ts=ts_state: display_status(d, ts)
         )
 
@@ -1824,6 +1855,9 @@ tk.Label(
     pady=18
 )
 
+
+# Start worker -> GUI dispatch on the Tk main thread.
+root.after(50, _drain_ui_queue)
 
 root.after(
     300,
