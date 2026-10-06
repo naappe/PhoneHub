@@ -97,3 +97,16 @@ Custom low-light server files remain in pc/ for diagnostics.
 ## Recovery principle
 
 GitHub is the permanent project source of truth. A new ChatGPT conversation should read this file and the latest source before making changes. Do not reconstruct AndroidBridge from chat memory when the repository is available.
+
+
+## 2026-10-06 media repair checkpoint
+
+After Audio reached AUDIO ON, Screen/Camera stopped launching reliably. The media startup code was consolidated again:
+- one shared scrcpy startup gate now covers Screen, Back Camera, Front Camera and Audio;
+- each client holds the gate until its own adb push child is finished;
+- STOP now reaps a still-running video adb push child;
+- Audio holds the same gate through its own server upload;
+- the launcher removes only abandoned AndroidBridge startup pushes, never the ADB server;
+- the launcher runs py_compile before starting the app.
+
+This revision is a repair checkpoint and Screen/Camera should be validated after the PC pulls main. Do not label it fully verified until that test succeeds.
