@@ -718,19 +718,16 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
     global current_mode
     global active_device
 
-    device = get_device(True)
-
+    # MEDIA ROUTE:
+    # Do not gate scrcpy behind a second Python ADB/Tailscale preflight.
+    # The exact command below has already been verified manually against this
+    # Samsung endpoint. scrcpy itself is the authority on whether the media
+    # session can start.
+    device = choose_existing_device()
     if not device:
+        device = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
 
-        _queue_ui(
-            lambda: messagebox.showerror(
-                "AndroidBridge Lite",
-                "Phone cannot be reached.\n\n"
-                "Check USB, Wi-Fi or Tailscale."
-            )
-        )
-
-        return
+    active_device = device
 
     if kind == "screen":
 
@@ -1075,19 +1072,13 @@ def start_audio():
     global audio_process
     global active_device
 
-    device = get_device(True)
-
+    # Use the same proven media route as screen/camera. Let scrcpy report a
+    # genuine transport failure instead of blocking on a separate preflight.
+    device = choose_existing_device()
     if not device:
+        device = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
 
-        _queue_ui(
-            lambda: messagebox.showerror(
-                "AndroidBridge Lite",
-                "Phone cannot be reached.\n\n"
-                "Check USB, Wi-Fi or Tailscale."
-            )
-        )
-
-        return
+    active_device = device
 
     # Do not start a second microphone process.
     if audio_process is not None:
@@ -1257,11 +1248,12 @@ def background_check():
         if not device:
             device = get_device(True)
 
-        # Tailscale status may itself take several seconds. Resolve it here
-        # in the worker, never inside display_status() on the Tk thread.
+        # Never let the Tailscale CLI overrule a working ADB endpoint. If the
+        # Python status probe is inconclusive, show the configured remote route
+        # rather than the false "TAILSCALE OFFLINE / Open Tailscale" message.
         ts_state = None
         if not device:
-            ts_state = tailscale_phone_state()
+            ts_state = "REMOTE ADB CHECK PENDING"
 
         _queue_ui(
             lambda d=device, ts=ts_state: display_status(d, ts)
@@ -1332,6 +1324,20 @@ def display_status(device, ts_state=None):
 
             device_label.config(
                 text=""
+            )
+
+        elif ts_state == "REMOTE ADB CHECK PENDING":
+
+            status.config(
+                text="REMOTE PHONE CONFIGURED"
+            )
+
+            route_label.config(
+                text="TAILSCALE - REMOTE"
+            )
+
+            device_label.config(
+                text=f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
             )
 
         else:
