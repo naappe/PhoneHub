@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-05-working-v1"
+STABLE_PROFILE = "2026-10-06-direct-scrcpy-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -421,46 +421,6 @@ def get_device(allow_remote=True):
     active_device = None
     return None
 
-
-def tailscale_phone_state():
-
-    if not os.path.exists(TAILSCALE_EXE):
-        return "TAILSCALE NOT INSTALLED"
-
-    result = run_hidden(
-        [TAILSCALE_EXE, "status"],
-        6
-    )
-
-    if not result:
-        return "TAILSCALE OFFLINE"
-
-    for line in result.stdout.splitlines():
-
-        fields = line.split()
-
-        if len(fields) < 2:
-            continue
-
-        name = fields[1]
-
-        if name.lower() == PHONE_NAME.lower():
-
-            lower = line.lower()
-
-            if "offline" in lower:
-                return "TAILSCALE OFFLINE"
-
-            if (
-                "active" in lower or
-                "direct" in lower or
-                "relay" in lower
-            ):
-                return "TAILSCALE ONLINE"
-
-            return "TAILSCALE ONLINE"
-
-    return "PHONE NOT FOUND IN TAILSCALE"
 
 # ============================================================
 # CONNECTION DISPLAY
