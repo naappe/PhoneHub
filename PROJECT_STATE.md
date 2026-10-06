@@ -151,3 +151,21 @@ This fast-start path is committed but must be measured on the PC after the next 
 Audio monitoring now defaults to +18 dB (previously +14 dB) and the UI range extends to +24 dB. The low-latency FFplay chain was retuned for speech intelligibility: 120 Hz high-pass, 7.6 kHz low-pass, low-mid mud reduction, presence/consonant EQ, gentle RMS compression/voice leveling, user gain, then a peak limiter. This keeps the existing mic-voice-recognition capture and named-pipe architecture unchanged.
 
 Recovery checkpoint before this DSP change: `checkpoint/audio-before-clear-loud-2026-10-06`.
+
+
+## 2026-10-06 laptop sleep/resume recovery
+
+User reported the recurring failure pattern: AndroidBridge works, then after closing the laptop lid / Windows sleep and reopening it, the remote phone path no longer works reliably.
+
+Root cause in the PC runtime: the old connection scheduler was re-armed only from display_status(). background_check() intentionally returns early while a media process is alive, so a Screen/Camera/Audio session could stop all future connection checks. After Windows suspend, the local scrcpy process could also remain alive while its underlying TCP/Tailscale media socket was stale. ADB could retain a stale Tailscale serial row.
+
+Repair:
+- the 5-second connection scheduler now re-arms itself independently of display_status();
+- a 2-second GUI heartbeat detects a >12-second suspend/resume gap;
+- resume recovery terminates only AndroidBridge's local scrcpy/FFplay children and stale startup pushes;
+- it never runs adb disconnect or adb kill-server;
+- it retries adb connect to the same configured phone endpoint until Windows/Tailscale networking returns;
+- Tailscale ADB rows are verified with get-state before being trusted;
+- the RECONNECT PHONE button performs one immediate check without creating duplicate repeating timers.
+
+Checkpoint before this repair: `checkpoint/before-laptop-resume-recovery-2026-10-06`.
