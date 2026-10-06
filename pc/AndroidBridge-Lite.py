@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-compact-media-engine-v1"
+STABLE_PROFILE = "2026-10-06-clear-loud-voice-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -81,7 +81,7 @@ camera_process = None
 audio_process = None
 audio_boost_process = None
 audio_pipe_handle = None
-audio_gain_db = 14
+audio_gain_db = 18
 audio_monitor_window = None
 audio_monitor_status = None
 audio_monitor_gain = None
@@ -1243,17 +1243,21 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event, gain_db):
         if not connected and ctypes.get_last_error() != ERROR_PIPE_CONNECTED:
             return
 
-        # Keep only low-delay filters. The older afftdn+dynaudnorm chain was
-        # powerful but accumulated latency. This retains the useful speech
-        # band, presence lift and real +12 dB gain with peak protection.
+        # Low-latency speech intelligibility chain. Keep the voice body,
+        # reduce rumble/mud, lift consonant/presence bands, gently compress
+        # speech so quieter words come forward, then apply the user's boost.
+        # The final limiter prevents the extra gain from clipping.
         filter_chain = (
-            "highpass=f=180:p=2,"
-            "lowpass=f=6800:p=2,"
-            "equalizer=f=700:t=q:w=1:g=2,"
-            "equalizer=f=2500:t=q:w=1:g=5,"
-            "equalizer=f=4000:t=q:w=1:g=3,"
+            "highpass=f=120:p=2,"
+            "lowpass=f=7600:p=2,"
+            "equalizer=f=320:t=q:w=1.1:g=-2,"
+            "equalizer=f=1200:t=q:w=1:g=2,"
+            "equalizer=f=2600:t=q:w=1:g=5,"
+            "equalizer=f=4300:t=q:w=1.1:g=3,"
+            "acompressor=threshold=0.18:ratio=2.5:attack=5:release=100:"
+            "makeup=1.45:knee=2.5:detection=rms,"
             f"volume={int(gain_db)}dB,"
-            "alimiter=limit=0.95:level=0:attack=5:release=50"
+            "alimiter=limit=0.96:level=0:attack=3:release=60"
         )
 
         player = subprocess.Popen(
@@ -1495,12 +1499,12 @@ def start_audio():
                     if player is not None and player.poll() is None:
                         _queue_ui(
                             lambda: mode_label.config(
-                                text=f"MODE: AUDIO ON | WIND CUT + VOICE | +{gain} dB"
+                                text=f"MODE: AUDIO ON | CLEAR VOICE | +{gain} dB"
                             )
                         )
                         _queue_ui(
                             lambda: _set_audio_monitor_status(
-                                "AUDIO ON  •  WIND CUT + VOICE", SUCCESS
+                                "AUDIO ON  •  CLEAR VOICE + LEVELING", SUCCESS
                             )
                         )
                         return
@@ -1992,7 +1996,7 @@ def show_audio_monitor():
 
     tk.Label(
         audio_monitor_window,
-        text="Samsung microphone  •  Wind Cut + Voice",
+        text="Samsung microphone  •  Clear Speech + Voice Leveling",
         font=("Segoe UI", 9),
         bg=BG,
         fg=MUTED
@@ -2056,7 +2060,7 @@ def set_audio_gain(value):
     """Set voice boost for the next audio start without touching video."""
     global audio_gain_db
     try:
-        audio_gain_db = max(0, min(20, int(float(value))))
+        audio_gain_db = max(0, min(24, int(float(value))))
         audio_volume_value.config(text=f"+{audio_gain_db} dB")
         if audio_monitor_gain is not None:
             try:
@@ -2351,7 +2355,7 @@ stop_button.grid(
 
 audio_on_button = tk.Button(
     buttons,
-    text="WIND CUT + VOICE",
+    text="CLEAR VOICE + LOUD",
     command=open_audio_monitor_and_start,
     **button_style
 )
@@ -2425,7 +2429,7 @@ audio_volume_value.pack(side="right", padx=(8, 0))
 audio_volume_slider = tk.Scale(
     volume_frame,
     from_=0,
-    to=20,
+    to=24,
     orient="horizontal",
     showvalue=False,
     resolution=1,
