@@ -12,7 +12,7 @@ if errorlevel 1 (
 
 rem Self-heal the tracked runtime set. "git pull" alone does not remove
 rem local working-tree edits, which can leave files from different builds mixed.
-git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" "pc\AndroidBridge-PhoneData.py" "pc\scrcpy-server-v4.1-llb" "pc\scrcpy-server-v4.1-llb.sha256" >nul 2>&1
+git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" "pc\AndroidBridge-PhoneData.py" "pc\scrcpy-server-v4.1-llb" "pc\scrcpy-server-v4.1-llb.sha256" "tools\cleanup-stale-startups.ps1" >nul 2>&1
 
 rem Old builds wrote scrcpy logs that no longer describe the active runtime.
 rem Remove them so stale proxy/chunk errors cannot be mistaken for current errors.
@@ -21,6 +21,14 @@ del /q "pc\scrcpy-*.log" >nul 2>&1
 rem Never let an inherited scrcpy ADB override select the retired proxy.
 set "ADB="
 set "ANDROIDBRIDGE_REAL_ADB="
+
+rem Remove only abandoned AndroidBridge scrcpy startup uploads from earlier
+rem runs. This script never disconnects or kills the ADB server.
+if exist "%~dp0tools\cleanup-stale-startups.ps1" (
+    for /f %%i in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\cleanup-stale-startups.ps1" 2^>nul') do (
+        if not "%%i"=="0" echo [AndroidBridge] Cleared %%i stale media startup^(s^).
+    )
+)
 
 rem Remove known obsolete/generated files. Never remove user data/history.
 del /q "%~dp0pc\AndroidBridge-AdbProxy.exe" "%~dp0pc\AndroidBridge-AdbProxyV2.exe" "%~dp0pc\AndroidBridge-AdbProxyV2.cs" >nul 2>&1
