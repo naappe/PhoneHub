@@ -24,21 +24,17 @@ pc/
 
 Screen, Back Camera and Front Camera use stock `scrcpy` + stock `adb` directly.
 
-Audio is deliberately a separate clarity pipeline and must not be merged with the video session:
+Audio is deliberately separate from video and uses the restored known-good low-latency profile:
 
 ```text
 Samsung microphone
-  -> scrcpy audio-only capture (mic-voice-recognition)
-  -> Windows named pipe (Opus)
-  -> FFplay speech DSP
-  -> high-pass / low-pass
-  -> adaptive denoise
-  -> noise gate
-  -> speech-presence EQ
-  -> dynamic distant-speech gain
-  -> limiter
-  -> PC speaker/headphones
+  -> scrcpy audio-only (mic-voice-recognition)
+  -> Opus 96K
+  -> 20 ms audio buffer
+  -> direct PC playback
 ```
+
+There is no FFplay relay, named pipe or additional DSP in the normal audio path. Those extra stages were removed because they added buffering/latency.
 
 The custom scrcpy server is reserved for Night Vision Boost.
 
@@ -51,6 +47,6 @@ The custom scrcpy server is reserved for Night Vision Boost.
 
 - Do not add alternate AndroidBridge launchers or numbered copies.
 - Do not add ADB proxy/chunk-transfer helpers to the normal media path.
-- Keep audio as its own audio-only capture + PC DSP pipeline; do not merge it into Screen/Camera playback.
+- Keep audio as its own direct audio-only scrcpy process; do not merge it into Screen/Camera playback or add relay/DSP buffering.
 - Do not run `adb disconnect` or `adb kill-server` from AndroidBridge.
 - Keep generated logs, caches and local location-history files out of Git.
