@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-audio-button-direct-route-v2"
+STABLE_PROFILE = "2026-10-06-visible-audio-monitor-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -37,6 +37,9 @@ audio_process = None
 audio_boost_process = None
 audio_pipe_handle = None
 audio_gain_db = 14
+audio_monitor_window = None
+audio_monitor_status = None
+audio_monitor_gain = None
 current_mode = "STOPPED"
 active_device = None
 checking = False
@@ -1118,7 +1121,12 @@ def start_audio():
                     if player is not None and player.poll() is None:
                         _queue_ui(
                             lambda: mode_label.config(
-                                text=f"MODE: AUDIO ON | VOICE COMM + WIND CUT | +{gain} dB"
+                                text=f"MODE: AUDIO ON | WIND CUT + VOICE | +{gain} dB"
+                            )
+                        )
+                        _queue_ui(
+                            lambda: _set_audio_monitor_status(
+                                "AUDIO ON  •  WIND CUT + VOICE", SUCCESS
                             )
                         )
                         return
@@ -1174,12 +1182,22 @@ def start_audio():
                             text="MODE: AUDIO ON - DIRECT FALLBACK"
                         )
                     )
+                    _queue_ui(
+                        lambda: _set_audio_monitor_status(
+                            "AUDIO ON  •  DIRECT FALLBACK", SUCCESS
+                        )
+                    )
                     return
             except Exception:
                 pass
 
             _queue_ui(
                 lambda: mode_label.config(text="MODE: AUDIO START FAILED")
+            )
+            _queue_ui(
+                lambda: _set_audio_monitor_status(
+                    "AUDIO START FAILED", DANGER
+                )
             )
             _queue_ui(
                 lambda: messagebox.showerror(
@@ -1237,6 +1255,10 @@ def stop_audio():
         except Exception:
             pass
     audio_pipe_handle = None
+
+    _queue_ui(
+        lambda: _set_audio_monitor_status("AUDIO OFF", DANGER)
+    )
 
     if current_mode == "STOPPED":
         _queue_ui(lambda: mode_label.config(text="MODE: STOPPED"))
@@ -1491,12 +1513,125 @@ def close_app():
         pass
 
 
+def _set_audio_monitor_status(text, fg=None):
+    """Update the separate audio window from the Tk main thread."""
+    if audio_monitor_status is None:
+        return
+    try:
+        if not audio_monitor_status.winfo_exists():
+            return
+        kwargs = {"text": text}
+        if fg is not None:
+            kwargs["fg"] = fg
+        audio_monitor_status.config(**kwargs)
+    except Exception:
+        pass
+
+
+def show_audio_monitor():
+    """Open/focus the dedicated audio control window immediately."""
+    global audio_monitor_window
+    global audio_monitor_status
+    global audio_monitor_gain
+
+    try:
+        if audio_monitor_window is not None and audio_monitor_window.winfo_exists():
+            audio_monitor_window.deiconify()
+            audio_monitor_window.lift()
+            audio_monitor_window.focus_force()
+            _set_audio_monitor_status("STARTING MICROPHONE...", ACCENT)
+            return
+    except Exception:
+        pass
+
+    audio_monitor_window = tk.Toplevel(root)
+    audio_monitor_window.title("AndroidBridge Audio")
+    audio_monitor_window.geometry("420x245")
+    audio_monitor_window.resizable(False, False)
+    audio_monitor_window.configure(bg=BG)
+
+    tk.Label(
+        audio_monitor_window,
+        text="AUDIO MONITOR",
+        font=("Segoe UI", 18, "bold"),
+        bg=BG,
+        fg=TEXT
+    ).pack(anchor="w", padx=24, pady=(22, 4))
+
+    tk.Label(
+        audio_monitor_window,
+        text="Samsung microphone  •  Wind Cut + Voice",
+        font=("Segoe UI", 9),
+        bg=BG,
+        fg=MUTED
+    ).pack(anchor="w", padx=24)
+
+    audio_monitor_status = tk.Label(
+        audio_monitor_window,
+        text="STARTING MICROPHONE...",
+        font=("Segoe UI", 11, "bold"),
+        bg=BG,
+        fg=ACCENT
+    )
+    audio_monitor_status.pack(anchor="w", padx=24, pady=(22, 8))
+
+    gain_row = tk.Frame(audio_monitor_window, bg=BG)
+    gain_row.pack(fill="x", padx=24, pady=(0, 12))
+
+    tk.Label(
+        gain_row,
+        text="VOICE BOOST",
+        font=("Segoe UI", 9, "bold"),
+        bg=BG,
+        fg=MUTED
+    ).pack(side="left")
+
+    audio_monitor_gain = tk.Label(
+        gain_row,
+        text=f"+{audio_gain_db} dB",
+        font=("Segoe UI", 10, "bold"),
+        bg=BG,
+        fg=ACCENT
+    )
+    audio_monitor_gain.pack(side="right")
+
+    tk.Button(
+        audio_monitor_window,
+        text="AUDIO OFF",
+        command=lambda: _run_locked_async(audio_action_lock, stop_audio),
+        width=18,
+        height=2,
+        font=("Segoe UI", 9, "bold"),
+        bg=PANEL_2,
+        fg=DANGER,
+        activebackground=PANEL_2,
+        activeforeground=DANGER,
+        relief="flat",
+        bd=0,
+        cursor="hand2"
+    ).pack(pady=(4, 0))
+
+
+def open_audio_monitor_and_start():
+    # Called directly by the Tk button: the window appears before any remote
+    # ADB/scrcpy work begins, so a slow network can never hide the click.
+    show_audio_monitor()
+    mode_label.config(text="MODE: AUDIO STARTING...")
+    _run_locked_async(audio_action_lock, start_audio)
+
+
 def set_audio_gain(value):
     """Set voice boost for the next audio start without touching video."""
     global audio_gain_db
     try:
         audio_gain_db = max(0, min(20, int(float(value))))
         audio_volume_value.config(text=f"+{audio_gain_db} dB")
+        if audio_monitor_gain is not None:
+            try:
+                if audio_monitor_gain.winfo_exists():
+                    audio_monitor_gain.config(text=f"+{audio_gain_db} dB")
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -1785,10 +1920,7 @@ stop_button.grid(
 audio_on_button = tk.Button(
     buttons,
     text="WIND CUT + VOICE",
-    command=lambda: (
-        mode_label.config(text="MODE: AUDIO STARTING..."),
-        _run_locked_async(audio_action_lock, start_audio)
-    ),
+    command=open_audio_monitor_and_start,
     **button_style
 )
 
