@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-clear-loud-low-latency-v1"
+STABLE_PROFILE = "2026-10-06-wind-cut-voice-preserve-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -969,11 +969,16 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event):
                 "-probesize", "32",
                 "-analyzeduration", "0",
                 "-af",
-                "highpass=f=120:p=2,"
-                "lowpass=f=7500:p=2,"
-                "equalizer=f=2500:t=q:w=1:g=4,"
-                "equalizer=f=4000:t=q:w=1:g=2,"
-                "volume=12dB,"
+                # Wind energy was reaching the limiter first and pushing speech
+                # down. Remove rumble before gain, then restore speech presence.
+                # These are all low-delay IIR/fixed-gain stages: no FFT denoise,
+                # gate or dynamic normalizer to add lag or swallow quiet speech.
+                "highpass=f=180:p=2,"
+                "lowpass=f=6800:p=2,"
+                "equalizer=f=700:t=q:w=1:g=2,"
+                "equalizer=f=2500:t=q:w=1:g=5,"
+                "equalizer=f=4000:t=q:w=1:g=3,"
+                "volume=14dB,"
                 "alimiter=limit=0.95:level=0:attack=5:release=50",
                 "-i", "pipe:0"
             ],
@@ -1090,7 +1095,7 @@ def start_audio():
 
         _queue_ui(
             lambda: mode_label.config(
-                text="MODE: CLEAR + LOUD AUDIO - LOW LATENCY"
+                text="MODE: WIND CUT + VOICE BOOST - LOW LATENCY"
             )
         )
 
@@ -1673,7 +1678,7 @@ stop_button.grid(
 
 audio_on_button = tk.Button(
     buttons,
-    text="CLEAR + LOUD AUDIO",
+    text="WIND CUT + VOICE",
     command=lambda: _run_locked_async(audio_action_lock, start_audio),
     **button_style
 )
