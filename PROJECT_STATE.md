@@ -110,3 +110,12 @@ After Audio reached AUDIO ON, Screen/Camera stopped launching reliably. The medi
 - the launcher runs py_compile before starting the app.
 
 This revision is a repair checkpoint and Screen/Camera should be validated after the PC pulls main. Do not label it fully verified until that test succeeds.
+
+
+## Verification update: Screen
+
+PC launcher successfully pulled and verified GitHub revision 89f5a71. The user then tested SCREEN and confirmed that screen mirroring works.
+
+Observed startup latency: approximately 60 seconds before the scrcpy screen window becomes usable. Functionality is restored, but startup latency remains an optimization target. Do not trade the now-working remote media path for an unverified fast-start mechanism.
+
+Next verification sequence: STOP -> BACK CAMERA -> STOP -> FRONT CAMERA -> STOP -> Audio.
