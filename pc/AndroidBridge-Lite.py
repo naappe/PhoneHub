@@ -1243,6 +1243,11 @@ def start_audio():
         except Exception:
             pass
 
+    # Acquire BEFORE inspecting/cleaning pushes. Otherwise a simultaneous
+    # Screen/Camera click could create a push between the inspection and spawn.
+    scrcpy_start_lock.acquire()
+    startup_gate_held = True
+
     # If this app owns no live Screen/Camera process, any scrcpy-server
     # pushes already targeting this phone are leftovers from an older launch.
     # Remove only those startup clients before creating the new audio session.
@@ -1265,11 +1270,6 @@ def start_audio():
         cleared = _clear_stale_scrcpy_startups_for_phone()
         if cleared:
             time.sleep(0.8)
-
-    # Use the same startup gate as Screen/Camera. This closes the race where
-    # Audio and Video both see zero pushes and then start two pushes together.
-    scrcpy_start_lock.acquire()
-    startup_gate_held = True
 
     # If Screen/Camera is genuinely starting, wait behind its one legitimate
     # server upload instead of creating a competing push.
