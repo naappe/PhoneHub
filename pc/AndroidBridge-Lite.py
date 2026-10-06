@@ -22,13 +22,58 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-unified-media-startup-v1"
+STABLE_PROFILE = "2026-10-06-compact-media-engine-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
 ADB_PORT = "5555"
 
+
 TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"
+
+
+def _repo_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _system_scrcpy_exe():
+    return shutil.which("scrcpy") or "scrcpy"
+
+
+def _fast_scrcpy_exe():
+    """Use the compact stock v3.3.4 client when the launcher installed it.
+
+    v3.3.4 is intentionally used for normal Screen/Camera/Audio because its
+    official server is about 91 KB instead of the ~734 KB v4.1 server. On this
+    remote ADB/Tailscale route the server upload dominates startup time.
+    """
+    path = os.path.join(
+        _repo_root(),
+        "tools",
+        "runtime",
+        "scrcpy-v3.3.4",
+        "scrcpy-win64-v3.3.4",
+        "scrcpy.exe"
+    )
+    return path if os.path.isfile(path) else _system_scrcpy_exe()
+
+
+def _scrcpy_env(custom_server=None):
+    """Force every scrcpy version to reuse AndroidBridge's existing adb.exe."""
+    env = os.environ.copy()
+    env.pop("SCRCPY_SERVER_PATH", None)
+
+    adb_path = shutil.which("adb")
+    if adb_path:
+        # Official scrcpy supports selecting adb through the ADB environment
+        # variable. This prevents the compact client from starting a different
+        # bundled adb and preserves the already-working remote ADB server.
+        env["ADB"] = adb_path
+
+    if custom_server:
+        env["SCRCPY_SERVER_PATH"] = custom_server
+
+    return env
 
 current_process = None
 screen_process = None
@@ -720,9 +765,23 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         lambda m=mode: mode_label.config(text=f"MODE: {m} STARTING...")
     )
 
-    # scrcpy supports several simultaneous clients via separate SCIDs, but all
-    # clients first push the same scrcpy-server.jar. Serialize only that upload
-    # phase so Screen, Camera and Audio cannot overwrite it concurrently.
+    # Stock scrcpy always uploads its server before opening the media sockets.
+    # The normal fast engine is still stock scrcpy, but v3.3.4 has a ~91 KB
+    # server instead of v4.1's ~734 KB server. NIGHT CAMERA/LLB stay on the
+    # installed v4.1 client because those features depend on v4.x behavior.
+    use_fast = not night and not low_light
+    preferred_exe = _fast_scrcpy_exe() if use_fast else _system_scrcpy_exe()
+    system_exe = _system_scrcpy_exe()
+
+    candidates = [preferred_exe]
+    if use_fast:
+        try:
+            same = os.path.normcase(os.path.abspath(preferred_exe)) == os.path.normcase(os.path.abspath(system_exe))
+        except Exception:
+            same = preferred_exe == system_exe
+        if not same:
+            candidates.append(system_exe)
+
     with scrcpy_start_lock:
         if not _wait_for_scrcpy_uploads_to_finish(600):
             _queue_ui(
@@ -732,94 +791,125 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
             )
             return
 
-        try:
-            scrcpy_env = os.environ.copy()
-            scrcpy_env.pop("SCRCPY_SERVER_PATH", None)
-
-            if low_light:
-                _queue_ui(
-                    lambda: nv_diag_label.config(
-                        text="NV SENSOR: reading Samsung camera capabilities..."
-                    )
+        custom_server = None
+        if low_light:
+            _queue_ui(
+                lambda: nv_diag_label.config(
+                    text="NV SENSOR: reading Samsung camera capabilities..."
                 )
-
-                custom_server = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "scrcpy-server-v4.1-llb"
-                )
-
-                if not os.path.isfile(custom_server):
-                    _queue_ui(
-                        lambda: messagebox.showerror(
-                            "AndroidBridge Night Vision",
-                            "Low Light Boost engine is missing.\n\n"
-                            "Run git pull, then restart AndroidBridge."
-                        )
-                    )
-                    return
-
-                scrcpy_env["SCRCPY_SERVER_PATH"] = custom_server
-
-            process = subprocess.Popen(
-                ["scrcpy", "-s", device] + args,
-                stdout=subprocess.PIPE if low_light else subprocess.DEVNULL,
-                stderr=subprocess.STDOUT if low_light else subprocess.DEVNULL,
-                text=bool(low_light),
-                errors="replace" if low_light else None,
-                creationflags=HIDE,
-                env=scrcpy_env
             )
 
-            if kind == "screen":
-                screen_process = process
-            else:
-                camera_process = process
+            custom_server = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "scrcpy-server-v4.1-llb"
+            )
 
-            current_process = process
-            current_mode = mode
-            active_device = device
-
-            if low_light and process.stdout is not None:
-                threading.Thread(
-                    target=_watch_nightvision_log,
-                    args=(process,),
-                    daemon=True
-                ).start()
-
-            if not _wait_for_this_scrcpy_start(process, mode, 600):
-                try:
-                    if process.poll() is None:
-                        _terminate_scrcpy_push_children(process.pid)
-                        process.terminate()
-                except Exception:
-                    pass
-
-                if kind == "screen":
-                    screen_process = None
-                else:
-                    camera_process = None
-
+            if not os.path.isfile(custom_server):
                 _queue_ui(
-                    lambda m=mode: mode_label.config(
-                        text=f"MODE: {m} START FAILED"
+                    lambda: messagebox.showerror(
+                        "AndroidBridge Night Vision",
+                        "Low Light Boost engine is missing.\n\n"
+                        "Run git pull, then restart AndroidBridge."
                     )
                 )
                 return
 
-            route_text = connection_type(device)
-            _queue_ui(
-                lambda m=mode, r=route_text, d=device: (
-                    mode_label.config(text="MODE: " + m),
-                    route_label.config(text=r),
-                    device_label.config(text=d)
-                )
-            )
+        last_error = None
 
-        except Exception as e:
-            current_mode = "ERROR"
-            error_text = str(e)
+        for attempt, scrcpy_exe in enumerate(candidates):
+            process = None
+            try:
+                scrcpy_env = _scrcpy_env(custom_server)
+
+                process = subprocess.Popen(
+                    [scrcpy_exe, "-s", device] + args,
+                    stdout=subprocess.PIPE if low_light else subprocess.DEVNULL,
+                    stderr=subprocess.STDOUT if low_light else subprocess.DEVNULL,
+                    text=bool(low_light),
+                    errors="replace" if low_light else None,
+                    creationflags=HIDE,
+                    env=scrcpy_env
+                )
+
+                if kind == "screen":
+                    screen_process = process
+                else:
+                    camera_process = process
+
+                current_process = process
+                current_mode = mode
+                active_device = device
+
+                if low_light and process.stdout is not None:
+                    threading.Thread(
+                        target=_watch_nightvision_log,
+                        args=(process,),
+                        daemon=True
+                    ).start()
+
+                started_ok = _wait_for_this_scrcpy_start(process, mode, 600)
+
+                # Give the matching server a short chance to reject an
+                # incompatible client. If the compact engine fails, retry once
+                # with the installed v4.1 client instead of breaking the button.
+                if started_ok:
+                    time.sleep(1.0)
+                    started_ok = process.poll() is None
+
+                if started_ok:
+                    route_text = connection_type(device)
+                    engine = "FAST" if attempt == 0 and use_fast and len(candidates) > 1 else "STANDARD"
+                    _queue_ui(
+                        lambda m=mode, r=route_text, d=device, e=engine: (
+                            mode_label.config(text=f"MODE: {m} | {e}"),
+                            route_label.config(text=r),
+                            device_label.config(text=d)
+                        )
+                    )
+                    return
+
+                if process is not None:
+                    try:
+                        if process.poll() is None:
+                            _terminate_scrcpy_push_children(process.pid)
+                            process.terminate()
+                    except Exception:
+                        pass
+
+                if attempt + 1 < len(candidates):
+                    _queue_ui(
+                        lambda m=mode: mode_label.config(
+                            text=f"MODE: {m} RETRYING STANDARD ENGINE..."
+                        )
+                    )
+                    if not _wait_for_scrcpy_uploads_to_finish(120):
+                        break
+
+            except Exception as e:
+                last_error = str(e)
+                if process is not None:
+                    try:
+                        if process.poll() is None:
+                            _terminate_scrcpy_push_children(process.pid)
+                            process.terminate()
+                    except Exception:
+                        pass
+
+                if attempt + 1 < len(candidates):
+                    continue
+
+        if kind == "screen":
+            screen_process = None
+        else:
+            camera_process = None
+
+        current_mode = "ERROR"
+        _queue_ui(
+            lambda m=mode: mode_label.config(text=f"MODE: {m} START FAILED")
+        )
+        if last_error:
             _queue_ui(
-                lambda msg=error_text: messagebox.showerror(
+                lambda msg=last_error: messagebox.showerror(
                     "AndroidBridge Lite",
                     msg
                 )
@@ -1324,12 +1414,11 @@ def start_audio():
         return
 
     try:
-        audio_env = os.environ.copy()
-        audio_env.pop("SCRCPY_SERVER_PATH", None)
+        audio_env = _scrcpy_env()
 
         audio_process = subprocess.Popen(
             [
-                "scrcpy",
+                _fast_scrcpy_exe(),
                 "-s", device,
                 "--no-video",
                 "--no-audio-playback",
@@ -1486,12 +1575,11 @@ def start_audio():
                 return
 
             try:
-                fallback_env = os.environ.copy()
-                fallback_env.pop("SCRCPY_SERVER_PATH", None)
+                fallback_env = _scrcpy_env()
 
                 fallback = subprocess.Popen(
                     [
-                        "scrcpy",
+                        _system_scrcpy_exe(),
                         "-s", device,
                         "--no-video",
                         "--no-control",
