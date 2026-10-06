@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import messagebox
 import subprocess
 import json
-import hashlib
 import socket
 import re
 import time
@@ -473,148 +472,6 @@ def connection_type(device):
 # SCRCPY CONTROL
 # ============================================================
 
-REMOTE_SCRCPY_SERVER = "/data/local/tmp/scrcpy-server.jar"
-
-
-def _file_sha256(path):
-    try:
-        digest = hashlib.sha256()
-        with open(path, "rb") as source:
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                digest.update(chunk)
-        return digest.hexdigest()
-    except Exception:
-        return ""
-
-
-def _remote_scrcpy_sha256(device):
-    result = run_hidden(
-        ["adb", "-s", device, "shell", "sha256sum", REMOTE_SCRCPY_SERVER],
-        10
-    )
-
-    if not result or result.returncode != 0:
-        return ""
-
-    token = (result.stdout or "").strip().split()
-    if not token:
-        return ""
-
-    value = token[0].lower()
-    return value if re.fullmatch(r"[0-9a-f]{64}", value) else ""
-
-
-def _stock_scrcpy_server_path():
-    scrcpy_exe = shutil.which("scrcpy")
-    if not scrcpy_exe:
-        return None
-
-    candidate = os.path.join(
-        os.path.dirname(os.path.abspath(scrcpy_exe)),
-        "scrcpy-server"
-    )
-
-    return candidate if os.path.isfile(candidate) else None
-
-
-def _remote_scrcpy_environment(device, server_path):
-    """
-    Stage the server once over ADB's binary exec stream, then let scrcpy use a
-    tiny ADB proxy which skips only its redundant server push. All other ADB
-    commands pass straight through to the normal adb.exe.
-
-    This avoids scrcpy's sync-protocol push repeatedly crossing a high-latency
-    Tailscale route. It never disconnects or restarts ADB.
-    """
-    env = os.environ.copy()
-    env.pop("SCRCPY_SERVER_PATH", None)
-
-    if not is_tailscale(device):
-        return env
-
-    if not server_path or not os.path.isfile(server_path):
-        raise RuntimeError("scrcpy server file was not found on this PC.")
-
-    real_adb = shutil.which("adb")
-    if not real_adb:
-        raise RuntimeError("adb.exe was not found.")
-
-    proxy = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "AndroidBridge-AdbProxyV2.exe"
-    )
-
-    if not os.path.isfile(proxy):
-        raise RuntimeError(
-            "AndroidBridge remote ADB helper is missing.\n\n"
-            "Close AndroidBridge and run AndroidBridge-Lite.bat again."
-        )
-
-    local_hash = _file_sha256(server_path)
-    if not local_hash:
-        raise RuntimeError("Could not verify the local scrcpy server.")
-
-    if _remote_scrcpy_sha256(device) != local_hash:
-        _queue_ui(
-            lambda: mode_label.config(
-                text="MODE: PREPARING REMOTE VIDEO..."
-            )
-        )
-
-        # The ordinary "adb push" sync transaction is what is timing out on
-        # this long-latency route. exec-in is a raw binary stdin stream, so it
-        # avoids that sync copy protocol. Retry once, then verify SHA-256.
-        staged = False
-
-        for attempt in range(2):
-            run_hidden(
-                ["adb", "-s", device, "shell", "rm", "-f", REMOTE_SCRCPY_SERVER],
-                10
-            )
-
-            try:
-                with open(server_path, "rb") as source:
-                    transfer = subprocess.run(
-                        [
-                            real_adb,
-                            "-s", device,
-                            "exec-in",
-                            "sh", "-c",
-                            "cat > " + REMOTE_SCRCPY_SERVER
-                        ],
-                        stdin=source,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE,
-                        creationflags=HIDE,
-                        timeout=180
-                    )
-
-                if (
-                    transfer.returncode == 0
-                    and _remote_scrcpy_sha256(device) == local_hash
-                ):
-                    staged = True
-                    break
-            except Exception:
-                pass
-
-            time.sleep(1)
-
-        if not staged:
-            raise RuntimeError(
-                "Remote video engine could not be staged on the phone.\n\n"
-                "The ADB/Tailscale connection is alive, but its file-transfer "
-                "path is currently too unstable."
-            )
-
-    env["ADB"] = proxy
-    env["ANDROIDBRIDGE_REAL_ADB"] = real_adb
-    return env
-
-
 def stop_scrcpy():
 
     global current_process
@@ -911,7 +768,6 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         scrcpy_env.pop("SCRCPY_SERVER_PATH", None)
 
         stderr_target = subprocess.DEVNULL
-        server_to_stage = _stock_scrcpy_server_path()
 
         if low_light:
             _queue_ui(
@@ -938,23 +794,11 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
                 return
 
             scrcpy_env["SCRCPY_SERVER_PATH"] = custom_server
-            server_to_stage = custom_server
             stderr_target = subprocess.PIPE
 
-        if is_tailscale(device):
-            scrcpy_env = _remote_scrcpy_environment(
-                device,
-                server_to_stage
-            )
-
-            if low_light:
-                scrcpy_env["SCRCPY_SERVER_PATH"] = custom_server
-
-            # Keep the verified server on the phone. The proxy skips scrcpy's
-            # redundant push on subsequent starts.
-            if "--no-cleanup" not in args:
-                args.append("--no-cleanup")
-
+        # Use stock scrcpy directly. This is intentionally the same path as
+        # the verified manual PowerShell command. No ADB proxy, no chunker,
+        # no persistent-server interception.
         process = subprocess.Popen(
             [
                 "scrcpy",
@@ -1275,14 +1119,6 @@ def start_audio():
 
         audio_env = os.environ.copy()
         audio_env.pop("SCRCPY_SERVER_PATH", None)
-        audio_extra = []
-
-        if is_tailscale(device):
-            audio_env = _remote_scrcpy_environment(
-                device,
-                _stock_scrcpy_server_path()
-            )
-            audio_extra.append("--no-cleanup")
 
         # Use Samsung's voice-recognition capture path rather than camcorder audio:
         # camcorder preserves ambience (including wind); voice-recognition is a
@@ -1304,7 +1140,7 @@ def start_audio():
                 "--audio-buffer=60",
                 "--record=" + pipe_name,
                 "--record-format=opus"
-            ] + audio_extra,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=HIDE,
