@@ -15,3 +15,6 @@ location.json
 location_history.jsonl
 pc/New Text Document.txt
 pc/AndroidBridge-AdbProxy*.exe
+
+# Downloaded official media runtimes (installed locally by launcher)
+tools/runtime/
