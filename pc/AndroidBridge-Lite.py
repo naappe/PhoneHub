@@ -1266,9 +1266,16 @@ def start_audio():
         if cleared:
             time.sleep(0.8)
 
-    # If Screen/Camera is genuinely starting in this same app, do not kill it;
-    # serialize audio behind its one legitimate server upload.
+    # Use the same startup gate as Screen/Camera. This closes the race where
+    # Audio and Video both see zero pushes and then start two pushes together.
+    scrcpy_start_lock.acquire()
+    startup_gate_held = True
+
+    # If Screen/Camera is genuinely starting, wait behind its one legitimate
+    # server upload instead of creating a competing push.
     if not _wait_for_scrcpy_uploads_to_finish(600):
+        scrcpy_start_lock.release()
+        startup_gate_held = False
         _queue_ui(
             lambda: _set_audio_monitor_status(
                 "AUDIO WAITING TIMED OUT - TRY AGAIN", DANGER
@@ -1281,6 +1288,9 @@ def start_audio():
 
     ffplay_path = shutil.which("ffplay")
     if not ffplay_path:
+        if startup_gate_held:
+            scrcpy_start_lock.release()
+            startup_gate_held = False
         _queue_ui(
             lambda: messagebox.showerror(
                 "AndroidBridge Audio",
@@ -1302,6 +1312,9 @@ def start_audio():
     ).start()
 
     if not ready_event.wait(timeout=2):
+        if startup_gate_held:
+            scrcpy_start_lock.release()
+            startup_gate_held = False
         _queue_ui(
             lambda: messagebox.showerror(
                 "AndroidBridge Audio",
@@ -1338,6 +1351,36 @@ def start_audio():
                 text=f"MODE: AUDIO STARTING | BOOST +{gain_db} dB"
             )
         )
+
+        # Keep the shared gate until THIS audio client's adb push has ended.
+        # After that scrcpy has its own SCID/socket and Screen/Camera may start.
+        audio_upload_ok = _wait_for_this_scrcpy_start(
+            audio_process,
+            "AUDIO",
+            600
+        )
+
+        if startup_gate_held:
+            scrcpy_start_lock.release()
+            startup_gate_held = False
+
+        if not audio_upload_ok:
+            try:
+                if audio_process.poll() is None:
+                    _terminate_scrcpy_push_children(audio_process.pid)
+                    audio_process.terminate()
+            except Exception:
+                pass
+            audio_process = None
+            _queue_ui(
+                lambda: _set_audio_monitor_status(
+                    "AUDIO START FAILED", DANGER
+                )
+            )
+            _queue_ui(
+                lambda: mode_label.config(text="MODE: AUDIO START FAILED")
+            )
+            return
 
         def confirm_audio_started(proc, gain):
             # A remote scrcpy launch may spend several seconds establishing the
@@ -1504,6 +1547,12 @@ def start_audio():
         ).start()
 
     except Exception as e:
+        try:
+            if startup_gate_held:
+                scrcpy_start_lock.release()
+                startup_gate_held = False
+        except Exception:
+            pass
         audio_process = None
         error_text = "Audio could not start:\n\n" + str(e)
         _queue_ui(
