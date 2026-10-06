@@ -22,7 +22,7 @@ HIDE = 0x08000000
 # LOCKED WORKING PROFILE
 # Normal screen/camera/audio settings below are the verified baseline.
 # NIGHT CAMERA is additive only and must not modify those profiles.
-STABLE_PROFILE = "2026-10-06-wind-cut-voice-preserve-v1"
+STABLE_PROFILE = "2026-10-06-audio-open-stable-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
@@ -937,8 +937,8 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event, gain_db):
         PIPE_ACCESS_INBOUND,
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         1,
-        16384,
-        16384,
+        65536,
+        65536,
         0,
         None
     )
@@ -977,8 +977,6 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event, gain_db):
                 "-loglevel", "error",
                 "-fflags", "nobuffer",
                 "-flags", "low_delay",
-                "-probesize", "32",
-                "-analyzeduration", "0",
                 "-af", filter_chain,
                 "-i", "pipe:0"
             ],
@@ -990,7 +988,7 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event, gain_db):
         )
 
         audio_boost_process = player
-        buffer = ctypes.create_string_buffer(16384)
+        buffer = ctypes.create_string_buffer(65536)
         count = wintypes.DWORD()
 
         while player.poll() is None:
@@ -1085,7 +1083,7 @@ def start_audio():
                 "--audio-source=mic-voice-recognition",
                 "--audio-codec=opus",
                 "--audio-bit-rate=128K",
-                "--audio-buffer=20",
+                "--audio-buffer=40",
                 "--record=" + pipe_name,
                 "--record-format=opus"
             ],
@@ -1097,9 +1095,37 @@ def start_audio():
 
         _queue_ui(
             lambda: mode_label.config(
-                text=f"MODE: WIND CUT + VOICE | BOOST +{gain_db} dB"
+                text=f"MODE: AUDIO STARTING | BOOST +{gain_db} dB"
             )
         )
+
+        def confirm_audio_started(proc, gain):
+            time.sleep(2.0)
+            try:
+                if proc.poll() is None:
+                    _queue_ui(
+                        lambda: mode_label.config(
+                            text=f"MODE: AUDIO ON | WIND CUT + VOICE | +{gain} dB"
+                        )
+                    )
+                else:
+                    _queue_ui(
+                        lambda: messagebox.showerror(
+                            "AndroidBridge Audio",
+                            "The microphone stream stopped during startup."
+                        )
+                    )
+                    _queue_ui(
+                        lambda: mode_label.config(text="MODE: AUDIO START FAILED")
+                    )
+            except Exception:
+                pass
+
+        threading.Thread(
+            target=confirm_audio_started,
+            args=(audio_process, gain_db),
+            daemon=True
+        ).start()
 
     except Exception as e:
         audio_process = None
