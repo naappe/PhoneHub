@@ -12,7 +12,7 @@ if errorlevel 1 (
 
 rem Self-heal the tracked runtime set. "git pull" alone does not remove
 rem local working-tree edits, which can leave files from different builds mixed.
-git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" "pc\AndroidBridge-PhoneData.py" "pc\scrcpy-server-v4.1-llb" "pc\scrcpy-server-v4.1-llb.sha256" "tools\cleanup-stale-startups.ps1" >nul 2>&1
+git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" "pc\AndroidBridge-PhoneData.py" "pc\scrcpy-server-v4.1-llb" "pc\scrcpy-server-v4.1-llb.sha256" "tools\cleanup-stale-startups.ps1" "tools\ensure-fast-scrcpy.ps1" >nul 2>&1
 
 rem Old builds wrote scrcpy logs that no longer describe the active runtime.
 rem Remove them so stale proxy/chunk errors cannot be mistaken for current errors.
@@ -56,6 +56,19 @@ if errorlevel 1 (
     echo scrcpy was not found in PATH.
     pause
     exit /b 1
+)
+
+rem Normal Screen/Camera/Audio use the official compact scrcpy v3.3.4
+rem runtime because its server is ~91 KB instead of v4.1's ~734 KB.
+rem The existing v4.1 installation remains the automatic compatibility
+rem fallback and continues to power NIGHT CAMERA / Low Light Boost.
+if exist "%~dp0tools\ensure-fast-scrcpy.ps1" (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\ensure-fast-scrcpy.ps1" >nul
+    if errorlevel 1 (
+        echo [AndroidBridge] Fast media engine unavailable - using standard scrcpy.
+    ) else (
+        echo [AndroidBridge] Fast media engine ready.
+    )
 )
 
 echo [AndroidBridge] Verifying Python source...
