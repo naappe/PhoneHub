@@ -16,14 +16,14 @@ git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" "pc\AndroidBr
 
 rem Old builds wrote scrcpy logs that no longer describe the active runtime.
 rem Remove them so stale proxy/chunk errors cannot be mistaken for current errors.
-del /q "pc\scrcpy-audio.log" "pc\scrcpy-camera.log" "pc\scrcpy-screen.log" >nul 2>&1
+del /q "pc\scrcpy-*.log" >nul 2>&1
 
 rem Never let an inherited scrcpy ADB override select the retired proxy.
 set "ADB="
 set "ANDROIDBRIDGE_REAL_ADB="
 
 rem Remove known obsolete/generated files. Never remove user data/history.
-del /q "%~dp0pc\AndroidBridge-AdbProxy.exe" "%~dp0pc\AndroidBridge-AdbProxyV2.exe" "%~dp0pc\pc\AndroidBridge-AdbProxyV2.cs" >nul 2>&1
+del /q "%~dp0pc\AndroidBridge-AdbProxy.exe" "%~dp0pc\AndroidBridge-AdbProxyV2.exe" "%~dp0pc\AndroidBridge-AdbProxyV2.cs" >nul 2>&1
 del /q "%~dp0pc\New Text Document.txt" >nul 2>&1
 del /q "%~dp0AndroidBridge-Lite.py" "%~dp0AndroidBridge-PhoneData.py" >nul 2>&1
 if exist "%~dp0__pycache__" rmdir /s /q "%~dp0__pycache__"
