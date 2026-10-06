@@ -169,3 +169,10 @@ Repair:
 - the RECONNECT PHONE button performs one immediate check without creating duplicate repeating timers.
 
 Checkpoint before this repair: `checkpoint/before-laptop-resume-recovery-2026-10-06`.
+
+
+## Verification update: laptop sleep/resume recovery
+
+User completed the real lid-close test after the resume-recovery repair: Screen worked before sleep, the laptop lid was closed, then after reopening the laptop Screen worked again. The recurring laptop sleep/resume failure is therefore verified fixed on the user's actual remote setup.
+
+Preserve the resume watchdog, independent connection scheduler, same-endpoint ADB reconnect behavior, and the rule that recovery must never use adb disconnect or adb kill-server.
