@@ -32,6 +32,8 @@ ADB_TLS_PORT_CACHE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     ".androidbridge-adb-tls-port"
 )
+ADB_PORT_QUERY_PORT = 5572
+ADB_PORT_QUERY_TOKEN = b"ANDROIDBRIDGE_ADB_PORT?\n"
 
 
 TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"
@@ -429,13 +431,55 @@ def _existing_tailscale_target():
     return None
 
 
-def discover_adb_tls_port():
-    """Discover Samsung's current random Wireless Debugging TLS port via mDNS.
+def _query_phone_adb_tls_port():
+    """Ask Samsung Secure for adbd's current dynamic TLS port over Tailscale.
 
-    Android advertises the secure ADB listener as _adb-tls-connect._tcp.
-    We reuse that port on the phone's Tailscale IP; the transport test proved
-    the same TLS listener is reachable through tun0.
+    This fixed app-level control socket survives ADB port changes. Samsung
+    Secure discovers its own local _adb-tls-connect._tcp advertisement and
+    returns only the port number to the paired PC. ADB authentication remains
+    unchanged and is still enforced by adbd.
     """
+    ip = tailscale_ip() or TAILSCALE_FALLBACK_IP
+
+    try:
+        with socket.create_connection((ip, ADB_PORT_QUERY_PORT), timeout=2.5) as conn:
+            conn.settimeout(8.0)
+            conn.sendall(ADB_PORT_QUERY_TOKEN)
+
+            data = b""
+            while len(data) < 256 and b"\n" not in data:
+                chunk = conn.recv(256 - len(data))
+                if not chunk:
+                    break
+                data += chunk
+    except Exception:
+        return None
+
+    try:
+        text = data.decode("ascii", errors="ignore").strip()
+    except Exception:
+        return None
+
+    match = re.fullmatch(r"ADB_TLS_PORT=(\d+)", text)
+    if not match:
+        return None
+
+    port = _valid_adb_tls_port(match.group(1))
+    if port:
+        _save_adb_tls_port(port)
+    return port
+
+
+def discover_adb_tls_port():
+    """Discover Samsung's current random Wireless Debugging TLS port.
+
+    Permanent cross-network path: ask Samsung Secure over its fixed Tailscale
+    control socket. Local mDNS remains the fallback for same-LAN operation.
+    """
+    port = _query_phone_adb_tls_port()
+    if port:
+        return port
+
     result = run_hidden(["adb", "mdns", "services"], 8)
     if result:
         for line in result.stdout.splitlines():
