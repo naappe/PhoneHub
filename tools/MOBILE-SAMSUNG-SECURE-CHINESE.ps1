@@ -114,7 +114,7 @@ foreach ($f in @($Camera,$Screen)) {
 
 Write-Host ""
 Write-Host "[4/5] Safety verification" -ForegroundColor Cyan
-$all = Get-Content $Bridge,$Main,$Gps,$Camera,$Screen -Raw
+$all = ((Get-Content $Bridge,$Main,$Gps,$Camera,$Screen -Raw) -join [Environment]::NewLine)
 $projectText = (Get-ChildItem $ProjectRoot -Recurse -File -Include *.java,*.xml,*.gradle |
     ForEach-Object { Get-Content $_.FullName -Raw }) -join [Environment]::NewLine
 
