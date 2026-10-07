@@ -434,16 +434,15 @@ def _existing_tailscale_target():
 def _query_phone_adb_tls_port():
     """Ask Samsung Secure for adbd's current dynamic TLS port over Tailscale.
 
-    This fixed app-level control socket survives ADB port changes. Samsung
-    Secure discovers its own local _adb-tls-connect._tcp advertisement and
-    returns only the port number to the paired PC. ADB authentication remains
-    unchanged and is still enforced by adbd.
+    The phone-side service is the permanent cross-network discovery channel.
+    It may come online a little after Tailscale during boot, so callers can
+    retry this cheap fixed-port query before using the expensive scan fallback.
     """
     ip = tailscale_ip() or TAILSCALE_FALLBACK_IP
 
     try:
-        with socket.create_connection((ip, ADB_PORT_QUERY_PORT), timeout=2.5) as conn:
-            conn.settimeout(8.0)
+        with socket.create_connection((ip, ADB_PORT_QUERY_PORT), timeout=4.0) as conn:
+            conn.settimeout(12.0)
             conn.sendall(ADB_PORT_QUERY_TOKEN)
 
             data = b""
@@ -465,9 +464,72 @@ def _query_phone_adb_tls_port():
         return None
 
     port = _valid_adb_tls_port(match.group(1))
-    if port:
-        _save_adb_tls_port(port)
+    if not port:
+        return None
+
+    _save_adb_tls_port(port)
     return port
+
+
+def _connect_published_adb_port(wait_seconds=75):
+    """Wait for Samsung Secure's fixed :5572 publisher after a phone reboot.
+
+    Tailscale can be reachable before Samsung Secure and adbd have both
+    completed boot. Keep asking the fixed app-level channel and connect only
+    to the exact port the phone reports. No adb reset/disconnect is performed.
+    """
+    global active_device
+
+    deadline = time.monotonic() + max(0, wait_seconds)
+    last_port = None
+
+    while time.monotonic() <= deadline:
+        port = _query_phone_adb_tls_port()
+        if port:
+            last_port = port
+            ip = tailscale_ip() or TAILSCALE_FALLBACK_IP
+            target = f"{ip}:{port}"
+
+            _queue_ui(
+                lambda t=target: (
+                    status.config(text="PHONE REPORTED ADB PORT"),
+                    route_label.config(text="TAILSCALE - CONNECTING"),
+                    device_label.config(text=t),
+                    mode_label.config(text="MODE: PLEASE WAIT")
+                )
+            )
+
+            try:
+                subprocess.run(
+                    ["adb", "connect", target],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+            except Exception:
+                pass
+
+            if adb_quick_state(target, 12):
+                _save_adb_tls_port(port)
+                active_device = target
+                return target
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+
+        _queue_ui(
+            lambda: (
+                status.config(text="WAITING FOR SAMSUNG SECURE..."),
+                route_label.config(text="TAILSCALE - PHONE BOOT RECOVERY"),
+                device_label.config(text=TAILSCALE_FALLBACK_IP),
+                mode_label.config(text="MODE: PLEASE WAIT")
+            )
+        )
+        time.sleep(min(5.0, remaining))
+
+    return None
 
 
 def discover_adb_tls_port():
@@ -628,13 +690,22 @@ def connect_tailscale():
 
 
 def _recover_remote_adb_endpoint():
-    """Run the proven cross-network dynamic-port recovery on explicit user action."""
+    """Recover a post-reboot remote ADB route without resetting ADB."""
     global active_device
 
     if not remote_recovery_lock.acquire(blocking=False):
         return None
 
     try:
+        # Permanent path first. After reboot, Tailscale may answer before the
+        # Samsung Secure process and adbd mDNS service are fully ready. Wait for
+        # the fixed :5572 publisher instead of immediately scanning 28k ports.
+        device = _connect_published_adb_port(wait_seconds=75)
+        if device:
+            return device
+
+        # Emergency compatibility fallback only. This keeps remote recovery
+        # possible if the publisher process is unavailable for an unusual boot.
         helper = os.path.join(
             _repo_root(),
             "tools",
@@ -645,8 +716,8 @@ def _recover_remote_adb_endpoint():
 
         _queue_ui(
             lambda: (
-                status.config(text="SEARCHING REMOTE ADB PORT..."),
-                route_label.config(text="TAILSCALE - REMOTE RECOVERY"),
+                status.config(text="EMERGENCY ADB PORT SEARCH..."),
+                route_label.config(text="TAILSCALE - FALLBACK RECOVERY"),
                 device_label.config(text=TAILSCALE_FALLBACK_IP),
                 mode_label.config(text="MODE: PLEASE WAIT")
             )
@@ -670,7 +741,6 @@ def _recover_remote_adb_endpoint():
         if result.returncode != 0:
             return None
 
-        # recover_remote_adb.py already authenticated adb and wrote the cache.
         device = choose_existing_device()
         if device and is_tailscale(device) and adb_quick_state(device, 10):
             port = _port_from_target(device)
