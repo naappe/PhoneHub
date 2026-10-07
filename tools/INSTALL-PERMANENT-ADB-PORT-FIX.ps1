@@ -437,12 +437,12 @@ function Query-PortPublisher {
 
         $stream = $client.GetStream()
         $stream.ReadTimeout = 12000
-        $writer2 = New-Object System.IO.StreamWriter($stream, [Text.Encoding]::ASCII, 1024, $true)
+        $writer2 = [System.IO.StreamWriter]::new($stream, [Text.Encoding]::ASCII, 1024, $true)
         $writer2.NewLine = [Environment]::NewLine
         $writer2.WriteLine("ANDROIDBRIDGE_ADB_PORT?")
         $writer2.Flush()
 
-        $reader = New-Object System.IO.StreamReader($stream, [Text.Encoding]::ASCII, $false, 1024, $true)
+        $reader = [System.IO.StreamReader]::new($stream, [Text.Encoding]::ASCII, $false, 1024, $true)
         $line = $reader.ReadLine()
         $client.Dispose()
         return $line
