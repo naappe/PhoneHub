@@ -188,10 +188,17 @@ def build_table(title, db_path, keywords):
         font=("Segoe UI", 16, "bold")
     ).pack(anchor="w")
 
+    is_legacy_backup = "androidbridge-lite-backup" in os.path.normcase(db_path)
+
     tk.Label(
         top,
-        text=db_path,
-        font=("Segoe UI", 9)
+        text=(
+            "LEGACY BACKUP - NOT LIVE PHONE DATA\n" + db_path
+            if is_legacy_backup else db_path
+        ),
+        font=("Segoe UI", 9, "bold" if is_legacy_backup else "normal"),
+        fg="#B45309" if is_legacy_backup else "#000000",
+        justify="left"
     ).pack(anchor="w", pady=(2, 0))
 
     try:
