@@ -186,10 +186,19 @@ if ($LASTEXITCODE -ne 0) {
     throw "APK update failed. The existing app was NOT uninstalled."
 }
 
-adb -s $Device shell am start -n com.androidbridge.calls/.MainActivity | Out-Null
+adb -s $Device shell am start -n com.androidbridge.calls/com.androidbridge.MainActivity | Out-Null
 Start-Sleep -Seconds 1
 adb -s $Device shell am start -n com.androidbridge.calls/com.androidbridge.OfflineLocationSetupActivity --ez enable_offline_gps true | Out-Null
 Start-Sleep -Seconds 2
+
+# An in-place APK update stops the old app process. MainActivity normally restores BridgeService;
+# verify it and request foreground start only if it did not return.
+$svcState = (adb -s $Device shell dumpsys activity services $Package | Out-String)
+if ($svcState -notmatch "BridgeService") {
+    Write-Host "BridgeService not running after update - restoring it..." -ForegroundColor Yellow
+    adb -s $Device shell am start-foreground-service -n com.androidbridge.calls/com.androidbridge.BridgeService | Out-Host
+    Start-Sleep -Seconds 2
+}
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
