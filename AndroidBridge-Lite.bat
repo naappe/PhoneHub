@@ -1,13 +1,14 @@
+@chcp 65001 >nul
 @echo off
 setlocal
 cd /d "%~dp0"
 
-echo [AndroidBridge] Checking GitHub updates...
+echo [Samsung Secure] 正在检查 GitHub 更新...
 git pull --ff-only >nul 2>&1
 if errorlevel 1 (
-    echo [AndroidBridge] Update skipped - using current local version.
+    echo [Samsung Secure] 更新已跳过 - 使用当前本地版本。
 ) else (
-    echo [AndroidBridge] Up to date.
+    echo [Samsung Secure] 已是最新版本。
 )
 
 rem Self-heal the tracked runtime set. "git pull" alone does not remove
@@ -26,7 +27,7 @@ rem Remove only abandoned AndroidBridge scrcpy startup uploads from earlier
 rem runs. This script never disconnects or kills the ADB server.
 if exist "%~dp0tools\cleanup-stale-startups.ps1" (
     for /f %%i in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\cleanup-stale-startups.ps1" 2^>nul') do (
-        if not "%%i"=="0" echo [AndroidBridge] Cleared %%i stale media startup^(s^).
+        if not "%%i"=="0" echo [Samsung Secure] 已清理 %%i 个过期媒体启动进程。
     )
 )
 
@@ -65,22 +66,22 @@ rem fallback and continues to power NIGHT CAMERA / Low Light Boost.
 if exist "%~dp0tools\ensure-fast-scrcpy.ps1" (
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\ensure-fast-scrcpy.ps1" >nul
     if errorlevel 1 (
-        echo [AndroidBridge] Fast media engine unavailable - using standard scrcpy.
+        echo [Samsung Secure] 快速媒体引擎不可用 - 使用标准 scrcpy。
     ) else (
-        echo [AndroidBridge] Fast media engine ready.
+        echo [Samsung Secure] 快速媒体引擎已就绪。
     )
 )
 
-echo [AndroidBridge] Verifying Python source...
+echo [Samsung Secure] 正在验证 Python 源代码...
 python -m py_compile "%~dp0pc\AndroidBridge-Lite.py" "%~dp0pc\AndroidBridge-PhoneData.py"
 if errorlevel 1 (
-    echo [AndroidBridge] Source verification FAILED.
+    echo [Samsung Secure] 源代码验证失败。
     pause
     exit /b 1
 )
 
-for /f %%i in ('git rev-parse --short HEAD 2^>nul') do echo [AndroidBridge] GitHub version: %%i
-echo [AndroidBridge] Starting verified runtime...
+for /f %%i in ('git rev-parse --short HEAD 2^>nul') do echo [Samsung Secure] GitHub 版本： %%i
+echo [Samsung Secure] 正在启动已验证的运行环境...
 
 python "%~dp0pc\AndroidBridge-Lite.py"
 exit /b %errorlevel%
