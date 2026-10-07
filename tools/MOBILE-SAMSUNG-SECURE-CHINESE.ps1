@@ -229,10 +229,18 @@ if ($LASTEXITCODE -ne 0) {
     throw "APK update failed. The existing app was NOT uninstalled."
 }
 
+# Open only the Samsung Secure call-permission UI.
+# OfflineLocationSetupActivity is a setup screen and must NOT be stacked underneath it.
 adb -s $Device shell am start -n com.androidbridge.calls/com.androidbridge.MainActivity | Out-Null
-Start-Sleep -Seconds 1
-adb -s $Device shell am start -n com.androidbridge.calls/com.androidbridge.OfflineLocationSetupActivity --ez enable_offline_gps true | Out-Null
 Start-Sleep -Seconds 2
+
+# Keep offline GPS running without displaying its setup Activity.
+$svcState = (adb -s $Device shell dumpsys activity services $Package | Out-String)
+if ($svcState -notmatch "OfflineLocationService") {
+    Write-Host "OfflineLocationService not running after update - restoring it..." -ForegroundColor Yellow
+    adb -s $Device shell am start-foreground-service -n com.androidbridge.calls/com.androidbridge.OfflineLocationService | Out-Host
+    Start-Sleep -Seconds 2
+}
 
 # An in-place APK update stops the old app process. MainActivity normally restores BridgeService;
 # verify it and request foreground start only if it did not return.
