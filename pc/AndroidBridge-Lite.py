@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox
 import subprocess
+import sys
 import json
 import socket
 import re
@@ -99,6 +100,7 @@ checking = False
 # only those stale local media processes and re-open ADB to the same phone.
 resume_heartbeat_at = time.time()
 resume_recovery_lock = threading.Lock()
+remote_recovery_lock = threading.Lock()
 
 # Tkinter must stay free to process paint/input events. Remote ADB, scrcpy
 # startup/shutdown and Tailscale checks can take seconds, so button handlers
@@ -1875,7 +1877,7 @@ def background_check():
 
     global checking
 
-    if checking:
+    if checking or remote_recovery_lock.locked():
         return
 
     # Do not send status ADB commands while scrcpy is starting or streaming.
@@ -2176,6 +2178,90 @@ def _resume_watchdog():
         pass
 
 
+def _reconnect_worker():
+    """Reconnect normally, then recover a changed remote ADB TLS port if needed."""
+    global active_device
+
+    if not remote_recovery_lock.acquire(blocking=False):
+        return
+
+    try:
+        active_device = None
+
+        # Fast path: USB, LAN Wi-Fi, an existing Tailscale ADB route, mDNS, or
+        # the last cached secure port. This preserves normal startup behavior.
+        device = get_device(True)
+        if device:
+            active_device = device
+            _queue_ui(lambda d=device: display_status(d))
+            return
+
+        # Cross-network reboot path: Android selected a new random Wireless
+        # Debugging TLS port and remote mDNS cannot cross the Tailscale route.
+        # The recovery helper scans the phone's normal ephemeral range through
+        # its Tailscale IP and asks the already-paired adb client to authenticate
+        # only to open candidates. It never resets/kills/disconnects ADB.
+        helper = os.path.join(
+            _repo_root(),
+            "tools",
+            "recover_remote_adb.py"
+        )
+
+        if not os.path.isfile(helper):
+            _queue_ui(
+                lambda: (
+                    status.config(text="REMOTE ADB RECOVERY TOOL MISSING"),
+                    route_label.config(text="RUN GIT PULL"),
+                    device_label.config(text=TAILSCALE_FALLBACK_IP)
+                )
+            )
+            return
+
+        _queue_ui(
+            lambda: (
+                status.config(text="SEARCHING REMOTE ADB PORT..."),
+                route_label.config(text="TAILSCALE - REMOTE RECOVERY"),
+                device_label.config(text=TAILSCALE_FALLBACK_IP),
+                mode_label.config(text="MODE: PLEASE WAIT")
+            )
+        )
+
+        env = os.environ.copy()
+        env["ANDROIDBRIDGE_PHONE_IP"] = tailscale_ip() or TAILSCALE_FALLBACK_IP
+
+        try:
+            result = subprocess.run(
+                [sys.executable, helper],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                env=env
+            )
+        except Exception:
+            result = None
+
+        if result is not None and result.returncode == 0:
+            device = get_device(False) or get_device(True)
+            if device:
+                active_device = device
+                _queue_ui(lambda d=device: display_status(d))
+                return
+
+        active_device = None
+        _queue_ui(
+            lambda: (
+                status.config(text="REMOTE ADB NOT FOUND"),
+                route_label.config(text="TAILSCALE ONLINE - ADB PORT UNKNOWN"),
+                device_label.config(text=TAILSCALE_FALLBACK_IP),
+                mode_label.config(text="MODE: STOPPED")
+            )
+        )
+
+    finally:
+        remote_recovery_lock.release()
+
+
 def reconnect():
 
     global active_device
@@ -2190,10 +2276,11 @@ def reconnect():
         text="CHECKING USB / WI-FI / TAILSCALE"
     )
 
-    # Run one immediate check; the independent 5-second scheduler is already
-    # active, so do not create another repeating timer from this button.
+    # The worker keeps the Tk UI responsive. If the phone rebooted remotely
+    # and changed its secure ADB port, this button now performs the same proven
+    # recovery scan automatically instead of asking for PowerShell commands.
     threading.Thread(
-        target=background_check,
+        target=_reconnect_worker,
         daemon=True
     ).start()
 
