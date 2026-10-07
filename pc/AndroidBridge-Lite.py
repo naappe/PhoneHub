@@ -596,9 +596,23 @@ def get_device(allow_remote=True):
     device = choose_existing_device()
 
     if device:
-        if not is_tailscale(device) or adb_quick_state(device, 5):
+        if not is_tailscale(device):
             active_device = device
             return device
+
+        if adb_quick_state(device, 5):
+            # IMPORTANT: persist the dynamic TLS port even when ADB already
+            # auto-connected before AndroidBridge started. Without this, the
+            # controller could display/use a healthy Tailscale route but never
+            # write the cache. If that ADB transport later disappeared while
+            # PC and phone were on different networks, mDNS could not recover
+            # the port and the UI fell back to the bare Tailscale IP.
+            port = _port_from_target(device)
+            if port:
+                _save_adb_tls_port(port)
+            active_device = device
+            return device
+
         device = None
 
     if allow_remote:
