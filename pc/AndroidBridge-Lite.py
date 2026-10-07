@@ -87,6 +87,24 @@ audio_monitor_status = None
 audio_monitor_gain = None
 current_mode = "STOPPED"
 active_device = None
+
+def _zh_mode_name(value):
+    return {
+        "STOPPED": "已停止",
+        "SCREEN": "屏幕",
+        "BACK CAMERA": "后置摄像头",
+        "FRONT CAMERA": "前置摄像头",
+        "NIGHT CAMERA": "夜间摄像头",
+        "NIGHT VISION BOOST": "夜视增强",
+        "AUDIO": "音频",
+        "ERROR": "错误",
+    }.get(str(value), str(value))
+
+def _zh_engine_name(value):
+    return {
+        "FAST": "快速引擎",
+        "STANDARD": "标准引擎",
+    }.get(str(value), str(value))
 checking = False
 
 # Laptop sleep/resume recovery. A suspended Windows session can leave the
@@ -493,16 +511,16 @@ def get_device(allow_remote=True):
 def connection_type(device):
 
     if not device:
-        return "DISCONNECTED"
+        return "未连接"
 
     if is_usb(device):
-        return "USB - FAST"
+        return "USB - 快速"
 
     if is_local(device):
-        return "LOCAL WI-FI - FAST"
+        return "本地 Wi-Fi - 快速"
 
     if is_tailscale(device):
-        return "TAILSCALE - REMOTE"
+        return "Tailscale - 远程"
 
     return "ADB"
 
@@ -661,13 +679,13 @@ def _set_nightvision_window_title(status):
             if length:
                 buf = ctypes.create_unicode_buffer(length + 1)
                 user32.GetWindowTextW(hwnd, buf, length + 1)
-                if buf.value.startswith("AndroidBridge NIGHT VISION BOOST"):
+                if buf.value.startswith("Samsung Secure 夜视增强"):
                     matches.append(hwnd)
             return True
 
         user32.EnumWindows(enum_proc, 0)
         for hwnd in matches:
-            SetWindowTextW(hwnd, "AndroidBridge NIGHT VISION BOOST - " + status)
+            SetWindowTextW(hwnd, "Samsung Secure 夜视增强 - " + status)
     except:
         pass
 
@@ -776,7 +794,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         )
 
     _queue_ui(
-        lambda m=mode: mode_label.config(text=f"MODE: {m} STARTING...")
+        lambda m=mode: mode_label.config(text=f"模式：{_zh_mode_name(m)} 正在启动...")
     )
 
     # Stock scrcpy always uploads its server before opening the media sockets.
@@ -800,7 +818,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         if not _wait_for_scrcpy_uploads_to_finish(600):
             _queue_ui(
                 lambda m=mode: mode_label.config(
-                    text=f"MODE: {m} START FAILED - SERVER BUSY"
+                    text=f"模式：{_zh_mode_name(m)} 启动失败 - 服务繁忙"
                 )
             )
             return
@@ -821,9 +839,9 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
             if not os.path.isfile(custom_server):
                 _queue_ui(
                     lambda: messagebox.showerror(
-                        "AndroidBridge Night Vision",
-                        "Low Light Boost engine is missing.\n\n"
-                        "Run git pull, then restart AndroidBridge."
+                        "Samsung Secure 夜视增强",
+                        "缺少低光增强引擎。\n\n"
+                        "请运行 git pull，然后重新启动 Samsung Secure。"
                     )
                 )
                 return
@@ -875,7 +893,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
                     engine = "FAST" if attempt == 0 and use_fast and len(candidates) > 1 else "STANDARD"
                     _queue_ui(
                         lambda m=mode, r=route_text, d=device, e=engine: (
-                            mode_label.config(text=f"MODE: {m} | {e}"),
+                            mode_label.config(text=f"模式：{_zh_mode_name(m)} | {_zh_engine_name(e)}"),
                             route_label.config(text=r),
                             device_label.config(text=d)
                         )
@@ -893,7 +911,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
                 if attempt + 1 < len(candidates):
                     _queue_ui(
                         lambda m=mode: mode_label.config(
-                            text=f"MODE: {m} RETRYING STANDARD ENGINE..."
+                            text=f"模式：{_zh_mode_name(m)} 正在重试标准引擎..."
                         )
                     )
                     if not _wait_for_scrcpy_uploads_to_finish(120):
@@ -919,12 +937,12 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
 
         current_mode = "ERROR"
         _queue_ui(
-            lambda m=mode: mode_label.config(text=f"MODE: {m} START FAILED")
+            lambda m=mode: mode_label.config(text=f"模式：{_zh_mode_name(m)} 启动失败")
         )
         if last_error:
             _queue_ui(
                 lambda msg=last_error: messagebox.showerror(
-                    "AndroidBridge Lite",
+                    "Samsung Secure",
                     msg
                 )
             )
@@ -990,7 +1008,7 @@ def open_phone_data(mode):
     except Exception as e:
 
         messagebox.showerror(
-            "AndroidBridge Lite",
+            "Samsung Secure",
             str(e)
         )
 
@@ -1072,7 +1090,7 @@ def _wait_for_this_scrcpy_start(process, label, max_wait=600):
                 last_second = sec
                 _queue_ui(
                     lambda m=label, s=sec: mode_label.config(
-                        text=f"MODE: {m} STARTING | SERVER UPLOAD {s}s"
+                        text=f"模式：{_zh_mode_name(m)} 正在启动 | 服务上传 {s}秒"
                     )
                 )
         else:
@@ -1181,7 +1199,7 @@ def _wait_for_scrcpy_uploads_to_finish(max_wait=600):
             )
             _queue_ui(
                 lambda n=count, s=elapsed: mode_label.config(
-                    text=f"MODE: AUDIO SERVER UPLOAD | {s}s | {n} ACTIVE"
+                    text=f"模式：音频服务上传 | {s}秒 | {n} 个活动"
                 )
             )
 
@@ -1340,7 +1358,7 @@ def start_audio():
 
     _queue_ui(
         lambda: mode_label.config(
-            text=f"MODE: AUDIO STARTING | +{int(audio_gain_db)} dB"
+            text=f"模式：正在启动音频 | +{int(audio_gain_db)} dB"
         )
     )
 
@@ -1455,7 +1473,7 @@ def start_audio():
 
         _queue_ui(
             lambda: mode_label.config(
-                text=f"MODE: AUDIO STARTING | BOOST +{gain_db} dB"
+                text=f"模式：正在启动音频 | 增强 +{gain_db} dB"
             )
         )
 
@@ -1513,7 +1531,7 @@ def start_audio():
                     if player is not None and player.poll() is None:
                         _queue_ui(
                             lambda: mode_label.config(
-                                text=f"MODE: AUDIO ON | CLEAR VOICE | +{gain} dB"
+                                text=f"模式：音频开启 | 清晰语音 | +{gain} dB"
                             )
                         )
                         _queue_ui(
@@ -1539,7 +1557,7 @@ def start_audio():
                             )
                             _queue_ui(
                                 lambda n=pushes, s=upload_second: mode_label.config(
-                                    text=f"MODE: AUDIO SERVER UPLOAD | {s}s | {n} ACTIVE"
+                                    text=f"模式：音频服务上传 | {s}秒 | {n} 个活动"
                                 )
                             )
                     elif saw_upload:
@@ -1663,7 +1681,7 @@ def start_audio():
         error_text = "音频无法启动：\n\n" + str(e)
         _queue_ui(
             lambda msg=error_text: messagebox.showerror(
-                "AndroidBridge Lite", msg
+                "Samsung Secure", msg
             )
         )
 
@@ -1849,7 +1867,7 @@ def display_status(device, ts_state=None):
             )
 
     mode_label.config(
-        text="模式：" + current_mode
+        text="模式：" + _zh_mode_name(current_mode)
     )
 
 def schedule_check():
