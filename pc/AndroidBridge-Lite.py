@@ -87,24 +87,6 @@ audio_monitor_status = None
 audio_monitor_gain = None
 current_mode = "STOPPED"
 active_device = None
-
-def _zh_mode_name(value):
-    return {
-        "STOPPED": "已停止",
-        "SCREEN": "屏幕",
-        "BACK CAMERA": "后置摄像头",
-        "FRONT CAMERA": "前置摄像头",
-        "NIGHT CAMERA": "夜间摄像头",
-        "NIGHT VISION BOOST": "夜视增强",
-        "AUDIO": "音频",
-        "ERROR": "错误",
-    }.get(str(value), str(value))
-
-def _zh_engine_name(value):
-    return {
-        "FAST": "快速引擎",
-        "STANDARD": "标准引擎",
-    }.get(str(value), str(value))
 checking = False
 
 # Laptop sleep/resume recovery. A suspended Windows session can leave the
@@ -511,16 +493,16 @@ def get_device(allow_remote=True):
 def connection_type(device):
 
     if not device:
-        return "未连接"
+        return "DISCONNECTED"
 
     if is_usb(device):
-        return "USB - 快速"
+        return "USB - FAST"
 
     if is_local(device):
-        return "本地 Wi-Fi - 快速"
+        return "LOCAL WI-FI - FAST"
 
     if is_tailscale(device):
-        return "Tailscale - 远程"
+        return "TAILSCALE - REMOTE"
 
     return "ADB"
 
@@ -565,7 +547,7 @@ def stop_scrcpy():
     current_mode = "STOPPED"
 
     _queue_ui(
-        lambda: mode_label.config(text="模式：已停止")
+        lambda: mode_label.config(text="MODE: STOPPED")
     )
 
 
@@ -578,7 +560,7 @@ def scrcpy_screen_args(device):
             "--max-fps=60",
             "--video-codec=h264",
             "--no-audio",
-            "--window-title=Samsung Secure 屏幕"
+            "--window-title=AndroidBridge SCREEN"
         ]
 
     # TAILSCALE REMOTE
@@ -592,7 +574,7 @@ def scrcpy_screen_args(device):
         "--video-buffer=0",
         "--video-codec=h264",
         "--no-audio",
-        "--window-title=Samsung Secure 屏幕"
+        "--window-title=AndroidBridge SCREEN"
     ]
 
 
@@ -607,16 +589,16 @@ def scrcpy_camera_args(device, facing, night=False, low_light=False):
         # AE target FPS unset lets Android Camera2 choose its own exposure
         # behavior instead of AndroidBridge forcing the verified 15/30 FPS.
         camera_id = "0"
-        title = "Samsung Secure 夜视增强"
+        title = "AndroidBridge NIGHT VISION BOOST"
     elif night:
         # Stable night mode: use the proven rear camera path plus Samsung's
         # physical LED torch. This does not alter the normal camera profiles.
         camera_id = "0"
-        title = "Samsung Secure 夜间摄像头"
+        title = "AndroidBridge NIGHT CAMERA"
     elif facing == "back":
-        title = "Samsung Secure 后置摄像头"
+        title = "AndroidBridge BACK CAMERA"
     else:
-        title = "Samsung Secure 前置摄像头"
+        title = "AndroidBridge FRONT CAMERA"
 
     # USB / LOCAL WIFI
     if is_usb(device) or is_local(device):
@@ -679,13 +661,13 @@ def _set_nightvision_window_title(status):
             if length:
                 buf = ctypes.create_unicode_buffer(length + 1)
                 user32.GetWindowTextW(hwnd, buf, length + 1)
-                if buf.value.startswith("Samsung Secure 夜视增强"):
+                if buf.value.startswith("AndroidBridge NIGHT VISION BOOST"):
                     matches.append(hwnd)
             return True
 
         user32.EnumWindows(enum_proc, 0)
         for hwnd in matches:
-            SetWindowTextW(hwnd, "Samsung Secure 夜视增强 - " + status)
+            SetWindowTextW(hwnd, "AndroidBridge NIGHT VISION BOOST - " + status)
     except:
         pass
 
@@ -721,7 +703,7 @@ def _watch_nightvision_log(process):
                 _set_nightvision_window_title("SUPPORTED - WAITING FOR ACTIVE")
                 _queue_ui(
                     lambda: mode_label.config(
-                        text="模式：夜视增强 - 支持"
+                        text="MODE: NIGHT VISION BOOST - SUPPORTED"
                     )
                 )
 
@@ -729,7 +711,7 @@ def _watch_nightvision_log(process):
                 _set_nightvision_window_title("LLB ACTIVE")
                 _queue_ui(
                     lambda: mode_label.config(
-                        text="模式：夜视增强 - 已启用"
+                        text="MODE: NIGHT VISION BOOST - ACTIVE"
                     )
                 )
 
@@ -737,7 +719,7 @@ def _watch_nightvision_log(process):
                 _set_nightvision_window_title("LLB NOT SUPPORTED")
                 _queue_ui(
                     lambda: mode_label.config(
-                        text="模式：夜视增强 - 不支持"
+                        text="MODE: NIGHT VISION BOOST - NOT SUPPORTED"
                     )
                 )
 
@@ -745,13 +727,13 @@ def _watch_nightvision_log(process):
             _set_nightvision_window_title("CAPABILITY UNKNOWN")
             _queue_ui(
                 lambda: mode_label.config(
-                    text="模式：夜视增强 - 能力未知"
+                    text="MODE: NIGHT VISION BOOST - CAPABILITY UNKNOWN"
                 )
             )
     except:
         _queue_ui(
             lambda: mode_label.config(
-                text="模式：夜视增强 - 状态错误"
+                text="MODE: NIGHT VISION BOOST - STATUS ERROR"
             )
         )
 
@@ -794,7 +776,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         )
 
     _queue_ui(
-        lambda m=mode: mode_label.config(text=f"模式：{_zh_mode_name(m)} 正在启动...")
+        lambda m=mode: mode_label.config(text=f"MODE: {m} STARTING...")
     )
 
     # Stock scrcpy always uploads its server before opening the media sockets.
@@ -818,7 +800,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         if not _wait_for_scrcpy_uploads_to_finish(600):
             _queue_ui(
                 lambda m=mode: mode_label.config(
-                    text=f"模式：{_zh_mode_name(m)} 启动失败 - 服务繁忙"
+                    text=f"MODE: {m} START FAILED - SERVER BUSY"
                 )
             )
             return
@@ -827,7 +809,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
         if low_light:
             _queue_ui(
                 lambda: nv_diag_label.config(
-                    text="夜视传感器：正在读取 Samsung 摄像头能力..."
+                    text="NV SENSOR: reading Samsung camera capabilities..."
                 )
             )
 
@@ -839,9 +821,9 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
             if not os.path.isfile(custom_server):
                 _queue_ui(
                     lambda: messagebox.showerror(
-                        "Samsung Secure 夜视增强",
-                        "缺少低光增强引擎。\n\n"
-                        "请运行 git pull，然后重新启动 Samsung Secure。"
+                        "AndroidBridge Night Vision",
+                        "Low Light Boost engine is missing.\n\n"
+                        "Run git pull, then restart AndroidBridge."
                     )
                 )
                 return
@@ -893,7 +875,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
                     engine = "FAST" if attempt == 0 and use_fast and len(candidates) > 1 else "STANDARD"
                     _queue_ui(
                         lambda m=mode, r=route_text, d=device, e=engine: (
-                            mode_label.config(text=f"模式：{_zh_mode_name(m)} | {_zh_engine_name(e)}"),
+                            mode_label.config(text=f"MODE: {m} | {e}"),
                             route_label.config(text=r),
                             device_label.config(text=d)
                         )
@@ -911,7 +893,7 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
                 if attempt + 1 < len(candidates):
                     _queue_ui(
                         lambda m=mode: mode_label.config(
-                            text=f"模式：{_zh_mode_name(m)} 正在重试标准引擎..."
+                            text=f"MODE: {m} RETRYING STANDARD ENGINE..."
                         )
                     )
                     if not _wait_for_scrcpy_uploads_to_finish(120):
@@ -937,12 +919,12 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
 
         current_mode = "ERROR"
         _queue_ui(
-            lambda m=mode: mode_label.config(text=f"模式：{_zh_mode_name(m)} 启动失败")
+            lambda m=mode: mode_label.config(text=f"MODE: {m} START FAILED")
         )
         if last_error:
             _queue_ui(
                 lambda msg=last_error: messagebox.showerror(
-                    "Samsung Secure",
+                    "AndroidBridge Lite",
                     msg
                 )
             )
@@ -1008,7 +990,7 @@ def open_phone_data(mode):
     except Exception as e:
 
         messagebox.showerror(
-            "Samsung Secure",
+            "AndroidBridge Lite",
             str(e)
         )
 
@@ -1090,7 +1072,7 @@ def _wait_for_this_scrcpy_start(process, label, max_wait=600):
                 last_second = sec
                 _queue_ui(
                     lambda m=label, s=sec: mode_label.config(
-                        text=f"模式：{_zh_mode_name(m)} 正在启动 | 服务上传 {s}秒"
+                        text=f"MODE: {m} STARTING | SERVER UPLOAD {s}s"
                     )
                 )
         else:
@@ -1199,7 +1181,7 @@ def _wait_for_scrcpy_uploads_to_finish(max_wait=600):
             )
             _queue_ui(
                 lambda n=count, s=elapsed: mode_label.config(
-                    text=f"模式：音频服务上传 | {s}秒 | {n} 个活动"
+                    text=f"MODE: AUDIO SERVER UPLOAD | {s}s | {n} ACTIVE"
                 )
             )
 
@@ -1358,7 +1340,7 @@ def start_audio():
 
     _queue_ui(
         lambda: mode_label.config(
-            text=f"模式：正在启动音频 | +{int(audio_gain_db)} dB"
+            text=f"MODE: AUDIO STARTING | +{int(audio_gain_db)} dB"
         )
     )
 
@@ -1408,7 +1390,7 @@ def start_audio():
             )
         )
         _queue_ui(
-            lambda: mode_label.config(text="模式：等待音频超时")
+            lambda: mode_label.config(text="MODE: AUDIO WAITING TIMED OUT")
         )
         return
 
@@ -1473,7 +1455,7 @@ def start_audio():
 
         _queue_ui(
             lambda: mode_label.config(
-                text=f"模式：正在启动音频 | 增强 +{gain_db} dB"
+                text=f"MODE: AUDIO STARTING | BOOST +{gain_db} dB"
             )
         )
 
@@ -1503,7 +1485,7 @@ def start_audio():
                 )
             )
             _queue_ui(
-                lambda: mode_label.config(text="模式：音频启动失败")
+                lambda: mode_label.config(text="MODE: AUDIO START FAILED")
             )
             return
 
@@ -1531,7 +1513,7 @@ def start_audio():
                     if player is not None and player.poll() is None:
                         _queue_ui(
                             lambda: mode_label.config(
-                                text=f"模式：音频开启 | 清晰语音 | +{gain} dB"
+                                text=f"MODE: AUDIO ON | CLEAR VOICE | +{gain} dB"
                             )
                         )
                         _queue_ui(
@@ -1557,7 +1539,7 @@ def start_audio():
                             )
                             _queue_ui(
                                 lambda n=pushes, s=upload_second: mode_label.config(
-                                    text=f"模式：音频服务上传 | {s}秒 | {n} 个活动"
+                                    text=f"MODE: AUDIO SERVER UPLOAD | {s}s | {n} ACTIVE"
                                 )
                             )
                     elif saw_upload:
@@ -1606,7 +1588,7 @@ def start_audio():
                     )
                 )
                 _queue_ui(
-                    lambda: mode_label.config(text="模式：音频启动失败")
+                    lambda: mode_label.config(text="MODE: AUDIO START FAILED")
                 )
                 return
 
@@ -1636,7 +1618,7 @@ def start_audio():
                 if fallback.poll() is None:
                     _queue_ui(
                         lambda: mode_label.config(
-                            text="模式：音频开启 - 直接备用模式"
+                            text="MODE: AUDIO ON - DIRECT FALLBACK"
                         )
                     )
                     _queue_ui(
@@ -1649,7 +1631,7 @@ def start_audio():
                 pass
 
             _queue_ui(
-                lambda: mode_label.config(text="模式：音频启动失败")
+                lambda: mode_label.config(text="MODE: AUDIO START FAILED")
             )
             _queue_ui(
                 lambda: _set_audio_monitor_status(
@@ -1678,10 +1660,10 @@ def start_audio():
         except Exception:
             pass
         audio_process = None
-        error_text = "音频无法启动：\n\n" + str(e)
+        error_text = "Audio could not start:\n\n" + str(e)
         _queue_ui(
             lambda msg=error_text: messagebox.showerror(
-                "Samsung Secure", msg
+                "AndroidBridge Lite", msg
             )
         )
 
@@ -1721,11 +1703,11 @@ def stop_audio():
     audio_pipe_handle = None
 
     _queue_ui(
-        lambda: _set_audio_monitor_status("音频已关闭", DANGER)
+        lambda: _set_audio_monitor_status("AUDIO OFF", DANGER)
     )
 
     if current_mode == "STOPPED":
-        _queue_ui(lambda: mode_label.config(text="模式：已停止"))
+        _queue_ui(lambda: mode_label.config(text="MODE: STOPPED"))
 
 
 def background_check():
@@ -1780,7 +1762,7 @@ def display_status(device, ts_state=None):
     if device:
 
         status.config(
-            text="手机已连接"
+            text="PHONE CONNECTED"
         )
 
         route_label.config(
@@ -1799,39 +1781,39 @@ def display_status(device, ts_state=None):
         if ts_state == "TAILSCALE OFFLINE":
 
             status.config(
-                text="手机未连接"
+                text="PHONE NOT CONNECTED"
             )
 
             route_label.config(
-                text="Tailscale 离线"
+                text="TAILSCALE OFFLINE"
             )
 
             device_label.config(
-                text="请在手机上打开 Tailscale"
+                text="Open Tailscale on the phone"
             )
 
         elif ts_state == "TAILSCALE ONLINE":
 
             status.config(
-                text="手机未连接"
+                text="PHONE NOT CONNECTED"
             )
 
             route_label.config(
-                text="Tailscale 在线 - ADB 未连接"
+                text="TAILSCALE ONLINE - ADB NOT CONNECTED"
             )
 
             device_label.config(
-                text="请按“重新连接手机”"
+                text="Press RECONNECT PHONE"
             )
 
         elif ts_state == "TAILSCALE NOT INSTALLED":
 
             status.config(
-                text="手机未连接"
+                text="PHONE NOT CONNECTED"
             )
 
             route_label.config(
-                text="Tailscale 不可用"
+                text="TAILSCALE NOT AVAILABLE"
             )
 
             device_label.config(
@@ -1841,11 +1823,11 @@ def display_status(device, ts_state=None):
         elif ts_state == "REMOTE ADB CHECK PENDING":
 
             status.config(
-                text="远程手机已配置"
+                text="REMOTE PHONE CONFIGURED"
             )
 
             route_label.config(
-                text="Tailscale - 远程"
+                text="TAILSCALE - REMOTE"
             )
 
             device_label.config(
@@ -1855,7 +1837,7 @@ def display_status(device, ts_state=None):
         else:
 
             status.config(
-                text="手机未连接"
+                text="PHONE NOT CONNECTED"
             )
 
             route_label.config(
@@ -1867,7 +1849,7 @@ def display_status(device, ts_state=None):
             )
 
     mode_label.config(
-        text="模式：" + _zh_mode_name(current_mode)
+        text="MODE: " + current_mode
     )
 
 def schedule_check():
@@ -1902,9 +1884,9 @@ def _resume_recovery_worker():
     try:
         _queue_ui(
             lambda: (
-                status.config(text="电脑已恢复 - 正在恢复手机连接..."),
-                route_label.config(text="Tailscale - 正在重新连接"),
-                mode_label.config(text="模式：正在恢复")
+                status.config(text="PC RESUMED - RESTORING PHONE..."),
+                route_label.config(text="TAILSCALE - RECONNECTING"),
+                mode_label.config(text="MODE: RECOVERING")
             )
         )
 
@@ -2005,21 +1987,21 @@ def _resume_recovery_worker():
             active_device = restored
             _queue_ui(
                 lambda d=restored: (
-                    status.config(text="手机已连接"),
+                    status.config(text="PHONE CONNECTED"),
                     route_label.config(text=connection_type(d)),
                     device_label.config(text=d),
-                    mode_label.config(text="模式：已停止")
+                    mode_label.config(text="MODE: STOPPED")
                 )
             )
         else:
             _queue_ui(
                 lambda: (
-                    status.config(text="远程手机已配置"),
-                    route_label.config(text="Tailscale - 正在等待手机"),
+                    status.config(text="REMOTE PHONE CONFIGURED"),
+                    route_label.config(text="TAILSCALE - WAITING FOR PHONE"),
                     device_label.config(
                         text=f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
                     ),
-                    mode_label.config(text="模式：已停止")
+                    mode_label.config(text="MODE: STOPPED")
                 )
             )
 
@@ -2056,11 +2038,11 @@ def reconnect():
     active_device = None
 
     status.config(
-        text="正在连接..."
+        text="CONNECTING..."
     )
 
     route_label.config(
-        text="正在检查 USB / Wi-Fi / Tailscale"
+        text="CHECKING USB / WI-FI / TAILSCALE"
     )
 
     # Run one immediate check; the independent 5-second scheduler is already
@@ -2177,37 +2159,37 @@ def show_audio_monitor():
             audio_monitor_window.deiconify()
             audio_monitor_window.lift()
             audio_monitor_window.focus_force()
-            _set_audio_monitor_status("正在启动麦克风...", ACCENT)
+            _set_audio_monitor_status("STARTING MICROPHONE...", ACCENT)
             return
     except Exception:
         pass
 
     audio_monitor_window = tk.Toplevel(root)
-    audio_monitor_window.title("Samsung Secure 音频")
+    audio_monitor_window.title("AndroidBridge Audio")
     audio_monitor_window.geometry("420x245")
     audio_monitor_window.resizable(False, False)
     audio_monitor_window.configure(bg=BG)
 
     tk.Label(
         audio_monitor_window,
-        text="音频监听",
-        font=("Microsoft YaHei UI", 18, "bold"),
+        text="AUDIO MONITOR",
+        font=("Segoe UI", 18, "bold"),
         bg=BG,
         fg=TEXT
     ).pack(anchor="w", padx=24, pady=(22, 4))
 
     tk.Label(
         audio_monitor_window,
-        text="Samsung 麦克风  •  清晰语音 + 音量均衡",
-        font=("Microsoft YaHei UI", 9),
+        text="Samsung microphone  •  Clear Speech + Voice Leveling",
+        font=("Segoe UI", 9),
         bg=BG,
         fg=MUTED
     ).pack(anchor="w", padx=24)
 
     audio_monitor_status = tk.Label(
         audio_monitor_window,
-        text="正在启动麦克风...",
-        font=("Microsoft YaHei UI", 11, "bold"),
+        text="STARTING MICROPHONE...",
+        font=("Segoe UI", 11, "bold"),
         bg=BG,
         fg=ACCENT
     )
@@ -2218,8 +2200,8 @@ def show_audio_monitor():
 
     tk.Label(
         gain_row,
-        text="语音增强",
-        font=("Microsoft YaHei UI", 9, "bold"),
+        text="VOICE BOOST",
+        font=("Segoe UI", 9, "bold"),
         bg=BG,
         fg=MUTED
     ).pack(side="left")
@@ -2227,7 +2209,7 @@ def show_audio_monitor():
     audio_monitor_gain = tk.Label(
         gain_row,
         text=f"+{audio_gain_db} dB",
-        font=("Microsoft YaHei UI", 10, "bold"),
+        font=("Segoe UI", 10, "bold"),
         bg=BG,
         fg=ACCENT
     )
@@ -2235,11 +2217,11 @@ def show_audio_monitor():
 
     tk.Button(
         audio_monitor_window,
-        text="关闭音频",
+        text="AUDIO OFF",
         command=lambda: _run_locked_async(audio_action_lock, stop_audio),
         width=18,
         height=2,
-        font=("Microsoft YaHei UI", 9, "bold"),
+        font=("Segoe UI", 9, "bold"),
         bg=PANEL_2,
         fg=DANGER,
         activebackground=PANEL_2,
@@ -2254,7 +2236,7 @@ def open_audio_monitor_and_start():
     # Called directly by the Tk button: the window appears before any remote
     # ADB/scrcpy work begins, so a slow network can never hide the click.
     show_audio_monitor()
-    mode_label.config(text="模式：正在启动音频...")
+    mode_label.config(text="MODE: AUDIO STARTING...")
     _run_locked_async(audio_action_lock, start_audio)
 
 
@@ -2290,7 +2272,7 @@ BORDER = "#2A2F39"
 
 root = tk.Tk()
 
-root.title("Samsung Secure")
+root.title("AndroidBridge Lite")
 
 root.geometry("560x745")
 
@@ -2322,8 +2304,8 @@ header.pack(
 
 tk.Label(
     header,
-    text="Samsung Secure",
-    font=("Microsoft YaHei UI", 24, "bold"),
+    text="AndroidBridge",
+    font=("Segoe UI", 24, "bold"),
     bg=BG,
     fg=TEXT
 ).pack(
@@ -2333,8 +2315,8 @@ tk.Label(
 
 tk.Label(
     header,
-    text="屏幕与摄像头控制器",
-    font=("Microsoft YaHei UI", 10),
+    text="Screen & Camera Controller",
+    font=("Segoe UI", 10),
     bg=BG,
     fg=MUTED
 ).pack(
@@ -2363,8 +2345,8 @@ connection_card.pack(
 
 status = tk.Label(
     connection_card,
-    text="正在搜索手机",
-    font=("Microsoft YaHei UI", 12, "bold"),
+    text="SEARCHING PHONE",
+    font=("Segoe UI", 12, "bold"),
     bg=PANEL,
     fg=SUCCESS
 )
@@ -2378,8 +2360,8 @@ status.pack(
 
 route_label = tk.Label(
     connection_card,
-    text="正在检查连接",
-    font=("Microsoft YaHei UI", 10, "bold"),
+    text="CHECKING CONNECTION",
+    font=("Segoe UI", 10, "bold"),
     bg=PANEL,
     fg=TEXT
 )
@@ -2393,7 +2375,7 @@ route_label.pack(
 device_label = tk.Label(
     connection_card,
     text="",
-    font=("Microsoft YaHei UI", 9),
+    font=("Segoe UI", 9),
     bg=PANEL,
     fg=MUTED
 )
@@ -2407,8 +2389,8 @@ device_label.pack(
 
 mode_label = tk.Label(
     connection_card,
-    text="模式：已停止",
-    font=("Microsoft YaHei UI", 9, "bold"),
+    text="MODE: STOPPED",
+    font=("Segoe UI", 9, "bold"),
     bg=PANEL,
     fg=ACCENT
 )
@@ -2423,7 +2405,7 @@ mode_label.pack(
 nv_diag_label = tk.Label(
     connection_card,
     text="",
-    font=("Microsoft YaHei UI", 8),
+    font=("Segoe UI", 8),
     bg=PANEL,
     fg=MUTED,
     wraplength=500,
@@ -2443,8 +2425,8 @@ nv_diag_label.pack(
 
 tk.Label(
     root,
-    text="控制",
-    font=("Microsoft YaHei UI", 9, "bold"),
+    text="CONTROLS",
+    font=("Segoe UI", 9, "bold"),
     bg=BG,
     fg=MUTED
 ).pack(
@@ -2484,7 +2466,7 @@ button_style = {
 
 screen_button = tk.Button(
     buttons,
-    text="屏幕",
+    text="SCREEN",
     command=screen,
     **button_style
 )
@@ -2498,7 +2480,7 @@ screen_button.grid(
 
 back_button = tk.Button(
     buttons,
-    text="后置摄像头",
+    text="BACK CAMERA",
     command=back_camera,
     **button_style
 )
@@ -2513,7 +2495,7 @@ back_button.grid(
 
 front_button = tk.Button(
     buttons,
-    text="前置摄像头",
+    text="FRONT CAMERA",
     command=front_camera,
     **button_style
 )
@@ -2528,11 +2510,11 @@ front_button.grid(
 
 stop_button = tk.Button(
     buttons,
-    text="停止",
+    text="STOP",
     command=lambda: _run_locked_async(video_action_lock, stop_scrcpy),
     width=21,
     height=2,
-    font=("Microsoft YaHei UI", 10, "bold"),
+    font=("Segoe UI", 10, "bold"),
     bg=PANEL_2,
     fg=DANGER,
     activebackground=DANGER,
@@ -2557,7 +2539,7 @@ stop_button.grid(
 
 audio_on_button = tk.Button(
     buttons,
-    text="清晰语音 + 增强音量",
+    text="CLEAR VOICE + LOUD",
     command=open_audio_monitor_and_start,
     **button_style
 )
@@ -2571,11 +2553,11 @@ audio_on_button.grid(
 
 audio_off_button = tk.Button(
     buttons,
-    text="关闭音频",
+    text="AUDIO OFF",
     command=lambda: _run_locked_async(audio_action_lock, stop_audio),
     width=21,
     height=2,
-    font=("Microsoft YaHei UI", 10, "bold"),
+    font=("Segoe UI", 10, "bold"),
     bg=PANEL_2,
     fg=DANGER,
     activebackground=PANEL_2,
@@ -2611,8 +2593,8 @@ volume_frame.grid(
 
 tk.Label(
     volume_frame,
-    text="声音增强",
-    font=("Microsoft YaHei UI", 9, "bold"),
+    text="SOUND VOLUME",
+    font=("Segoe UI", 9, "bold"),
     bg=BG,
     fg=MUTED
 ).pack(side="left", padx=(0, 8))
@@ -2621,7 +2603,7 @@ audio_volume_value = tk.Label(
     volume_frame,
     text=f"+{audio_gain_db} dB",
     width=6,
-    font=("Microsoft YaHei UI", 9, "bold"),
+    font=("Segoe UI", 9, "bold"),
     bg=BG,
     fg=ACCENT
 )
@@ -2651,7 +2633,7 @@ audio_volume_slider.pack(side="left", fill="x", expand=True)
 
 low_light_button = tk.Button(
     buttons,
-    text="夜视增强",
+    text="NIGHT VISION BOOST",
     command=low_light_test,
     **button_style
 )
@@ -2667,7 +2649,7 @@ low_light_button.grid(
 
 calls_button = tk.Button(
     buttons,
-    text="通话记录",
+    text="CALLS",
     command=lambda: open_phone_data("calls"),
     **button_style
 )
@@ -2682,7 +2664,7 @@ calls_button.grid(
 
 activity_button = tk.Button(
     buttons,
-    text="手机活动",
+    text="PHONE ACTIVITY",
     command=lambda: open_phone_data("activity"),
     **button_style
 )
@@ -2697,11 +2679,11 @@ activity_button.grid(
 
 location_button = tk.Button(
     buttons,
-    text="最新位置",
+    text="LATEST LOCATION",
     command=lambda: open_phone_data("location"),
     width=45,
     height=2,
-    font=("Microsoft YaHei UI", 10, "bold"),
+    font=("Segoe UI", 10, "bold"),
     bg=PANEL_2,
     fg=TEXT,
     activebackground=ACCENT,
@@ -2725,11 +2707,11 @@ location_button.grid(
 
 reconnect_button = tk.Button(
     root,
-    text="重新连接手机",
+    text="RECONNECT PHONE",
     command=reconnect,
     width=47,
     height=2,
-    font=("Microsoft YaHei UI", 9, "bold"),
+    font=("Segoe UI", 9, "bold"),
     bg=ACCENT,
     fg="#FFFFFF",
     activebackground="#3978E8",
@@ -2750,8 +2732,8 @@ reconnect_button.pack(
 
 tk.Label(
     root,
-    text="USB  >  本地 Wi-Fi  >  Tailscale 远程",
-    font=("Microsoft YaHei UI", 8),
+    text="USB  >  LOCAL WI-FI  >  TAILSCALE REMOTE",
+    font=("Segoe UI", 8),
     bg=BG,
     fg=MUTED
 ).pack(
