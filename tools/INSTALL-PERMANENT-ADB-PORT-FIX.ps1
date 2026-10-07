@@ -304,14 +304,25 @@ Write-Host "Phone-side port discovery/query components: READY" -ForegroundColor 
 [xml]$xml = Get-Content $Manifest -Raw
 $manifestNode = $xml.manifest
 $app = $manifestNode.application
-if (-not $manifestNode -or -not $app) { throw "Invalid Android manifest." }
+if ($null -eq $manifestNode -or $null -eq $app) { throw "Invalid Android manifest." }
+
+# Use namespace-aware XPath instead of PowerShell's XML property projection.
+# When a manifest has zero <provider> elements, @($app.provider) contains a
+# null item on Windows PowerShell 5.1; calling GetAttribute() on that null
+# caused the installer to stop before the APK build.
+$ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+$ns.AddNamespace("android", $AndroidNs)
 
 function Ensure-Permission([string]$PermissionName) {
-    foreach ($node in @($manifestNode.'uses-permission')) {
-        if ($node.GetAttribute("name", $AndroidNs) -eq $PermissionName) {
-            return
-        }
+    $escaped = $PermissionName.Replace("'", "&apos;")
+    $existing = $manifestNode.SelectSingleNode(
+        "uses-permission[@android:name='$escaped']",
+        $ns
+    )
+    if ($null -ne $existing) {
+        return
     }
+
     $permission = $xml.CreateElement("uses-permission")
     $permission.SetAttribute("name", $AndroidNs, $PermissionName)
     [void]$manifestNode.InsertBefore($permission, $app)
@@ -321,13 +332,10 @@ function Ensure-Permission([string]$PermissionName) {
 Ensure-Permission "android.permission.INTERNET"
 Ensure-Permission "android.permission.ACCESS_NETWORK_STATE"
 
-$providerNode = $null
-foreach ($node in @($app.provider)) {
-    if ($node.GetAttribute("name", $AndroidNs) -eq "com.androidbridge.AdbPortInitProvider") {
-        $providerNode = $node
-        break
-    }
-}
+$providerNode = $app.SelectSingleNode(
+    "provider[@android:name='com.androidbridge.AdbPortInitProvider']",
+    $ns
+)
 
 if (-not $providerNode) {
     $providerNode = $xml.CreateElement("provider")
