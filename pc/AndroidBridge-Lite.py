@@ -25,8 +25,12 @@ HIDE = 0x08000000
 STABLE_PROFILE = "2026-10-06-clear-loud-voice-v1"
 
 PHONE_NAME = "jennys-s25-ultra"
+PHONE_SERIAL = "R5CY20RCX8E"
 TAILSCALE_FALLBACK_IP = "100.127.244.20"
-ADB_PORT = "5555"
+ADB_TLS_PORT_CACHE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    ".androidbridge-adb-tls-port"
+)
 
 
 TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"
@@ -371,6 +375,100 @@ def tailscale_ip():
 
 
 # ============================================================
+# DYNAMIC WIRELESS-ADB TLS PORT
+# ============================================================
+
+def _valid_adb_tls_port(value):
+    try:
+        port = int(str(value).strip())
+        return port if 1 <= port <= 65535 else None
+    except Exception:
+        return None
+
+
+def _save_adb_tls_port(port):
+    port = _valid_adb_tls_port(port)
+    if not port:
+        return
+    try:
+        with open(ADB_TLS_PORT_CACHE, "w", encoding="ascii") as handle:
+            handle.write(str(port))
+    except Exception:
+        pass
+
+
+def _cached_adb_tls_port():
+    try:
+        with open(ADB_TLS_PORT_CACHE, "r", encoding="ascii") as handle:
+            return _valid_adb_tls_port(handle.read())
+    except Exception:
+        return None
+
+
+def _port_from_target(target):
+    if not target:
+        return None
+    match = re.fullmatch(r"100\.\d+\.\d+\.\d+:(\d+)", str(target).strip())
+    if not match:
+        return None
+    return _valid_adb_tls_port(match.group(1))
+
+
+def _existing_tailscale_target():
+    """Return a currently healthy Tailscale ADB serial, if ADB already has one."""
+    for serial, state in adb_list():
+        if state != "device" or not is_tailscale(serial):
+            continue
+        if adb_quick_state(serial, 5):
+            port = _port_from_target(serial)
+            if port:
+                _save_adb_tls_port(port)
+            return serial
+    return None
+
+
+def discover_adb_tls_port():
+    """Discover Samsung's current random Wireless Debugging TLS port via mDNS.
+
+    Android advertises the secure ADB listener as _adb-tls-connect._tcp.
+    We reuse that port on the phone's Tailscale IP; the transport test proved
+    the same TLS listener is reachable through tun0.
+    """
+    result = run_hidden(["adb", "mdns", "services"], 8)
+    if result:
+        for line in result.stdout.splitlines():
+            if "_adb-tls-connect._tcp" not in line:
+                continue
+            if PHONE_SERIAL not in line:
+                continue
+            match = re.search(r"(?:\d{1,3}\.){3}\d{1,3}:(\d+)", line)
+            if not match:
+                continue
+            port = _valid_adb_tls_port(match.group(1))
+            if port:
+                _save_adb_tls_port(port)
+                return port
+
+    # Useful when the PC restarts but the phone has not rebooted. A stale
+    # cached port is harmless: connect_tailscale() verifies it before use.
+    return _cached_adb_tls_port()
+
+
+def configured_remote_target():
+    """Return the best known Tailscale ADB endpoint without resetting ADB."""
+    existing = _existing_tailscale_target()
+    if existing:
+        return existing
+
+    port = discover_adb_tls_port()
+    if not port:
+        return None
+
+    ip = tailscale_ip() or TAILSCALE_FALLBACK_IP
+    return f"{ip}:{port}"
+
+
+# ============================================================
 # SMART ROUTING
 #
 # PRIORITY:
@@ -410,22 +508,21 @@ def choose_existing_device():
 
 def connect_tailscale():
     """
-    Open/re-open the known phone route through Tailscale without resetting ADB.
+    Open/re-open the Samsung through Tailscale using its current secure ADB
+    TLS port. The port is dynamic after reboot; never assume legacy :5555.
 
-    "adb connect" is safe to repeat for the same TCP endpoint: when the route
-    is already healthy it returns "already connected"; after laptop sleep it
-    gives ADB a chance to create a fresh TCP transport. Never disconnect or
-    kill the ADB server here.
+    Never disconnect, kill-server, reset pairing, or change the phone here.
     """
 
-    target_ip = tailscale_ip()
+    existing = _existing_tailscale_target()
+    if existing:
+        return existing
 
-    if not target_ip:
+    target = configured_remote_target()
+    if not target:
         return None
 
-    target = f"{target_ip}:{ADB_PORT}"
-
-    # Fast healthy-path check first.
+    # A cached port can be stale after a phone reboot. Verify before trusting.
     if adb_quick_state(target, 5):
         return target
 
@@ -440,9 +537,43 @@ def connect_tailscale():
     except Exception:
         return None
 
-    # Verify the new/reused transport without tearing anything down.
     if adb_quick_state(target, 10):
+        port = _port_from_target(target)
+        if port:
+            _save_adb_tls_port(port)
         return target
+
+    # If the cached endpoint failed, ask mDNS once more in case adbd has just
+    # published a new post-reboot TLS port.
+    try:
+        if os.path.exists(ADB_TLS_PORT_CACHE):
+            os.remove(ADB_TLS_PORT_CACHE)
+    except Exception:
+        pass
+
+    port = discover_adb_tls_port()
+    if not port:
+        return None
+
+    ip = tailscale_ip() or TAILSCALE_FALLBACK_IP
+    refreshed = f"{ip}:{port}"
+    if refreshed == target:
+        return None
+
+    try:
+        subprocess.run(
+            ["adb", "connect", refreshed],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+    except Exception:
+        return None
+
+    if adb_quick_state(refreshed, 10):
+        _save_adb_tls_port(port)
+        return refreshed
 
     return None
 
@@ -463,19 +594,8 @@ def get_device(allow_remote=True):
         device = None
 
     if allow_remote:
-        # The Samsung's established remote ADB endpoint is authoritative for
-        # AndroidBridge. Probe it directly before trusting a Tailscale status
-        # label. This is the exact serial used by the verified manual scrcpy
-        # command.
-        known_target = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
-
-        if adb_quick_state(known_target, 15):
-            active_device = known_target
-            return known_target
-
-        # If the cached ADB route is absent, ask ADB to reconnect over the
-        # existing Tailscale network. Never disconnect, kill-server, or reset
-        # the phone.
+        # Wireless Debugging chooses a new TLS port after reboot. Resolve the
+        # current endpoint instead of probing the obsolete legacy :5555 port.
         device = connect_tailscale()
 
         if device:
@@ -746,7 +866,15 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
     global current_mode
     global active_device
 
-    device = active_device or f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
+    device = active_device or configured_remote_target()
+    if not device:
+        _queue_ui(
+            lambda: messagebox.showerror(
+                "AndroidBridge Lite",
+                "Remote ADB endpoint is not available yet.\n\nPress RECONNECT PHONE and try again."
+            )
+        )
+        return
     active_device = device
 
     old_process = screen_process if kind == "screen" else camera_process
@@ -1128,7 +1256,9 @@ def _clear_stale_scrcpy_startups_for_phone():
     never runs adb disconnect/kill-server, and never touches a live scrcpy
     stream that has already finished its server push.
     """
-    serial = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
+    serial = active_device or configured_remote_target()
+    if not serial:
+        return 0
     safe_serial = serial.replace("'", "''")
     ps = (
         "$all = @(Get-CimInstance Win32_Process); "
@@ -1335,7 +1465,14 @@ def start_audio():
     # Never run adb devices/get-state/connect here. Those checks can block while
     # another remote scrcpy stream owns the slow Tailscale transport. Reuse the
     # route already shown by AndroidBridge, or the configured Samsung endpoint.
-    device = active_device or f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
+    device = active_device or configured_remote_target()
+    if not device:
+        _queue_ui(
+            lambda: _set_audio_monitor_status(
+                "REMOTE ADB ENDPOINT NOT AVAILABLE - RECONNECT PHONE", DANGER
+            )
+        )
+        return
     active_device = device
 
     _queue_ui(
@@ -1831,7 +1968,7 @@ def display_status(device, ts_state=None):
             )
 
             device_label.config(
-                text=f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
+                text=configured_remote_target() or TAILSCALE_FALLBACK_IP
             )
 
         else:
@@ -1956,31 +2093,15 @@ def _resume_recovery_worker():
         except Exception:
             pass
 
-        # Windows/Tailscale may need a few seconds after resume. Retry the
-        # SAME endpoint only. adb connect does not tear down the server.
-        target = f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
+        # Windows/Tailscale may need a few seconds after resume. Re-resolve
+        # the secure ADB endpoint because a phone reboot may have changed the
+        # TLS port while the laptop was asleep.
         restored = None
 
         for attempt in range(12):
-            if adb_quick_state(target, 5):
-                restored = target
+            restored = connect_tailscale()
+            if restored:
                 break
-
-            try:
-                subprocess.run(
-                    ["adb", "connect", target],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-            except Exception:
-                pass
-
-            if adb_quick_state(target, 8):
-                restored = target
-                break
-
             time.sleep(5)
 
         if restored:
@@ -1999,7 +2120,7 @@ def _resume_recovery_worker():
                     status.config(text="REMOTE PHONE CONFIGURED"),
                     route_label.config(text="TAILSCALE - WAITING FOR PHONE"),
                     device_label.config(
-                        text=f"{TAILSCALE_FALLBACK_IP}:{ADB_PORT}"
+                        text=configured_remote_target() or TAILSCALE_FALLBACK_IP
                     ),
                     mode_label.config(text="MODE: STOPPED")
                 )
