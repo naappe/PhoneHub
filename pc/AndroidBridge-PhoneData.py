@@ -185,13 +185,13 @@ def build_table(title, db_path, keywords):
     tk.Label(
         top,
         text=title,
-        font=("Segoe UI", 16, "bold")
+        font=("Microsoft YaHei UI", 16, "bold")
     ).pack(anchor="w")
 
     tk.Label(
         top,
         text=db_path,
-        font=("Segoe UI", 9)
+        font=("Microsoft YaHei UI", 9)
     ).pack(anchor="w", pady=(2, 0))
 
     try:
@@ -204,11 +204,11 @@ def build_table(title, db_path, keywords):
     tk.Label(
         top,
         text=meta,
-        font=("Segoe UI", 9)
+        font=("Microsoft YaHei UI", 9)
     ).pack(anchor="w", pady=(2, 0))
 
     if not cols:
-        tk.Label(root, text="No data available.").pack(pady=30)
+        tk.Label(root, text="暂无数据。").pack(pady=30)
         root.mainloop()
         return
 
@@ -266,13 +266,13 @@ def show_location():
     path = find_location_json()
 
     root = tk.Tk()
-    root.title("AndroidBridge - Latest Location")
+    root.title("Samsung Secure - 最新位置")
     root.geometry("620x420")
 
     tk.Label(
         root,
-        text="Latest Location",
-        font=("Segoe UI", 16, "bold")
+        text="最新位置",
+        font=("Microsoft YaHei UI", 16, "bold")
     ).pack(anchor="w", padx=16, pady=(16, 8))
 
     box = tk.Text(
@@ -308,14 +308,14 @@ def show_location():
             )
 
             root.title(
-                "AndroidBridge - Latest Location - " +
+                "Samsung Secure - 最新位置 - " +
                 os.path.basename(path)
             )
 
         except Exception as e:
             box.insert(
                 "1.0",
-                "Could not read location file:\n\n" + str(e)
+                "无法读取位置文件：\n\n" + str(e)
             )
 
     else:
@@ -343,8 +343,8 @@ def show_location():
         else:
             box.insert(
                 "1.0",
-                "No saved location data was found.\n\n"
-                "AndroidBridge checked the current repo and the previous "
+                "未找到已保存的位置数据。\n\n"
+                "Samsung Secure 已检查当前项目和之前的 "
                 "C:\\AndroidBridge-Lite-backup folder."
             )
 
@@ -357,14 +357,14 @@ if MODE == "calls":
 
     if not db:
         messagebox.showerror(
-            "AndroidBridge Calls",
+            "Samsung Secure 通话记录",
             "androidbridge_calls.db was not found.\n\n"
             "Checked the current AndroidBridge folder and "
             "C:\\AndroidBridge-Lite-backup."
         )
     else:
         build_table(
-            "AndroidBridge - Calls",
+            "Samsung Secure - 通话记录",
             db,
             ["call", "calls"]
         )
@@ -374,14 +374,14 @@ elif MODE == "activity":
 
     if not db:
         messagebox.showerror(
-            "AndroidBridge Phone Activity",
+            "Samsung Secure 手机活动",
             "phone_activity.db was not found.\n\n"
             "Checked the current AndroidBridge folder and "
             "C:\\AndroidBridge-Lite-backup."
         )
     else:
         build_table(
-            "AndroidBridge - Phone Activity",
+            "Samsung Secure - 手机活动",
             db,
             ["activity", "event", "usage"]
         )
@@ -391,6 +391,6 @@ elif MODE == "location":
 
 else:
     messagebox.showerror(
-        "AndroidBridge",
-        "Unknown mode: " + MODE
+        "Samsung Secure",
+        "未知模式：" + MODE
     )
