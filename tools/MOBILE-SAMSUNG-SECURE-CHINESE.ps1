@@ -78,6 +78,8 @@ $ui = @(
     @('"No recent calls"', '"无最近通话"', "no recent calls")
 )
 foreach ($r in $ui) { $x = Replace-Literal $x $r[0] $r[1] $r[2] }
+# Some builds append dynamic call data to the RECENT CALLS heading, so translate the heading token too.
+$x = Replace-Literal $x 'RECENT CALLS' '最近通话' "recent calls dynamic heading"
 Write-Utf8NoBom $Main $x
 
 Write-Host ""
