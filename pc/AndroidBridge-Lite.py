@@ -454,6 +454,14 @@ def discover_adb_tls_port():
     return _cached_adb_tls_port()
 
 
+def cached_remote_target():
+    """Return the last learned Tailscale endpoint without running any command."""
+    port = _cached_adb_tls_port()
+    if not port:
+        return None
+    return f"{TAILSCALE_FALLBACK_IP}:{port}"
+
+
 def configured_remote_target():
     """Return the best known Tailscale ADB endpoint without resetting ADB."""
     existing = _existing_tailscale_target()
@@ -1464,8 +1472,10 @@ def start_audio():
     # AUDIO ROUTE:
     # Never run adb devices/get-state/connect here. Those checks can block while
     # another remote scrcpy stream owns the slow Tailscale transport. Reuse the
-    # route already shown by AndroidBridge, or the configured Samsung endpoint.
-    device = active_device or configured_remote_target()
+    # route already shown by AndroidBridge, or the last dynamically learned
+    # endpoint. Do not run ADB/mDNS discovery from an audio start while another
+    # media stream may already own the remote transport.
+    device = active_device or cached_remote_target()
     if not device:
         _queue_ui(
             lambda: _set_audio_monitor_status(
@@ -1968,7 +1978,7 @@ def display_status(device, ts_state=None):
             )
 
             device_label.config(
-                text=configured_remote_target() or TAILSCALE_FALLBACK_IP
+                text=cached_remote_target() or TAILSCALE_FALLBACK_IP
             )
 
         else:
@@ -2120,7 +2130,7 @@ def _resume_recovery_worker():
                     status.config(text="REMOTE PHONE CONFIGURED"),
                     route_label.config(text="TAILSCALE - WAITING FOR PHONE"),
                     device_label.config(
-                        text=configured_remote_target() or TAILSCALE_FALLBACK_IP
+                        text=cached_remote_target() or TAILSCALE_FALLBACK_IP
                     ),
                     mode_label.config(text="MODE: STOPPED")
                 )
