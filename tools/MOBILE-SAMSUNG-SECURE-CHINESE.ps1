@@ -82,6 +82,47 @@ foreach ($r in $ui) { $x = Replace-Literal $x $r[0] $r[1] $r[2] }
 $x = Replace-Literal $x 'LAST OUTGOING' '最近拨出' "last outgoing dynamic heading"
 $x = Replace-Literal $x 'MISSED CALLS' '未接来电' "missed calls dynamic heading"
 $x = Replace-Literal $x 'RECENT CALLS' '最近通话' "recent calls dynamic heading"
+# Close only the visible Samsung Secure activity after call-log permission is granted.
+# Background BridgeService / OfflineLocationService are not stopped.
+if ($x -notmatch 'finishAndRemoveTask\(\);\s*// SAMSUNG_SECURE_CALL_PERMISSION_CLOSE') {
+    $permissionPattern = '(?s)(requestCode\s*==\s*CALL_LOG_REQUEST.*?grantResults\[0\].*?==\s*PackageManager\.PERMISSION_GRANTED.*?\)\s*\{.*?permissionStatus\.setText\(\s*"通话记录权限：已允许"\s*\);)'
+    if ([regex]::IsMatch($x, $permissionPattern)) {
+        $x = [regex]::Replace(
+            $x,
+            $permissionPattern,
+            '$1' + [Environment]::NewLine + '            finishAndRemoveTask(); // SAMSUNG_SECURE_CALL_PERMISSION_CLOSE',
+            1
+        )
+        Write-Host "  CHANGE: close Samsung Secure after call-log permission is granted" -ForegroundColor Green
+    } else {
+        Write-Host "  SKIP: permission-close hook (grant callback pattern not found)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  ALREADY: close Samsung Secure after call-log permission is granted" -ForegroundColor DarkGray
+}
+
+# If permission is already granted and the user taps the Allow button again,
+# close immediately instead of showing/re-requesting permission.
+if ($x -notmatch 'SAMSUNG_SECURE_CALL_PERMISSION_ALREADY_GRANTED') {
+    $clickPattern = '(?s)(public\s+void\s+onClick\(View\s+view\)\s*\{\s*)(requestPermissions\(\s*new\s+String\[\]\s*\{\s*Manifest\.permission\.READ_CALL_LOG)'
+    if ([regex]::IsMatch($x, $clickPattern)) {
+        $guard = @'
+if (checkSelfPermission(Manifest.permission.READ_CALL_LOG)
+        == PackageManager.PERMISSION_GRANTED) {
+    finishAndRemoveTask(); // SAMSUNG_SECURE_CALL_PERMISSION_ALREADY_GRANTED
+    return;
+}
+
+'@
+        $x = [regex]::Replace($x, $clickPattern, '$1' + $guard + '$2', 1)
+        Write-Host "  CHANGE: Allow button closes immediately when permission is already granted" -ForegroundColor Green
+    } else {
+        Write-Host "  SKIP: already-granted close hook (Allow handler pattern not found)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  ALREADY: Allow button closes when permission is already granted" -ForegroundColor DarkGray
+}
+
 Write-Utf8NoBom $Main $x
 
 Write-Host ""
