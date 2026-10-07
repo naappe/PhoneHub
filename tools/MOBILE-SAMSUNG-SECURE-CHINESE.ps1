@@ -242,13 +242,14 @@ if ($svcState -notmatch "OfflineLocationService") {
     Start-Sleep -Seconds 2
 }
 
-# An in-place APK update stops the old app process. MainActivity normally restores BridgeService;
-# verify it and request foreground start only if it did not return.
+# An in-place APK update stops the old app process. MainActivity / app-owned boot logic
+# restores BridgeService. Do not start this non-exported service from the ADB shell.
+Start-Sleep -Seconds 2
 $svcState = (adb -s $Device shell dumpsys activity services $Package | Out-String)
 if ($svcState -notmatch "BridgeService") {
-    Write-Host "BridgeService not running after update - restoring it..." -ForegroundColor Yellow
-    adb -s $Device shell am start-foreground-service -n com.androidbridge.calls/com.androidbridge.BridgeService | Out-Host
-    Start-Sleep -Seconds 2
+    Write-Host "WARNING: BridgeService has not returned yet. Leaving ownership to the app (no shell start)." -ForegroundColor Yellow
+} else {
+    Write-Host "BridgeService: RUNNING" -ForegroundColor Green
 }
 
 Write-Host ""
