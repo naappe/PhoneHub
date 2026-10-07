@@ -554,13 +554,8 @@ def connect_tailscale():
         return target
 
     # If the cached endpoint failed, ask mDNS once more in case adbd has just
-    # published a new post-reboot TLS port.
-    try:
-        if os.path.exists(ADB_TLS_PORT_CACHE):
-            os.remove(ADB_TLS_PORT_CACHE)
-    except Exception:
-        pass
-
+    # published a new post-reboot TLS port. Keep the last learned port on disk:
+    # a single DERP/ADB timeout must never erase our only cross-network hint.
     port = discover_adb_tls_port()
     if not port:
         return None
@@ -586,6 +581,66 @@ def connect_tailscale():
         return refreshed
 
     return None
+
+
+def _recover_remote_adb_endpoint():
+    """Run the proven cross-network dynamic-port recovery on explicit user action."""
+    global active_device
+
+    if not remote_recovery_lock.acquire(blocking=False):
+        return None
+
+    try:
+        helper = os.path.join(
+            _repo_root(),
+            "tools",
+            "recover_remote_adb.py"
+        )
+        if not os.path.isfile(helper):
+            return None
+
+        _queue_ui(
+            lambda: (
+                status.config(text="SEARCHING REMOTE ADB PORT..."),
+                route_label.config(text="TAILSCALE - REMOTE RECOVERY"),
+                device_label.config(text=TAILSCALE_FALLBACK_IP),
+                mode_label.config(text="MODE: PLEASE WAIT")
+            )
+        )
+
+        env = os.environ.copy()
+        env["ANDROIDBRIDGE_PHONE_IP"] = tailscale_ip() or TAILSCALE_FALLBACK_IP
+
+        try:
+            result = subprocess.run(
+                [sys.executable, helper],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                env=env
+            )
+        except Exception:
+            return None
+
+        if result.returncode != 0:
+            return None
+
+        # recover_remote_adb.py already authenticated adb and wrote the cache.
+        device = choose_existing_device()
+        if device and is_tailscale(device) and adb_quick_state(device, 10):
+            port = _port_from_target(device)
+            if port:
+                _save_adb_tls_port(port)
+            active_device = device
+            return device
+
+        device = connect_tailscale()
+        if device:
+            active_device = device
+        return device
+    finally:
+        remote_recovery_lock.release()
 
 
 def get_device(allow_remote=True):
@@ -890,15 +945,32 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
     global current_mode
     global active_device
 
-    device = active_device or configured_remote_target()
+    # A media button is itself an explicit request to use the phone. First try
+    # the normal fast routes. If Android changed its secure ADB port after a
+    # remote reboot, automatically run the proven recovery instead of showing
+    # a dead-end "Press RECONNECT PHONE" dialog.
+    device = active_device
+    if device and is_tailscale(device) and not adb_quick_state(device, 5):
+        device = None
+        active_device = None
+
+    if not device:
+        device = get_device(True)
+
+    if not device:
+        device = _recover_remote_adb_endpoint()
+
     if not device:
         _queue_ui(
             lambda: messagebox.showerror(
                 "AndroidBridge Lite",
-                "Remote ADB endpoint is not available yet.\n\nPress RECONNECT PHONE and try again."
+                "Remote ADB could not be recovered.\n\n"
+                "Tailscale is configured, but the phone's Wireless Debugging "
+                "endpoint was not found."
             )
         )
         return
+
     active_device = device
 
     old_process = screen_process if kind == "screen" else camera_process
@@ -2182,84 +2254,27 @@ def _reconnect_worker():
     """Reconnect normally, then recover a changed remote ADB TLS port if needed."""
     global active_device
 
-    if not remote_recovery_lock.acquire(blocking=False):
+    active_device = None
+
+    # Fast path first.
+    device = get_device(True)
+    if not device:
+        device = _recover_remote_adb_endpoint()
+
+    if device:
+        active_device = device
+        _queue_ui(lambda d=device: display_status(d))
         return
 
-    try:
-        active_device = None
-
-        # Fast path: USB, LAN Wi-Fi, an existing Tailscale ADB route, mDNS, or
-        # the last cached secure port. This preserves normal startup behavior.
-        device = get_device(True)
-        if device:
-            active_device = device
-            _queue_ui(lambda d=device: display_status(d))
-            return
-
-        # Cross-network reboot path: Android selected a new random Wireless
-        # Debugging TLS port and remote mDNS cannot cross the Tailscale route.
-        # The recovery helper scans the phone's normal ephemeral range through
-        # its Tailscale IP and asks the already-paired adb client to authenticate
-        # only to open candidates. It never resets/kills/disconnects ADB.
-        helper = os.path.join(
-            _repo_root(),
-            "tools",
-            "recover_remote_adb.py"
+    active_device = None
+    _queue_ui(
+        lambda: (
+            status.config(text="REMOTE ADB NOT FOUND"),
+            route_label.config(text="TAILSCALE ONLINE - ADB PORT UNKNOWN"),
+            device_label.config(text=TAILSCALE_FALLBACK_IP),
+            mode_label.config(text="MODE: STOPPED")
         )
-
-        if not os.path.isfile(helper):
-            _queue_ui(
-                lambda: (
-                    status.config(text="REMOTE ADB RECOVERY TOOL MISSING"),
-                    route_label.config(text="RUN GIT PULL"),
-                    device_label.config(text=TAILSCALE_FALLBACK_IP)
-                )
-            )
-            return
-
-        _queue_ui(
-            lambda: (
-                status.config(text="SEARCHING REMOTE ADB PORT..."),
-                route_label.config(text="TAILSCALE - REMOTE RECOVERY"),
-                device_label.config(text=TAILSCALE_FALLBACK_IP),
-                mode_label.config(text="MODE: PLEASE WAIT")
-            )
-        )
-
-        env = os.environ.copy()
-        env["ANDROIDBRIDGE_PHONE_IP"] = tailscale_ip() or TAILSCALE_FALLBACK_IP
-
-        try:
-            result = subprocess.run(
-                [sys.executable, helper],
-                capture_output=True,
-                text=True,
-                timeout=180,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                env=env
-            )
-        except Exception:
-            result = None
-
-        if result is not None and result.returncode == 0:
-            device = get_device(False) or get_device(True)
-            if device:
-                active_device = device
-                _queue_ui(lambda d=device: display_status(d))
-                return
-
-        active_device = None
-        _queue_ui(
-            lambda: (
-                status.config(text="REMOTE ADB NOT FOUND"),
-                route_label.config(text="TAILSCALE ONLINE - ADB PORT UNKNOWN"),
-                device_label.config(text=TAILSCALE_FALLBACK_IP),
-                mode_label.config(text="MODE: STOPPED")
-            )
-        )
-
-    finally:
-        remote_recovery_lock.release()
+    )
 
 
 def reconnect():
