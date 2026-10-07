@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ProjectRoot = "C:\Project-Archive\AndroidBridge-Calls"
 )
 
