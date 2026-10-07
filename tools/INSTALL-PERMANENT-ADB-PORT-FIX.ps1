@@ -170,6 +170,7 @@ public final class AdbPortQueryServer {
     private static final String ALLOWED_PC_TAILSCALE_IP = "100.113.209.27";
     private static final String REQUEST = "ANDROIDBRIDGE_ADB_PORT?";
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
+    private static volatile int cachedAdbTlsPort = -1;
 
     private AdbPortQueryServer() {}
 
@@ -177,9 +178,38 @@ public final class AdbPortQueryServer {
         if (!STARTED.compareAndSet(false, true)) return;
 
         final Context app = context.getApplicationContext();
+
+        // Keep a warm copy of adbd's current dynamic TLS port. This is
+        // especially important after boot: the PC may reach Tailscale before
+        // Android's mDNS advertisement has fully settled.
+        Thread monitor = new Thread(() -> monitorAdbPort(app), "SamsungSecure-AdbPortMonitor");
+        monitor.setDaemon(true);
+        monitor.start();
+
         Thread thread = new Thread(() -> runServer(app), "SamsungSecure-AdbPortQuery");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    private static void monitorAdbPort(Context context) {
+        while (true) {
+            try {
+                int port = AdbTlsPortDiscovery.discover(context, 9000L);
+                if (port >= 1 && port <= 65535) {
+                    cachedAdbTlsPort = port;
+                    Log.i(TAG, "Cached ADB TLS port: " + port);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "ADB port monitor discovery failed", e);
+            }
+
+            try {
+                Thread.sleep(12000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     private static void runServer(Context context) {
@@ -219,7 +249,17 @@ public final class AdbPortQueryServer {
                         continue;
                     }
 
-                    int port = AdbTlsPortDiscovery.discover(context, 7000L);
+                    int port = cachedAdbTlsPort;
+
+                    // If the background monitor has not learned the port yet,
+                    // perform one foreground discovery for this request.
+                    if (port < 1 || port > 65535) {
+                        port = AdbTlsPortDiscovery.discover(context, 9000L);
+                        if (port >= 1 && port <= 65535) {
+                            cachedAdbTlsPort = port;
+                        }
+                    }
+
                     if (port >= 1 && port <= 65535) {
                         out.println("ADB_TLS_PORT=" + port);
                     } else {
