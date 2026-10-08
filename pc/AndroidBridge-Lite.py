@@ -1602,24 +1602,27 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event, gain_db):
         # only DSP change here is to attack that noise more directly:
         # - raise the rumble cutoff from 165 Hz to 200 Hz;
         # - trim the remaining 260/320 Hz wind "woof";
-        # - add gentle adaptive FFT denoising, without aggressive speech
-        # suppression that can make the voice metallic or choppy;
+        # - use stronger adaptive FFT denoising plus a mild downward gate;
+        # - use Android CAMCORDER capture, which can apply wind-oriented
+        #   preprocessing before the PC-side filter;
         # - keep the existing presence EQ, compressor, gain and limiter.
         #
         # IMPORTANT: this is intentionally an audio-filter-only change. The
         # scrcpy capture route, Screen/Camera code, named pipe, codec, buffer,
         # startup lifecycle, gain control and limiter remain intact.
         # FFmpeg documents afftdn track_noise (tn=1) as automatic noise-floor
-        # tracking; a modest 8 dB reduction is used here to avoid overprocessing.
+        # tracking. The gate only reduces low-level material; it does not mute
+        # normal speech, and the existing compressor/gain/limiter remain intact.
         filter_chain = (
             "highpass=f=200:p=2,"
-            "afftdn=nr=8:nf=-35:tn=1:ad=0.8,"
+            "afftdn=nr=12:nf=-40:tn=1:tr=1:ad=0.5,"
             "lowpass=f=7600:p=2,"
-            "equalizer=f=260:t=q:w=1.0:g=-5,"
-            "equalizer=f=320:t=q:w=1.1:g=-3,"
+            "equalizer=f=260:t=q:w=1.0:g=-6,"
+            "equalizer=f=320:t=q:w=1.1:g=-4,"
             "equalizer=f=1200:t=q:w=1:g=2,"
             "equalizer=f=2600:t=q:w=1:g=5,"
             "equalizer=f=4300:t=q:w=1.1:g=3,"
+            "agate=threshold=0.018:ratio=4:range=0.2:attack=8:release=180:knee=4:detection=rms,"
             "acompressor=threshold=0.18:ratio=2.5:attack=5:release=100:"
             "makeup=1.45:knee=2.5:detection=rms,"
             f"volume={int(gain_db)}dB,"
@@ -1801,7 +1804,7 @@ def start_audio():
                 "-s", device,
                 "--no-video",
                 "--no-audio-playback",
-                "--audio-source=mic-voice-recognition",
+                "--audio-source=mic-camcorder",
                 "--audio-codec=opus",
                 "--audio-bit-rate=128K",
                 "--audio-buffer=20",
@@ -1962,7 +1965,7 @@ def start_audio():
                         "-s", device,
                         "--no-video",
                         "--no-control",
-                        "--audio-source=mic-voice-recognition",
+                        "--audio-source=mic-camcorder",
                         "--audio-codec=opus",
                         "--audio-bit-rate=128K",
                         "--audio-buffer=40"
