@@ -1598,12 +1598,19 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event, gain_db):
             return
 
         # Low-latency speech intelligibility chain. Keep the voice body,
-        # reduce rumble/mud, lift consonant/presence bands, gently compress
-        # speech so quieter words come forward, then apply the user's boost.
-        # The final limiter prevents the extra gain from clipping.
+        # cut wind/handling rumble a little harder than the previous profile,
+        # trim the low-mid "woof" that wind can leave on the mic, lift
+        # consonant/presence bands, gently compress speech so quieter words
+        # come forward, then apply the user's boost. The final limiter prevents
+        # the extra gain from clipping.
+        #
+        # IMPORTANT: this is intentionally a small audio-only change. The
+        # scrcpy capture route, Screen/Camera code, named pipe, codec, buffer,
+        # compressor, gain control and limiter remain intact.
         filter_chain = (
-            "highpass=f=120:p=2,"
+            "highpass=f=165:p=2,"
             "lowpass=f=7600:p=2,"
+            "equalizer=f=260:t=q:w=1.0:g=-3,"
             "equalizer=f=320:t=q:w=1.1:g=-2,"
             "equalizer=f=1200:t=q:w=1:g=2,"
             "equalizer=f=2600:t=q:w=1:g=5,"
