@@ -176,3 +176,19 @@ Checkpoint before this repair: `checkpoint/before-laptop-resume-recovery-2026-10
 User completed the real lid-close test after the resume-recovery repair: Screen worked before sleep, the laptop lid was closed, then after reopening the laptop Screen worked again. The recurring laptop sleep/resume failure is therefore verified fixed on the user's actual remote setup.
 
 Preserve the resume watchdog, independent connection scheduler, same-endpoint ADB reconnect behavior, and the rule that recovery must never use adb disconnect or adb kill-server.
+
+
+## 2026-10-08 wind-noise audio filter adjustment
+
+User reports that PhoneHub/AndroidBridge audio is clearly audible but has a persistent wind/air sound underneath the voice. Screen and Camera are already functioning well and must not be disturbed.
+
+Audio-only repair committed in `53422a5d4d4087f748ef7739ad6b26272075f724`:
+- raised speech high-pass from 165 Hz to 200 Hz;
+- added gentle FFmpeg `afftdn` adaptive noise-floor tracking (`nr=8:nf=-35:tn=1:ad=0.8`);
+- increased low-mid wind/woof cuts at 260 Hz and 320 Hz;
+- preserved the existing presence EQ, compressor, +18 dB gain control, limiter, scrcpy audio capture route, named pipe, startup lifecycle, Screen and Camera code.
+
+Recovery checkpoint before this audio-only change:
+`checkpoint/before-wind-audio-filter-2026-10-08-v2`.
+
+FFmpeg's current filter documentation confirms `afftdn` supports noise reduction and automatic noise-floor tracking via `tn=1`. 
