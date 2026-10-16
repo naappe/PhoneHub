@@ -3133,4 +3133,44 @@ root.after(
 
 threading.Thread(target=location_sync_server, daemon=True).start()
 
+# ADB-independent Samsung Secure status monitor. This sends no commands.
+def _start_bridge_status_monitor():
+    try:
+        import importlib.util
+        module_file = os.path.join(_repo_root(), "tools", "bridge-5570-status.py")
+        if not os.path.isfile(module_file):
+            _queue_ui(lambda: bridge_status_label.config(text="BRIDGE 5570: MONITOR MISSING"))
+            return
+        spec = importlib.util.spec_from_file_location("androidbridge_status_monitor", module_file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        def report(event):
+            state = event.get("state", "unknown")
+            if state == "heartbeat":
+                detail = event.get("fields", {})
+                status_text = "BRIDGE 5570: UNVERIFIED STATUS " + str(detail.get("STATUS", "UNKNOWN"))[:20]
+            elif state == "connected":
+                status_text = "BRIDGE 5570: CONNECTED (UNVERIFIED)"
+            elif state == "listening":
+                status_text = "BRIDGE 5570: WAITING FOR PHONE"
+            elif state == "disconnected":
+                status_text = "BRIDGE 5570: PHONE DISCONNECTED"
+            else:
+                return
+            _queue_ui(lambda text=status_text: bridge_status_label.config(text=text))
+
+        module.serve(report=report)
+    except Exception as exc:
+        error_text = str(exc)[:100]
+        _queue_ui(lambda msg=error_text: bridge_status_label.config(text="BRIDGE 5570: " + msg))
+
+
+bridge_status_label = tk.Label(
+    root, text="BRIDGE 5570: STARTING...", font=("Segoe UI", 8),
+    bg=BG, fg=MUTED
+)
+bridge_status_label.pack(pady=(0, 4))
+threading.Thread(target=_start_bridge_status_monitor, daemon=True).start()
+
 root.mainloop()
