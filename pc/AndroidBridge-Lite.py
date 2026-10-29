@@ -3166,6 +3166,31 @@ threading.Thread(target=location_sync_server, daemon=True).start()
 # This stream never owns or stops the microphone/FFplay relay.
 whatsapp_audio_process = None
 whatsapp_audio_lock = threading.Lock()
+whatsapp_audio_last_error = ""
+
+def _playback_error_summary(log_path):
+    """Read the most recent local scrcpy diagnostic without exposing it in Git."""
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as stream:
+            lines = [line.strip() for line in stream if line.strip()]
+        return (lines[-1][:180] if lines else "scrcpy exited without diagnostic output")
+    except OSError:
+        return "scrcpy exited; diagnostic log unavailable"
+
+
+def _watch_phone_playback(proc, log_path):
+    """Report unexpected exits; never stop or restart other media streams."""
+    global whatsapp_audio_process
+    code = proc.wait()
+    with whatsapp_audio_lock:
+        if whatsapp_audio_process is not proc:
+            return  # Explicitly stopped or superseded.
+        whatsapp_audio_process = None
+    _dual_audio_status(
+        f"PHONE PLAYBACK EXITED ({code}): {_playback_error_summary(log_path)}",
+        DANGER
+    )
+
 
 def _dual_audio_status(message, color=None):
     def update():
@@ -3177,7 +3202,7 @@ def _dual_audio_status(message, color=None):
 
 
 def start_whatsapp_call_audio():
-    """Start playback independently, without touching microphone processes."""
+    """Start playback independently; preserve screen, camera and microphone."""
     global whatsapp_audio_process
     if not whatsapp_audio_lock.acquire(blocking=False):
         return
@@ -3194,25 +3219,42 @@ def start_whatsapp_call_audio():
             _dual_audio_status("SCRCPY NOT FOUND", DANGER)
             return
         _dual_audio_status("PHONE PLAYBACK STARTING...", ACCENT)
-        # Serialize server uploads across screen, camera, mic and playback.
-        # This never terminates an existing scrcpy or ADB process.
+        # Serialize uploads without terminating any existing scrcpy or ADB process.
         with scrcpy_start_lock:
             if not _wait_for_scrcpy_uploads_to_finish(120):
                 _dual_audio_status("PLAYBACK WAITING: SERVER BUSY", DANGER)
                 return
-            proc = subprocess.Popen(
-                [scrcpy_exe, "-s", device, "--no-video", "--no-control",
-                 "--audio-source=playback", "--audio-codec=opus",
-                 "--audio-bit-rate=64K", "--audio-buffer=50"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                creationflags=HIDE, env=_scrcpy_env()
+            import tempfile
+            log_path = os.path.join(
+                tempfile.gettempdir(),
+                f"androidbridge-playback-{os.getpid()}.log"
             )
+            args = [
+                scrcpy_exe, "-s", device, "--no-video", "--no-control",
+                "--audio-source=playback", "--audio-codec=opus",
+                "--audio-bit-rate=64K", "--audio-buffer=50"
+            ]
+            # Keep diagnostics on this PC, outside the public Git repository.
+            with open(log_path, "w", encoding="utf-8") as error_log:
+                proc = subprocess.Popen(
+                    args, stdout=subprocess.DEVNULL, stderr=error_log,
+                    creationflags=HIDE, env=_scrcpy_env()
+                )
             whatsapp_audio_process = proc
+            # Startup can take time on a remote ADB link; do not assume success
+            # merely because the process survived its first few milliseconds.
             _wait_for_this_scrcpy_start(proc, "PHONE PLAYBACK", 120)
         if proc.poll() is None:
-            _dual_audio_status("PHONE PLAYBACK ON | MIC INDEPENDENT", SUCCESS)
+            _dual_audio_status("PHONE PLAYBACK PROCESS RUNNING | MIC INDEPENDENT", SUCCESS)
+            threading.Thread(
+                target=_watch_phone_playback, args=(proc, log_path), daemon=True
+            ).start()
         else:
-            _dual_audio_status("PHONE PLAYBACK EXITED | MIC UNTOUCHED", DANGER)
+            whatsapp_audio_process = None
+            _dual_audio_status(
+                f"PLAYBACK FAILED ({proc.returncode}): {_playback_error_summary(log_path)}",
+                DANGER
+            )
     except Exception as exc:
         _dual_audio_status("PLAYBACK ERROR: " + str(exc), DANGER)
     finally:
