@@ -107,6 +107,9 @@ remote_recovery_lock = threading.Lock()
 # Tkinter must stay free to process paint/input events. Remote ADB, scrcpy
 # startup/shutdown and Tailscale checks can take seconds, so button handlers
 # dispatch those operations to workers instead of blocking the Tk event loop.
+screen_action_lock = threading.Lock()
+camera_action_lock = threading.Lock()
+# Legacy alias retained for compatibility with existing integrations.
 video_action_lock = threading.Lock()
 audio_action_lock = threading.Lock()
 scrcpy_start_lock = threading.Lock()
@@ -121,8 +124,9 @@ def _queue_ui(callback):
 
 
 def _drain_ui_queue():
+    # Bound each GUI tick so a flood of worker status events cannot freeze Tk.
     try:
-        while True:
+        for _ in range(40):
             callback = ui_queue.get_nowait()
             try:
                 callback()
@@ -864,6 +868,17 @@ def stop_scrcpy():
     )
 
 
+def scrcpy_playback_audio_args(device):
+    """Separate permitted Android playback audio."""
+    return [
+        "--no-video",
+        "--no-control",
+        "--audio-source=playback",
+        "--audio-codec=opus",
+        "--audio-bit-rate=64K",
+        "--audio-buffer=100"
+    ]
+
 def scrcpy_screen_args(device):
 
     # USB / LOCAL WIFI
@@ -877,13 +892,13 @@ def scrcpy_screen_args(device):
         ]
 
     # TAILSCALE REMOTE
-    # Two simultaneous remote H.264 streams share the same Tailscale/ADB
-    # path. Keep the screen deliberately light so camera + screen remain
-    # responsive instead of competing for the transport.
+    # Low-latency remote profile: keep resolution/bitrate modest, but avoid
+    # adding a fixed 100 ms video buffer to every frame. A direct Tailscale
+    # path benefits from prompt display rather than deliberate buffering.
     return [
         "--max-size=800",
         "--max-fps=20",
-        "--video-bit-rate=1M",
+        "--video-bit-rate=500K",
         "--video-buffer=0",
         "--video-codec=h264",
         "--no-audio",
@@ -932,6 +947,7 @@ def scrcpy_camera_args(device, facing, night=False, low_light=False):
         return args
 
     # TAILSCALE REMOTE
+    # Keep bandwidth conservative; remove deliberate 100 ms frame buffering.
     # Do not force 640x360. Samsung may expose a camera but not produce
     # frames for an arbitrary explicit size. Let scrcpy select a declared
     # camera resolution at or below 640 pixels instead.
@@ -1064,7 +1080,13 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
     # remote reboot, automatically run the proven recovery instead of showing
     # a dead-end "Press RECONNECT PHONE" dialog.
     device = active_device
-    if device and is_tailscale(device) and not adb_quick_state(device, 5):
+    media_running = any(
+        proc is not None and proc.poll() is None
+        for proc in (screen_process, camera_process, audio_process)
+    )
+    # Never probe shared ADB while a working media session is already active.
+    # A blocked ADB get-state can contend with live scrcpy streams.
+    if device and is_tailscale(device) and not media_running and not adb_quick_state(device, 5):
         device = None
         active_device = None
 
@@ -1267,9 +1289,16 @@ def launch(mode, kind, facing=None, night=False, low_light=False):
                 )
             )
 
+def _stop_video_when_idle():
+    # Do not tear down a process while either independent worker is starting.
+    with screen_action_lock:
+        with camera_action_lock:
+            stop_scrcpy()
+
+
 def screen():
     _run_locked_async(
-        video_action_lock,
+        screen_action_lock,
         launch,
         "SCREEN",
         "screen"
@@ -1278,7 +1307,7 @@ def screen():
 
 def back_camera():
     _run_locked_async(
-        video_action_lock,
+        camera_action_lock,
         launch,
         "BACK CAMERA",
         "camera",
@@ -1288,7 +1317,7 @@ def back_camera():
 
 def front_camera():
     _run_locked_async(
-        video_action_lock,
+        camera_action_lock,
         launch,
         "FRONT CAMERA",
         "camera",
@@ -1300,7 +1329,7 @@ def low_light_test():
     # No torch. This measures what the rear camera can obtain from available
     # visible light using Camera2 automatic exposure behavior.
     _run_locked_async(
-        video_action_lock,
+        camera_action_lock,
         launch,
         "NIGHT VISION BOOST",
         "camera",
@@ -1423,7 +1452,7 @@ def _wait_for_this_scrcpy_start(process, label, max_wait=600):
                 # Fast/local pushes may finish between polls.
                 return True
 
-        time.sleep(0.25)
+        time.sleep(1.0)
 
     return False
 
@@ -1516,7 +1545,7 @@ def _wait_for_scrcpy_uploads_to_finish(max_wait=600):
             last_text_second = elapsed
             _queue_ui(
                 lambda n=count, s=elapsed: _set_audio_monitor_status(
-                    f"SERVER UPLOAD IN PROGRESS • {s}s • {n} ACTIVE", ACCENT
+                    f"SERVER UPLOAD IN PROGRESS â€¢ {s}s â€¢ {n} ACTIVE", ACCENT
                 )
             )
             _queue_ui(
@@ -1525,7 +1554,7 @@ def _wait_for_scrcpy_uploads_to_finish(max_wait=600):
                 )
             )
 
-        time.sleep(0.5)
+        time.sleep(1.5)
 
     return False
 
@@ -1615,20 +1644,12 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event, gain_db):
         # quiet human speech is not chopped while the residual fan is attenuated.
         filter_chain = (
             "highpass=f=120:p=2,"
-            "afftdn=nr=16:nf=-45:tn=1:tr=1:ad=0.25:gs=3,"
             "lowpass=f=7600:p=2,"
-            "equalizer=f=260:t=q:w=1.0:g=-5,"
-            "equalizer=f=320:t=q:w=1.1:g=-3,"
-            "equalizer=f=1200:t=q:w=1:g=2,"
-            "equalizer=f=2600:t=q:w=1:g=5,"
-            "equalizer=f=4300:t=q:w=1.1:g=3,"
-            "agate=threshold=0.010:ratio=3:range=0.12:attack=8:release=220:knee=4:detection=rms,"
-            "acompressor=threshold=0.18:ratio=2.5:attack=5:release=100:"
-            "makeup=1.45:knee=2.5:detection=rms,"
+            "acompressor=threshold=0.18:ratio=2:attack=5:release=80:"
+            "makeup=1.2:knee=2.5:detection=rms,"
             f"volume={int(gain_db)}dB,"
             "alimiter=limit=0.96:level=0:attack=3:release=60"
         )
-
         player = subprocess.Popen(
             [
                 ffplay_path,
@@ -1637,6 +1658,9 @@ def _audio_boost_relay(pipe_name, ffplay_path, ready_event, gain_db):
                 "-loglevel", "error",
                 "-fflags", "nobuffer",
                 "-flags", "low_delay",
+                "-probesize", "32768",
+                "-analyzeduration", "0",
+                "-sync", "ext",
                 "-af", filter_chain,
                 "-i", "pipe:0"
             ],
@@ -1734,14 +1758,13 @@ def start_audio():
 
     existing_pushes = _scrcpy_server_push_count()
     if existing_pushes > 0 and not owned_video_alive:
+        # A push may belong to another working AndroidBridge instance.
+        # Never terminate a remote startup automatically.
         _queue_ui(
             lambda n=existing_pushes: _set_audio_monitor_status(
-                f"CLEARING {n} STALE SERVER UPLOAD(S)...", ACCENT
+                f"WAITING FOR {n} SERVER UPLOAD(S)...", ACCENT
             )
         )
-        cleared = _clear_stale_scrcpy_startups_for_phone()
-        if cleared:
-            time.sleep(0.8)
 
     # If Screen/Camera is genuinely starting, wait behind its one legitimate
     # server upload instead of creating a competing push.
@@ -1882,7 +1905,7 @@ def start_audio():
                         )
                         _queue_ui(
                             lambda: _set_audio_monitor_status(
-                                "AUDIO ON  •  CLEAR VOICE + LEVELING", SUCCESS
+                                "AUDIO ON  â€¢  CLEAR VOICE + LEVELING", SUCCESS
                             )
                         )
                         return
@@ -1898,7 +1921,7 @@ def start_audio():
                             last_upload_second = upload_second
                             _queue_ui(
                                 lambda n=pushes, s=upload_second: _set_audio_monitor_status(
-                                    f"MIC SERVER UPLOAD • {s}s • {n} ACTIVE", ACCENT
+                                    f"MIC SERVER UPLOAD â€¢ {s}s â€¢ {n} ACTIVE", ACCENT
                                 )
                             )
                             _queue_ui(
@@ -1911,7 +1934,7 @@ def start_audio():
                             post_upload_deadline = time.monotonic() + 20.0
                             _queue_ui(
                                 lambda: _set_audio_monitor_status(
-                                    "SERVER READY • OPENING MICROPHONE...", ACCENT
+                                    "SERVER READY â€¢ OPENING MICROPHONE...", ACCENT
                                 )
                             )
                         elif time.monotonic() >= post_upload_deadline:
@@ -1948,7 +1971,7 @@ def start_audio():
             if not _wait_for_scrcpy_uploads_to_finish(180):
                 _queue_ui(
                     lambda: _set_audio_monitor_status(
-                        "AUDIO START FAILED • SERVER UPLOAD BUSY", DANGER
+                        "AUDIO START FAILED â€¢ SERVER UPLOAD BUSY", DANGER
                     )
                 )
                 _queue_ui(
@@ -1987,7 +2010,7 @@ def start_audio():
                     )
                     _queue_ui(
                         lambda: _set_audio_monitor_status(
-                            "AUDIO ON  •  DIRECT FALLBACK", SUCCESS
+                            "AUDIO ON  â€¢  DIRECT FALLBACK", SUCCESS
                         )
                     )
                     return
@@ -2092,7 +2115,8 @@ def background_check():
         except Exception:
             pass
 
-    if video_action_lock.locked() or audio_action_lock.locked():
+    if (video_action_lock.locked() or screen_action_lock.locked()
+            or camera_action_lock.locked() or audio_action_lock.locked()):
         return
 
     checking = True
@@ -2368,10 +2392,15 @@ def _resume_watchdog():
     # Normal heartbeat is 2 seconds. A >12 second gap is a strong suspend /
     # resume signal while avoiding recovery during ordinary short UI stalls.
     if gap > 12:
-        threading.Thread(
-            target=_resume_recovery_worker,
-            daemon=True
-        ).start()
+        # Preserve live remote sessions: Windows scheduling/GUI pauses are not
+        # proof that scrcpy sockets are dead. Never auto-kill media on a gap.
+        live_media = any(
+            proc is not None and proc.poll() is None
+            for proc in (screen_process, camera_process, audio_process)
+        )
+        if not live_media:
+            # Passive status check only; explicit RECONNECT remains user-driven.
+            _queue_ui(lambda: mode_label.config(text="MODE: RESUMED - READY"))
 
     try:
         root.after(2000, _resume_watchdog)
@@ -2556,7 +2585,7 @@ def show_audio_monitor():
 
     tk.Label(
         audio_monitor_window,
-        text="Samsung microphone  •  Clear Speech + Voice Leveling",
+        text="Samsung microphone  â€¢  Clear Speech + Voice Leveling",
         font=("Segoe UI", 9),
         bg=BG,
         fg=MUTED
@@ -2799,7 +2828,7 @@ nv_diag_label.pack(
 # CONTROL TITLE
 # ------------------------------------------------------------
 
-tk.Label(
+controls_heading = tk.Label(
     root,
     text="CONTROLS",
     font=("Segoe UI", 9, "bold"),
@@ -2887,7 +2916,7 @@ front_button.grid(
 stop_button = tk.Button(
     buttons,
     text="STOP",
-    command=lambda: _run_locked_async(video_action_lock, stop_scrcpy),
+    command=lambda: _run_locked_async(video_action_lock, _stop_video_when_idle),
     width=21,
     height=2,
     font=("Segoe UI", 10, "bold"),
@@ -3133,4 +3162,149 @@ root.after(
 
 threading.Thread(target=location_sync_server, daemon=True).start()
 
+# === INDEPENDENT WHATSAPP / PHONE PLAYBACK ===
+# This stream never owns or stops the microphone/FFplay relay.
+whatsapp_audio_process = None
+whatsapp_audio_lock = threading.Lock()
+
+def _dual_audio_status(message, color=None):
+    def update():
+        try:
+            dual_audio_status.config(text=message, fg=color or MUTED)
+        except (tk.TclError, NameError):
+            pass
+    _queue_ui(update)
+
+
+def start_whatsapp_call_audio():
+    """Start playback independently, without touching microphone processes."""
+    global whatsapp_audio_process
+    if not whatsapp_audio_lock.acquire(blocking=False):
+        return
+    try:
+        if whatsapp_audio_process is not None and whatsapp_audio_process.poll() is None:
+            _dual_audio_status("PHONE PLAYBACK ALREADY RUNNING", SUCCESS)
+            return
+        device = active_device or cached_remote_target()
+        if not device:
+            _dual_audio_status("NO KNOWN PHONE ENDPOINT", DANGER)
+            return
+        scrcpy_exe = _fast_scrcpy_exe()
+        if not shutil.which(scrcpy_exe) and not os.path.isfile(scrcpy_exe):
+            _dual_audio_status("SCRCPY NOT FOUND", DANGER)
+            return
+        _dual_audio_status("PHONE PLAYBACK STARTING...", ACCENT)
+        # Serialize server uploads across screen, camera, mic and playback.
+        # This never terminates an existing scrcpy or ADB process.
+        with scrcpy_start_lock:
+            if not _wait_for_scrcpy_uploads_to_finish(120):
+                _dual_audio_status("PLAYBACK WAITING: SERVER BUSY", DANGER)
+                return
+            proc = subprocess.Popen(
+                [scrcpy_exe, "-s", device, "--no-video", "--no-control",
+                 "--audio-source=playback", "--audio-codec=opus",
+                 "--audio-bit-rate=64K", "--audio-buffer=50"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=HIDE, env=_scrcpy_env()
+            )
+            whatsapp_audio_process = proc
+            _wait_for_this_scrcpy_start(proc, "PHONE PLAYBACK", 120)
+        if proc.poll() is None:
+            _dual_audio_status("PHONE PLAYBACK ON | MIC INDEPENDENT", SUCCESS)
+        else:
+            _dual_audio_status("PHONE PLAYBACK EXITED | MIC UNTOUCHED", DANGER)
+    except Exception as exc:
+        _dual_audio_status("PLAYBACK ERROR: " + str(exc), DANGER)
+    finally:
+        whatsapp_audio_lock.release()
+
+
+def stop_whatsapp_call_audio():
+    """Stop only the playback process created by this application."""
+    global whatsapp_audio_process
+    with whatsapp_audio_lock:
+        proc = whatsapp_audio_process
+        whatsapp_audio_process = None
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+        _dual_audio_status("PHONE PLAYBACK OFF | MIC UNTOUCHED")
+
+
+def start_both_audio():
+    """Start both independently; never stop or restart an existing stream."""
+    def worker():
+        mic = audio_process
+        if mic is None or mic.poll() is not None:
+            # start_audio() owns the existing microphone startup and +18 dB DSP.
+            # Use its lock to prevent overlapping mic-start requests.
+            with audio_action_lock:
+                start_audio()
+        # start_audio launches a separate relay confirmation thread. Allow the
+        # microphone server push to finish before requesting playback upload.
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            mic = audio_process
+            if mic is not None and mic.poll() is None:
+                if audio_boost_process is not None and audio_boost_process.poll() is None:
+                    break
+                # A direct microphone fallback may not use ffplay.
+            time.sleep(0.5)
+        start_whatsapp_call_audio()
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def androidbridge_open_sound_settings():
+    def worker():
+        try:
+            device = active_device or cached_remote_target()
+            if not device:
+                _dual_audio_status("NO KNOWN PHONE ENDPOINT", DANGER)
+                return
+            subprocess.Popen(
+                ["adb", "-s", device, "shell", "am", "start",
+                 "-a", "android.settings.SOUND_SETTINGS"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=HIDE
+            )
+        except Exception as exc:
+            _dual_audio_status("SOUND SETTINGS: " + str(exc), DANGER)
+    threading.Thread(target=worker, daemon=True).start()
+
+
+# Keep toolbar construction after function definitions to prevent NameError.
+androidbridge_audio_toolbar = tk.Frame(root, bg="#171b24")
+androidbridge_audio_toolbar.pack(side="top", fill="x", padx=12, pady=(4, 6))
+tk.Label(androidbridge_audio_toolbar, text="DUAL AUDIO | SAMSUNG MIC + PHONE PLAYBACK",
+         bg="#171b24", fg="#ffffff", font=("Segoe UI", 9, "bold")
+         ).pack(anchor="w", pady=(0, 5))
+androidbridge_audio_buttons = tk.Frame(androidbridge_audio_toolbar, bg="#171b24")
+androidbridge_audio_buttons.pack(fill="x")
+tk.Button(androidbridge_audio_buttons, text="BOTH ON",
+          command=start_both_audio).pack(side="left", padx=(0, 5))
+tk.Button(androidbridge_audio_buttons, text="PLAYBACK ON",
+          command=lambda: threading.Thread(target=start_whatsapp_call_audio,
+                                           daemon=True).start()
+          ).pack(side="left", padx=(0, 5))
+tk.Button(androidbridge_audio_buttons, text="PLAYBACK OFF",
+          command=lambda: threading.Thread(target=stop_whatsapp_call_audio,
+                                           daemon=True).start()
+          ).pack(side="left", padx=(0, 5))
+tk.Button(androidbridge_audio_buttons, text="SOUND SETTINGS",
+          command=androidbridge_open_sound_settings).pack(side="left", padx=(0, 5))
+dual_audio_status = tk.Label(androidbridge_audio_toolbar,
+                             text="BOTH ON starts microphone + phone playback independently",
+                             bg="#171b24", fg=MUTED, anchor="w",
+                             font=("Segoe UI", 8))
+dual_audio_status.pack(fill="x", pady=(5, 0))
+# Position toolbar before existing CONTROLS heading without moving functions.
+for _widget in root.pack_slaves():
+    if isinstance(_widget, tk.Label) and _widget.cget("text") == "CONTROLS":
+        androidbridge_audio_toolbar.pack_configure(before=_widget)
+        break
+
 root.mainloop()
+
+
