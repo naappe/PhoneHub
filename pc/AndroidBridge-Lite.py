@@ -3162,6 +3162,14 @@ root.after(
 
 threading.Thread(target=location_sync_server, daemon=True).start()
 
+# AUDIO ENGINE V2 SAFETY CONTRACT:
+# - Phone use is independent: never change Android volume, speaker routing,
+#   playback policy, or microphone permissions from the PC.
+# - Audio workers are optional listeners. A failed listener must not alter
+#   screen, camera, ADB, Tailscale, or any other audio worker.
+# - Android playback capture is app-dependent; a running scrcpy process is NOT
+#   proof that speaker duplication works.
+# - This branch is diagnostic-only until phone-speaker preservation is verified.
 # === INDEPENDENT WHATSAPP / PHONE PLAYBACK ===
 # This stream never owns or stops the microphone/FFplay relay.
 whatsapp_audio_process = None
@@ -3219,6 +3227,8 @@ def start_whatsapp_call_audio():
             _dual_audio_status("SCRCPY NOT FOUND", DANGER)
             return
         _dual_audio_status("PHONE PLAYBACK STARTING...", ACCENT)
+        # This is a capture test, NOT a guaranteed speaker-mirroring mode.
+        # Never adjust Android's own speaker volume or route here.
         # Serialize uploads without terminating any existing scrcpy or ADB process.
         with scrcpy_start_lock:
             if not _wait_for_scrcpy_uploads_to_finish(120):
@@ -3245,7 +3255,10 @@ def start_whatsapp_call_audio():
             # merely because the process survived its first few milliseconds.
             _wait_for_this_scrcpy_start(proc, "PHONE PLAYBACK", 120)
         if proc.poll() is None:
-            _dual_audio_status("PHONE PLAYBACK PROCESS RUNNING | MIC INDEPENDENT", SUCCESS)
+            _dual_audio_status(
+                "PLAYBACK PROCESS RUNNING | VERIFY PHONE SPEAKER STILL WORKS",
+                SUCCESS
+            )
             threading.Thread(
                 target=_watch_phone_playback, args=(proc, log_path), daemon=True
             ).start()
@@ -3337,7 +3350,7 @@ tk.Button(androidbridge_audio_buttons, text="PLAYBACK OFF",
 tk.Button(androidbridge_audio_buttons, text="SOUND SETTINGS",
           command=androidbridge_open_sound_settings).pack(side="left", padx=(0, 5))
 dual_audio_status = tk.Label(androidbridge_audio_toolbar,
-                             text="BOTH ON starts microphone + phone playback independently",
+                             text="V2 TEST: playback capture may affect phone speaker; verify before use",
                              bg="#171b24", fg=MUTED, anchor="w",
                              font=("Segoe UI", 8))
 dual_audio_status.pack(fill="x", pady=(5, 0))
