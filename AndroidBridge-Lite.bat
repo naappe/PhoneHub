@@ -2,85 +2,40 @@
 setlocal
 cd /d "%~dp0"
 
-echo [AndroidBridge] Checking GitHub updates...
-git pull --ff-only >nul 2>&1
-if errorlevel 1 (
-    echo [AndroidBridge] Update skipped - using current local version.
-) else (
-    echo [AndroidBridge] Up to date.
-)
-
-rem Self-heal the tracked runtime set. "git pull" alone does not remove
-rem local working-tree edits, which can leave files from different builds mixed.
-git restore --source=HEAD --worktree -- "pc\AndroidBridge-Lite.py" "pc\AndroidBridge-PhoneData.py" "pc\scrcpy-server-v4.1-llb" "pc\scrcpy-server-v4.1-llb.sha256" "tools\cleanup-stale-startups.ps1" "tools\ensure-fast-scrcpy.ps1" >nul 2>&1
-
-rem Old builds wrote scrcpy logs that no longer describe the active runtime.
-rem Remove them so stale proxy/chunk errors cannot be mistaken for current errors.
-del /q "pc\scrcpy-*.log" >nul 2>&1
-
-rem Never let an inherited scrcpy ADB override select the retired proxy.
-set "ADB="
-set "ANDROIDBRIDGE_REAL_ADB="
-
-rem Remove only abandoned AndroidBridge scrcpy startup uploads from earlier
-rem runs. This script never disconnects or kills the ADB server.
-if exist "%~dp0tools\cleanup-stale-startups.ps1" (
-    for /f %%i in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\cleanup-stale-startups.ps1" 2^>nul') do (
-        if not "%%i"=="0" echo [AndroidBridge] Cleared %%i stale media startup^(s^).
-    )
-)
-
-rem Remove known obsolete/generated files. Never remove user data/history.
-del /q "%~dp0pc\AndroidBridge-AdbProxy.exe" "%~dp0pc\AndroidBridge-AdbProxyV2.exe" "%~dp0pc\AndroidBridge-AdbProxyV2.cs" >nul 2>&1
-del /q "%~dp0pc\New Text Document.txt" >nul 2>&1
-del /q "%~dp0AndroidBridge-Lite.py" "%~dp0AndroidBridge-PhoneData.py" >nul 2>&1
-if exist "%~dp0__pycache__" rmdir /s /q "%~dp0__pycache__"
-if exist "%~dp0pc\__pycache__" rmdir /s /q "%~dp0pc\__pycache__"
+echo [AndroidBridge] Safe local launcher
+echo [AndroidBridge] No Git updates or file restoration.
 
 where python >nul 2>&1
 if errorlevel 1 (
-    echo Python was not found.
+    echo ERROR: Python not found.
     pause
     exit /b 1
 )
 
 where adb >nul 2>&1
 if errorlevel 1 (
-    echo ADB was not found in PATH.
+    echo ERROR: ADB not found.
     pause
     exit /b 1
 )
 
 where scrcpy >nul 2>&1
 if errorlevel 1 (
-    echo scrcpy was not found in PATH.
+    echo ERROR: scrcpy not found.
     pause
     exit /b 1
 )
 
-rem Normal Screen/Camera/Audio use the official compact scrcpy v3.3.4
-rem runtime because its server is ~91 KB instead of v4.1's ~734 KB.
-rem The existing v4.1 installation remains the automatic compatibility
-rem fallback and continues to power NIGHT CAMERA / Low Light Boost.
-if exist "%~dp0tools\ensure-fast-scrcpy.ps1" (
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\ensure-fast-scrcpy.ps1" >nul
-    if errorlevel 1 (
-        echo [AndroidBridge] Fast media engine unavailable - using standard scrcpy.
-    ) else (
-        echo [AndroidBridge] Fast media engine ready.
-    )
-)
-
-echo [AndroidBridge] Verifying Python source...
+echo [AndroidBridge] Checking Python syntax...
 python -m py_compile "%~dp0pc\AndroidBridge-Lite.py" "%~dp0pc\AndroidBridge-PhoneData.py"
 if errorlevel 1 (
-    echo [AndroidBridge] Source verification FAILED.
+    echo ERROR: Python source verification failed.
     pause
     exit /b 1
 )
 
-for /f %%i in ('git rev-parse --short HEAD 2^>nul') do echo [AndroidBridge] GitHub version: %%i
-echo [AndroidBridge] Starting verified runtime...
-
+echo [AndroidBridge] Starting...
 python "%~dp0pc\AndroidBridge-Lite.py"
+
+if errorlevel 1 pause
 exit /b %errorlevel%
